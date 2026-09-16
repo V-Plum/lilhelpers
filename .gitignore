@@ -2,3 +2,4 @@
 *.exe
 *.res
 *.obj
+_design_preview/

@@ -24,7 +24,7 @@ BEGIN
             VALUE "FileDescription",  "Little Helpers - small Windows conveniences"
             VALUE "FileVersion",      "2.0.0.0"
             VALUE "InternalName",     "lilhelpers"
-            VALUE "LegalCopyright",   "(c) Plum, 2026"
+            VALUE "LegalCopyright",   "(c) 2026 Vadym Slyva (Plum)"
             VALUE "OriginalFilename", "lilhelpers.exe"
             VALUE "ProductName",      "Little Helpers"
             VALUE "ProductVersion",   "2.0.0.0"

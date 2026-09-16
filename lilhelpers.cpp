@@ -3274,8 +3274,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // CAPS-11: шапка з логотипом, назвою і версією; сторінки на єдиній сітці —
     // 20 px від краю полотна, крок 8 px між елементами, підказка одразу під
     // своїм контролом, між групами 6–8 px повітря плюс заголовок групи.
-    constexpr int W = 500, H = 584;
-    constexpr int TAB_X = 20, TAB_Y = 74;                 // таб-контрол під шапкою
+    constexpr int W = 500, H = 606;
+    constexpr int TAB_X = 20, TAB_Y = 74, FOOT_H = 42;    // таб-контрол під шапкою, підвал під табом
     constexpr int PX = TAB_X + 20, PW = 420, PY = 116;    // сторінка: лівий край, ширина, перший рядок
     const int w = sc(W), h = sc(H);
     RECT rc = { 0, 0, w, h };
@@ -3298,15 +3298,20 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         return c;
     };
 
-    // ---- шапка ----
+    // ---- шапка: логотип, назва, гасло ----
     SetRect(&g_logoRect, sc(24), sc(16), sc(24 + 40), sc(16 + 40));
     SendMessageW(mk(L"STATIC", kAppName, 0, 76, 13, 380, 26, 0), WM_SETFONT, (WPARAM)fontTitle, TRUE);
+    mk(L"STATIC", L"Дрібні зручності для Windows", 0, 76, 41, 400, 18, IDC_HINT_GRAY);
+
+    // ---- підвал: авторство ліворуч, версія + посилання праворуч ----
+    // Шапка — про продукт, підвал — про автора й випуск: так це читається як у
+    // «Про програму», а не як підпис під заголовком.
     {
-        wchar_t ver[32] = {}, about[224] = {};
+        wchar_t ver[32] = {}, about[160] = {};
         ExeVersionString(ver, 32);
-        swprintf(about, 224, L"Дрібні зручності для Windows · v%s · "
-                             L"<a href=\"https://github.com/V-Plum/lilhelpers\">GitHub</a>", ver);
-        mk(L"SysLink", about, 0, 76, 41, 400, 18, IDC_COPYRIGHT);   // WC_LINK
+        mk(L"STATIC", L"© 2026 Вадим Слива (Plum)", 0, TAB_X + 2, H - 30, 280, 18, IDC_HINT_GRAY);
+        swprintf(about, 160, L"v%s · <a href=\"https://github.com/V-Plum/lilhelpers\">GitHub</a>", ver);
+        mk(L"SysLink", about, LWS_RIGHT, W - TAB_X - 202, H - 30, 200, 18, IDC_COPYRIGHT);   // WC_LINK
     }
 
     // Таб-контрол створюємо першим, але на порядок створення НЕ покладаємось:
@@ -3315,7 +3320,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // z-order, і без нього будь-яке перемальовування самого таба (наведення на
     // заголовок) зафарбовує їх нашим полотном — «порожнє вікно» у v1.5.0.
     g_tabs = CreateWindowW(WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS,
-                           sc(TAB_X), sc(TAB_Y), sc(W - 2 * TAB_X), sc(H - TAB_Y - TAB_X),
+                           sc(TAB_X), sc(TAB_Y), sc(W - 2 * TAB_X), sc(H - TAB_Y - FOOT_H),
                            hwnd, (HMENU)(INT_PTR)IDC_TABS, hInst, nullptr);
     SendMessageW(g_tabs, WM_SETFONT, (WPARAM)font, TRUE);
     SetWindowSubclass(g_tabs, TabSubclassProc, 1, 0);   // полотно сторінки — див. TabSubclassProc
