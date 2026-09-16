@@ -402,7 +402,7 @@ HWND  g_passthroughCheckbox = nullptr;
 // автозапуск (він тепер у вкладці «Налаштування»). Вимкнено = Caps Lock звичайний.
 bool  g_layoutOn = true;
 HWND  g_layoutCheckbox = nullptr;
-HWND  g_pageSettings[16] = {};  int g_pageSettingsN = 0;
+HWND  g_pageSettings[32] = {};  int g_pageSettingsN = 0;
 
 // ---------- CAPS-8: тема самого вікна ----------
 //
@@ -471,9 +471,9 @@ RECT g_logoRect = {};  // куди малювати логотип (піксел
 // CAPS-2: вкладки. Сторінки — звичайні діти головного вікна поверх таб-контрола
 // (створені ПІСЛЯ нього, тож лежать вище за z-order); перемикання = show/hide.
 HWND g_tabs = nullptr;
-HWND g_pageLayout[16] = {};  int g_pageLayoutN = 0;
-HWND g_pageCursor[24] = {};  int g_pageCursorN = 0;
-HWND g_advCtrls[16]   = {};  int g_advN = 0;
+HWND g_pageLayout[32] = {};  int g_pageLayoutN = 0;
+HWND g_pageCursor[32] = {};  int g_pageCursorN = 0;
+HWND g_advCtrls[32]   = {};  int g_advN = 0;
 HWND g_curEnable = nullptr, g_curScale = nullptr, g_curHold = nullptr;
 HWND g_curOverlay = nullptr;
 HWND g_curScaleVal = nullptr, g_curHoldVal = nullptr, g_curAdvBtn = nullptr;
@@ -553,7 +553,7 @@ bool          g_locAgain  = false; // джерело змінили під ча�
 volatile LONG g_locBusy = 0;
 LONG          g_locGen  = 0;
 HWND g_pageTheme[40] = {};  int g_pageThemeN = 0;
-HWND g_thAdv[20]     = {};  int g_thAdvN = 0;
+HWND g_thAdv[32]     = {};  int g_thAdvN = 0;
 bool g_thAdvVisible = false;
 HWND g_thEnable = nullptr, g_thBySun = nullptr, g_thBySched = nullptr;
 HWND g_thDarkFrom = nullptr, g_thLightFrom = nullptr, g_thToggle = nullptr;
@@ -2691,6 +2691,21 @@ LRESULT CALLBACK TabSubclassProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PT
     return DefSubclassProc(h, msg, wp, lp);
 }
 
+// CAPS-12 (2.1.1): контрол додається на сторінку ЛИШЕ через це — ємність береться
+// з самого масиву, тож дописати контрол і забути збільшити масив більше не можна.
+// У 2.1.0 сторінка «Налаштування» переросла свої 16 елементів: три останні контроли
+// писались за межі масиву, і «Оновити» не ховалась на інших вкладках. Переповнення
+// тепер не мовчить — прапорець перевіряється одразу після побудови вікна.
+bool g_pageOverflow = false;
+
+template <size_t N>
+HWND AddTo(HWND (&items)[N], int& n, HWND c)
+{
+    if (n < (int)N) items[n++] = c;
+    else            g_pageOverflow = true;
+    return c;
+}
+
 void ShowGroup(HWND* items, int n, bool show)
 {
     for (int i = 0; i < n; ++i)
@@ -3609,12 +3624,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         }
     }
 
-    auto addL = [&](HWND c) { g_pageLayout[g_pageLayoutN++] = c; return c; };
-    auto addC = [&](HWND c) { g_pageCursor[g_pageCursorN++] = c; return c; };
-    auto addA = [&](HWND c) { g_advCtrls[g_advN++] = c; return c; };
-    auto addT = [&](HWND c) { g_pageTheme[g_pageThemeN++] = c; return c; };
-    auto addTA = [&](HWND c) { g_thAdv[g_thAdvN++] = c; return c; };
-    auto addS = [&](HWND c) { g_pageSettings[g_pageSettingsN++] = c; return c; };
+    auto addL  = [&](HWND c) { return AddTo(g_pageLayout,   g_pageLayoutN,   c); };
+    auto addC  = [&](HWND c) { return AddTo(g_pageCursor,   g_pageCursorN,   c); };
+    auto addA  = [&](HWND c) { return AddTo(g_advCtrls,     g_advN,          c); };
+    auto addT  = [&](HWND c) { return AddTo(g_pageTheme,    g_pageThemeN,    c); };
+    auto addTA = [&](HWND c) { return AddTo(g_thAdv,        g_thAdvN,        c); };
+    auto addS  = [&](HWND c) { return AddTo(g_pageSettings, g_pageSettingsN, c); };
 
     // Сітка сторінки: y біжить згори вниз, кожен помічник сам відступає під себе.
     int y = PY;
@@ -3807,6 +3822,13 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     SetWindowPos(g_tabs, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
     SelectTab(0);
+
+    // Контрол, що не вліз у масив сторінки, ніколи не сховається при перемиканні
+    // вкладок — саме так у 2.1.0 «Оновити» лишалась поверх усіх вкладок. Повідомлення
+    // для розробника (не локалізоване): користувач його не побачить, бо запас великий.
+    if (g_pageOverflow)
+        MessageBoxW(hwnd, L"Page control array overflow - raise the capacity.",
+                    kAppName, MB_ICONERROR | MB_OK);
 
     g_nid.cbSize = sizeof(g_nid);
     g_nid.hWnd   = hwnd;

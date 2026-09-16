@@ -229,8 +229,8 @@ VERSIONINFO самого exe і посилання на репозиторій.
 Новий реліз = пуш тега:
 
 ```powershell
-git tag v2.1.0
-git push origin v2.1.0
+git tag v2.1.1
+git push origin v2.1.1
 ```
 
 Ручний запуск workflow (вкладка Actions → build → Run workflow) лише збирає
