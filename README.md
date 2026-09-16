@@ -11,16 +11,18 @@
   розкладом.
 - **Темна тема самого вікна**, автооновлення з GitHub Releases з перевіркою
   підпису.
+- Інтерфейс **українською та англійською** — за мовою Windows або вручну.
 
 *Little Helpers — small Windows 11 conveniences in one tray app: CapsLock
 layout switching, shake-to-find-cursor, automatic light/dark theme by
-sunrise/sunset, signed in-app updates. Single file, no dependencies.*
+sunrise/sunset, signed in-app updates. English and Ukrainian UI, picked from
+your Windows language or by hand. Single file, no dependencies.*
 
 До версії 1.6.0 програма називалась **capslang**; перейменована, коли перестала
 бути «просто перемикачем розкладок». Установлені копії capslang оновлюються на
 Little Helpers самі — див. [Перехід із capslang](#перехід-із-capslang).
 
-| Світла тема | Темна тема |
+| Світла тема, українською | Темна тема, англійською |
 |---|---|
 | ![Вікно, світла тема](screenshot.png) | ![Вікно, темна тема](screenshot-dark.png) |
 
@@ -148,6 +150,15 @@ Little Helpers самі — див. [Перехід із capslang](#перехі
   Заразом COM дозволяє виправити шкідливі для фонового застосунку дефолти
   планувальника: не блокувати старт на батареї й не вбивати процес через
   3 доби роботи (`ExecutionTimeLimit`).
+- **Мова**: **Системна** (типово), **Українська**, **English**. «Системна» —
+  мова інтерфейсу Windows (`GetUserDefaultUILanguage`), якщо вона є серед
+  перекладів; інакше англійська. Вибір діє одразу, без перезапуску: вікно не
+  перестворюється, лише переписуються підписи, бо позиції й ширини контролів
+  однакові для обох мов. Через це **англійський рядок у таблиці перекладу має
+  бути не довшим за український** — саме український задає ширину поля, а довший
+  переклад не переноситься, а мовчки обрізається. Самі рядки — один список
+  `LH_STRINGS` у коді: X-макрос генерує з нього і `enum Str`, і обидві таблиці,
+  тож переклад не може роз'їхатися з ім'ям чи порядком.
 - **Тема вікна**: **Автоматично** (як тема застосунків Windows, зміни
   підхоплюються одразу — зокрема від власного «День/ніч»), **Завжди світла**,
   **Завжди темна**. Windows дає темними лише заголовок (DWM) і кілька контролів
@@ -218,8 +229,8 @@ VERSIONINFO самого exe і посилання на репозиторій.
 Новий реліз = пуш тега:
 
 ```powershell
-git tag v2.0.0
-git push origin v2.0.0
+git tag v2.1.0
+git push origin v2.1.0
 ```
 
 Ручний запуск workflow (вкладка Actions → build → Run workflow) лише збирає
@@ -287,7 +298,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `lilhelpers.ico` | іконка exe і трею: 16/20/24/28/32/40/48/56/64/96/128/256 |
 | `lilhelpers.png` | той самий логотип 256 px; вшивається в exe і малюється в шапці вікна (GDI+) |
 | `lilhelpers_signing_pub.pem` | публічний ключ перевірки підпису релізів |
-| `screenshot.png`, `screenshot-dark.png` | вигляд вікна у світлій і темній темі |
+| `screenshot.png`, `screenshot-dark.png` | вигляд вікна: світла тема українською, темна англійською |
 | `.github/workflows/release.yml` | CI: збірка на Windows, підпис, реліз по тегу `v*` |
 
 ## Відомі обмеження

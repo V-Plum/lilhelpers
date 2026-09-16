@@ -119,6 +119,10 @@ constexpr int  IDC_UPD_STATUS    = 161;
 constexpr int  IDC_UPD_CHECK     = 162;
 constexpr int  IDC_UPD_INSTALL   = 163;
 constexpr int  IDC_UPD_ROLLBACK  = 164;
+// CAPS-12: мова (вкладка «Налаштування»)
+constexpr int  IDC_LANG_SYSTEM   = 170;   // порядок = LangPref
+constexpr int  IDC_LANG_UK       = 171;
+constexpr int  IDC_LANG_EN       = 172;
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -144,9 +148,235 @@ const wchar_t* kRegMode  = L"Mode";
 const wchar_t* kRegPassthrough = L"PassthroughRemote";
 const wchar_t* kRegLayoutSwitch = L"LayoutSwitch";   // CAPS-9: перемикання розкладок увімкнено (1)
 const wchar_t* kRegWindowTheme  = L"WindowTheme";    // CAPS-8: 0 авто / 1 світла / 2 темна
+const wchar_t* kRegLang         = L"Language";       // CAPS-12: 0 системна / 1 укр / 2 англ
 const wchar_t* kRegUpdDaily     = L"UpdateCheckDaily";  // CAPS-10
 const wchar_t* kRegUpdLast      = L"UpdateLastCheck";   // unix (DWORD)
 const wchar_t* kRegUpdNotified  = L"UpdateNotifiedTag"; // REG_SZ: про яку версію вже казали
+
+// ---------- CAPS-12: локалізація ----------
+//
+// Один список рядків, дві колонки. X-макрос генерує з нього і enum, і обидві
+// таблиці, тож переклад фізично не може роз'їхатися з іменем чи порядком.
+//
+// ⚠ Англійський рядок має бути НЕ ДОВШИМ за український: позиції й ширини
+// контролів фіксовані (див. сітку у wWinMain) і підібрані саме під українські
+// підписи. Довший переклад не переносить рядок, а мовчки обрізається.
+#define LH_STRINGS(X)                                                                                  \
+X(Tagline,            L"Дрібні зручності для Windows",                                                 \
+                      L"Small conveniences for Windows")                                               \
+X(Copyright,          L"© 2026 Вадим Слива (Plum)",                                                    \
+                      L"© 2026 Vadym Slyva (Plum)")                                                    \
+X(Empty,              L"", L"")                                                                        \
+/* вкладки */                                                                                          \
+X(TabLayout,          L"Розкладка",                    L"Layout")                                      \
+X(TabCursor,          L"Курсор",                       L"Cursor")                                      \
+X(TabTheme,           L"День/ніч",                     L"Day/night")                                   \
+X(TabSettings,        L"Налаштування",                 L"Settings")                                    \
+/* вкладка «Розкладка» */                                                                              \
+X(LayEnable,          L"Перемикати розкладку клавіатури клавішею Caps Lock",                           \
+                      L"Switch the keyboard layout with Caps Lock")                                    \
+X(LayHint,            L"Caps Lock — наступна розкладка. Shift + Caps Lock — звичайний Caps Lock.",     \
+                      L"Caps Lock — next layout. Shift + Caps Lock — normal Caps Lock.")               \
+X(LaySecMode,         L"Спосіб перехоплення",           L"Interception method")                        \
+X(LayModeHook,        L"Основний",                      L"Primary")                                    \
+X(LayModeHotkey,      L"Запасний",                      L"Fallback")                                   \
+X(LayHintOff,         L"Перемикання вимкнено — Caps Lock працює як звичайний Caps Lock.",              \
+                      L"Switching is off — Caps Lock works as a normal Caps Lock.")                    \
+X(LayHintHook,        L"CapsLock лише перемикає мову й не вмикає великі літери.",                      \
+                      L"Caps Lock only switches the language, not capitals.")                          \
+X(LayHintHotkey,      L"Оберіть, якщо основний режим не працює або конфліктує з іншою програмою.",     \
+                      L"Use it if the primary method fails or conflicts with another app.")            \
+X(LaySecRemote,       L"Віддалені та віртуальні машини", L"Remote and virtual machines")                \
+X(LayPassthrough,     L"Не перехоплювати Caps Lock у вікнах віддалених і віртуальних машин",           \
+                      L"Do not intercept Caps Lock in remote and virtual machine windows")             \
+X(LayRemoteList,      L"Remote Desktop, Windows App, VMware, Hyper-V.",                                \
+                      L"Remote Desktop, Windows App, VMware, Hyper-V.")                                \
+/* вкладка «Курсор» */                                                                                 \
+X(CurEnable,          L"Збільшувати курсор, якщо потрусити мишею",                                     \
+                      L"Enlarge the cursor when the mouse is shaken")                                  \
+X(CurEnableHint,      L"Не працює в іграх та інших повноекранних програмах.",                          \
+                      L"Does not work in games or other full-screen programs.")                        \
+X(CurScale,           L"Наскільки збільшувати",         L"How much to enlarge")                        \
+X(CurHold,            L"Скільки тримати збільшеним",    L"How long to keep it large")                  \
+X(CurOverlay,         L"Зменшувати плавно (намальованою копією)",                                      \
+                      L"Shrink smoothly (with a drawn copy)")                                          \
+X(CurOverlayHint,     L"Інакше зменшується сам системний курсор — помітними стрибками.",               \
+                      L"Otherwise the system cursor itself shrinks, in visible steps.")                \
+X(Details,            L"Детально ▾",                    L"Details ▾")                                  \
+X(DetailsUp,          L"Детально ▴",                    L"Details ▴")                                  \
+X(CurAdvWindow,       L"Вікно розпізнавання жесту, мс", L"Gesture detection window, ms")                \
+X(CurAdvDist,         L"Мінімальний шлях миші, px",     L"Minimum mouse path, px")                     \
+X(CurAdvFactor,       L"Поріг «шлях / розмах», %",      L"“Path / span” threshold, %")                 \
+X(CurAdvRevers,       L"Мінімум змін напрямку",         L"Minimum direction changes")                  \
+X(CurAdvShrink,       L"Тривалість зменшення, мс",      L"Shrink duration, ms")                        \
+X(FmtSeconds,         L"%d,%d с",                       L"%d.%d s")                                    \
+/* вкладка «День/ніч» */                                                                               \
+X(ThEnable,           L"Автоматично перемикати світлу і темну тему Windows",                           \
+                      L"Switch the Windows light and dark theme automatically")                        \
+X(ThBySun,            L"За сходом і заходом сонця",     L"By sunrise and sunset")                      \
+X(ThBySched,          L"За розкладом",                  L"On a schedule")                              \
+X(ThDarkFrom,         L"Темна тема з",                  L"Dark theme from")                            \
+X(ThLightFrom,        L"світла з",                      L"light from")                                 \
+X(ThToggle,           L"Переключити зараз",             L"Switch now")                                 \
+X(ThFullscreenHint,   L"Поки відкрита повноекранна програма, тема не змінюється — "                    \
+                      L"перемкнеться після її закриття.",                                              \
+                      L"While a full-screen program is open the theme does not change — "              \
+                      L"it switches once that program closes.")                                        \
+X(ThLocTitle,         L"Розташування для сходу й заходу", L"Location for sunrise and sunset")           \
+X(ThSrcAuto,          L"Автоматично",                   L"Automatic")                                  \
+X(ThSrcWin,           L"Служба Windows",                L"Windows service")                            \
+X(ThSrcIp,            L"За IP-адресою",                 L"By IP address")                              \
+X(ThSrcManual,        L"Вручну",                        L"Manually")                                   \
+X(ThSrcTz,            L"Часовий пояс і регіон",         L"Time zone and region")                       \
+X(ThLat,              L"Широта",                        L"Latitude")                                   \
+X(ThLon,              L"Довгота",                       L"Longitude")                                  \
+X(ThVpnHint,          L"За IP-адресою під VPN покаже розташування VPN-сервера.",                       \
+                      L"Under a VPN the IP lookup shows the VPN server location.")                     \
+/* джерело координат — усередині рядка стану, з малої літери */                                        \
+X(LocSrcWindows,      L"служба Windows",                L"Windows service")                            \
+X(LocSrcIp,           L"за IP-адресою",                 L"by IP address")                              \
+X(LocSrcManual,       L"задано вручну",                 L"set manually")                               \
+X(LocSrcTz,           L"часовий пояс і регіон",         L"time zone and region")                       \
+X(LocSrcAuto,         L"автоматично",                   L"automatic")                                  \
+/* рядок стану «День/ніч» */                                                                           \
+X(ThFmtSchedule,      L"Розклад: темна тема з %02d:%02d, світла з %02d:%02d.",                         \
+                      L"Schedule: dark theme from %02d:%02d, light from %02d:%02d.")                   \
+X(ThFmtSun,           L"Схід %s · захід %s · %s · %s",  L"Sunrise %s · sunset %s · %s · %s")           \
+X(ThPolarDay,         L"Полярний день",                 L"Polar day")                                  \
+X(ThPolarNight,       L"Полярна ніч",                   L"Polar night")                                \
+X(ThLocating,         L"Визначаю розташування…",        L"Finding your location…")                     \
+X(ThEnterCoords,      L"Введіть широту й довготу в «Детально». Поки що — розклад 07:00/19:00.",        \
+                      L"Enter latitude and longitude under “Details”. For now — schedule 07:00/19:00.")\
+X(ThNoLoc,            L"Розташування не визначено — тимчасово розклад 07:00/19:00. "                   \
+                      L"Джерело — у «Детально».",                                                      \
+                      L"Location unknown — using schedule 07:00/19:00 for now. "                       \
+                      L"The source is under “Details”.")                                               \
+X(ThDark,             L"темна",                         L"dark")                                       \
+X(ThLight,            L"світла",                        L"light")                                      \
+X(ThDarkAcc,          L"темну",                         L"dark")                                       \
+X(ThLightAcc,         L"світлу",                        L"light")                                      \
+X(ThNowOff,           L"Зараз %s тема. Автоматика вимкнена.",                                          \
+                      L"The %s theme is on. Automation is off.")                                       \
+X(ThNowManual,        L"Зараз %s тема (обрано вручну) — автоматика повернеться о %s.",                 \
+                      L"The %s theme is on (chosen by hand) — automation resumes at %s.")              \
+X(ThNowPending,       L"Перемкну на %s тему, щойно закриється повноекранна програма.",                 \
+                      L"Will switch to the %s theme once the full-screen program closes.")             \
+X(ThNowNext,          L"Зараз %s тема · наступне перемикання о %s.",                                   \
+                      L"The %s theme is on · next switch at %s.")                                      \
+/* вкладка «Налаштування» */                                                                           \
+X(SetAutostart,       L"Запускати при вході в Windows", L"Start when you sign in to Windows")          \
+X(SetAutostartHint,   L"Задача Планувальника з найвищими правами, без запиту UAC. "                    \
+                      L"Вікно можна закрити — програма лишається в треї.",                             \
+                      L"A Task Scheduler task with the highest privileges, no UAC prompt. "            \
+                      L"You can close this window — the program stays in the tray.")                   \
+X(SetSecLang,         L"Мова",                          L"Language")                                   \
+X(SetLangSystem,      L"Системна",                      L"System")                                     \
+X(SetLangUk,          L"Українська",                    L"Українська")                                 \
+X(SetLangEn,          L"English",                       L"English")                                    \
+X(SetLangHint,        L"«Системна» — мова Windows, якщо вона перекладена; інакше англійська.",         \
+                      L"“System” — the Windows language if translated, otherwise English.")            \
+X(SetSecTheme,        L"Тема вікна",                    L"Window theme")                               \
+X(SetThAuto,          L"Автоматично",                   L"Automatic")                                  \
+X(SetThLight,         L"Завжди світла",                 L"Always light")                               \
+X(SetThDark,          L"Завжди темна",                  L"Always dark")                                \
+X(SetThHint,          L"«Автоматично» — як тема застосунків Windows (див. «День/ніч»).",               \
+                      L"“Automatic” — follows the Windows app theme (see “Day/night”).")               \
+X(SetSecUpd,          L"Оновлення",                     L"Updates")                                    \
+X(UpdDaily,           L"Щоденна перевірка оновлень",    L"Check for updates daily")                    \
+X(UpdCheck,           L"Перевірити зараз",              L"Check now")                                  \
+X(UpdInstall,         L"Оновити",                       L"Update")                                     \
+X(UpdRollback,        L"Повернути попередню",           L"Roll back")                                  \
+X(UpdHint,            L"Оновлення з GitHub Releases; підпис релізу перевіряється перед заміною. "      \
+                      L"Попередня версія лишається поруч як lilhelpers.exe.old.",                      \
+                      L"Updates come from GitHub Releases; the signature is verified first. "          \
+                      L"The previous version stays next to it as lilhelpers.exe.old.")                 \
+/* рядок стану оновлень */                                                                             \
+X(UpdNever,           L"ще не перевірялось",            L"not yet")                                    \
+X(UpdChecking,        L"Перевіряю…",                    L"Checking…")                                  \
+X(UpdFmtUpToDate,     L"Версія %s — остання. Перевірено %s.",                                          \
+                      L"Version %s is the latest. Checked %s.")                                        \
+X(UpdFmtAvailable,    L"Доступна версія %s (у вас %s). Натисніть «Оновити».",                          \
+                      L"Version %s is available (you have %s). Click “Update”.")                       \
+X(UpdFmtDownloading,  L"Завантажую %s і перевіряю підпис…",                                            \
+                      L"Downloading %s and verifying the signature…")                                  \
+X(UpdVerified,        L"Підпис підтверджено — перезапускаюсь у новій версії…",                         \
+                      L"Signature verified — restarting into the new version…")                        \
+X(UpdFmtIdle,         L"Версія %s. Остання перевірка: %s.",                                            \
+                      L"Version %s. Last check: %s.")                                                  \
+X(UpdBalloonFmt,      L"Доступна версія %s. Оновити можна у «Налаштуваннях».",                         \
+                      L"Version %s is available. You can update it in Settings.")                      \
+/* помилки оновлення (зберігаються кодом, а не текстом — щоб слідувати за мовою) */                    \
+X(UpdErrNoNet,        L"Не вдалося перевірити оновлення — немає зв'язку з GitHub.",                    \
+                      L"Could not check for updates — no connection to GitHub.")                       \
+X(UpdErrApi,          L"GitHub відповів несподівано.",  L"GitHub replied unexpectedly.")               \
+X(UpdErrVersion,      L"Незрозумілий номер версії у релізі.",                                          \
+                      L"The release has an unrecognizable version number.")                            \
+X(UpdErrDownload,     L"Не вдалося завантажити оновлення.",                                            \
+                      L"Could not download the update.")                                               \
+X(UpdErrSigDownload,  L"Не вдалося завантажити підпис релізу.",                                        \
+                      L"Could not download the release signature.")                                    \
+X(UpdErrSigMismatch,  L"Підпис не збігається — оновлення відхилено.",                                  \
+                      L"The signature does not match — the update was rejected.")                      \
+X(UpdErrNotExe,       L"Завантажений файл не схожий на програму.",                                     \
+                      L"The downloaded file does not look like a program.")                            \
+X(UpdErrReplace,      L"Не вдалося замінити файл програми.",                                           \
+                      L"Could not replace the program file.")                                          \
+X(UpdErrWrite,        L"Не вдалося записати нову версію.",                                             \
+                      L"Could not write the new version.")                                             \
+X(UpdErrLaunch,       L"Не вдалося запустити нову версію — повернуто стару.",                          \
+                      L"Could not start the new version — the old one was restored.")                  \
+/* повідомлення й меню */                                                                              \
+X(MsgHookFailed,      L"Не вдалося перехопити клавішу CapsLock.",                                      \
+                      L"Could not intercept the Caps Lock key.")                                       \
+X(MsgModeUnavailable, L"Цей режим зараз недоступний — залишено попередній.",                           \
+                      L"This method is unavailable right now — the previous one was kept.")            \
+X(MsgAutostartFailed, L"Не вдалося змінити задачу автозапуску.",                                       \
+                      L"Could not change the autostart task.")                                         \
+X(MsgRollbackConfirm, L"Повернути попередню версію і перезапустити Little Helpers?",                   \
+                      L"Roll back to the previous version and restart Little Helpers?")                \
+X(MenuSettings,       L"Налаштування…",                 L"Settings…")                                  \
+X(MenuExit,           L"Вихід",                         L"Exit")                                       \
+X(TaskDesc,           L"Little Helpers — розкладка по Caps Lock, пошук курсора, день/ніч",             \
+                      L"Little Helpers — Caps Lock layout switching, cursor finder, day/night")
+
+#define LH_ENUM(name, uk, en) name,
+#define LH_UK(name, uk, en)   uk,
+#define LH_EN(name, uk, en)   en,
+enum class Str { LH_STRINGS(LH_ENUM) Count };
+const wchar_t* const kUk[] = { LH_STRINGS(LH_UK) };
+const wchar_t* const kEn[] = { LH_STRINGS(LH_EN) };
+static_assert(sizeof(kUk) / sizeof(*kUk) == (size_t)Str::Count, "українська таблиця не повна");
+static_assert(sizeof(kEn) / sizeof(*kEn) == (size_t)Str::Count, "англійська таблиця не повна");
+
+enum class Lang     { Uk = 0, En = 1 };
+enum class LangPref { System = 0, Uk = 1, En = 2 };   // порядок = IDC_LANG_*
+
+// «Системна»: мова інтерфейсу Windows, якщо вона є серед перекладів; інакше
+// англійська — так само поводяться й самі застосунки Windows.
+Lang ResolveLang(LangPref p)
+{
+    if (p == LangPref::Uk) return Lang::Uk;
+    if (p == LangPref::En) return Lang::En;
+    return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_UKRAINIAN ? Lang::Uk : Lang::En;
+}
+
+LangPref g_langPref = LangPref::System;
+Lang     g_lang     = ResolveLang(LangPref::System);   // до читання реєстру — системна
+
+inline const wchar_t* S(Str id) { return (g_lang == Lang::En ? kEn : kUk)[(int)id]; }
+
+// Контроли зі сталим підписом запам'ятовуються при створенні, щоб ApplyLanguage
+// переписала їх усі за один прохід (дінамічні рядки стану оновлюють себе самі).
+struct LocCtrl { HWND h; Str id; };
+LocCtrl g_locCtrls[96];
+int     g_locCtrlsN = 0;
+void RememberLoc(HWND h, Str id)
+{
+    if (g_locCtrlsN < (int)(sizeof(g_locCtrls) / sizeof(*g_locCtrls)))
+        g_locCtrls[g_locCtrlsN++] = { h, id };
+}
+
+const Str kTabTitles[4] = { Str::TabLayout, Str::TabCursor, Str::TabTheme, Str::TabSettings };
 
 // Два способи перехопити клавішу. Основний тримає Caps Lock вимкненим, але це
 // клавіатурний хук, який деякі захисні програми не люблять; запасний працює
@@ -222,13 +452,13 @@ struct UpdResult {
     bool    manual  = false;   // натиснуто кнопку (без балуна в треї)
     bool    ok      = false;
     wchar_t tag[32] = {};
-    wchar_t msg[160] = {};
+    Str     err = Str::Empty;   // CAPS-12: код помилки, а не текст — щоб слідував за мовою
 };
 bool          g_updDaily = true;
 __time64_t    g_updLast  = 0;
 UpdState      g_updState = UpdState::Idle;
 wchar_t       g_updTag[32] = {};        // доступна версія (tag)
-wchar_t       g_updMsg[160] = {};       // текст помилки
+Str           g_updErr = Str::Empty;    // CAPS-12: остання помилка (код)
 wchar_t       g_updNotified[32] = {};
 volatile LONG g_updBusy = 0;
 HWND g_updDailyCb = nullptr, g_updStatus = nullptr;
@@ -1278,7 +1508,7 @@ void FillTaskDefinition(ITaskDefinition* def)
 {
     IRegistrationInfo* info = nullptr;
     if (SUCCEEDED(def->get_RegistrationInfo(&info)) && info) {
-        BSTR s = SysAllocString(L"Little Helpers — розкладка по Caps Lock, пошук курсора, день/ніч");
+        BSTR s = SysAllocString(S(Str::TaskDesc));
         info->put_Description(s);
         SysFreeString(s);
         info->Release();
@@ -1978,18 +2208,18 @@ void UpdateWork(UpdResult* r)
 {
     std::vector<BYTE> body;
     if (!HttpGet(kUpdApiUrl, body, nullptr)) {
-        lstrcpyW(r->msg, L"Не вдалося перевірити оновлення — немає зв'язку з GitHub.");
+        r->err = Str::UpdErrNoNet;
         return;
     }
     body.push_back(0);
     const char* s = strstr((const char*)body.data(), "\"tag_name\":\"");
-    if (!s) { lstrcpyW(r->msg, L"GitHub відповів несподівано."); return; }
+    if (!s) { r->err = Str::UpdErrApi; return; }
     s += 12;
     int k = 0;
     while (s[k] && s[k] != '"' && k < 30) { r->tag[k] = (wchar_t)s[k]; ++k; }
     r->tag[k] = 0;
     int v[3];
-    if (!ParseVersion(r->tag, v)) { lstrcpyW(r->msg, L"Незрозумілий номер версії у релізі."); return; }
+    if (!ParseVersion(r->tag, v)) { r->err = Str::UpdErrVersion; return; }
     if (!r->install) { r->ok = true; return; }
 
     wchar_t exe[MAX_PATH] = {}, nw[MAX_PATH + 8] = {}, url[256] = {};
@@ -1998,20 +2228,20 @@ void UpdateWork(UpdResult* r)
     swprintf(url, 256, L"%s%s/%s", kUpdDlBase, r->tag, kUpdAsset);
     std::vector<BYTE> sink;
     if (!HttpGet(url, sink, nw)) {
-        lstrcpyW(r->msg, L"Не вдалося завантажити оновлення.");
+        r->err = Str::UpdErrDownload;
         DeleteFileW(nw);
         return;
     }
     swprintf(url, 256, L"%s%s/%s.sig", kUpdDlBase, r->tag, kUpdAsset);
     std::vector<BYTE> sig;
     if (!HttpGet(url, sig, nullptr) || sig.size() < 8) {
-        lstrcpyW(r->msg, L"Не вдалося завантажити підпис релізу.");
+        r->err = Str::UpdErrSigDownload;
         DeleteFileW(nw);
         return;
     }
     BYTE hash[32] = {};
     if (!Sha256File(nw, hash) || !VerifySignature(hash, sig.data(), sig.size())) {
-        lstrcpyW(r->msg, L"Підпис не збігається — оновлення відхилено.");
+        r->err = Str::UpdErrSigMismatch;
         DeleteFileW(nw);
         return;
     }
@@ -2026,7 +2256,7 @@ void UpdateWork(UpdResult* r)
                 && size.QuadPart > 100 * 1024 && size.QuadPart < (32ll << 20);
         CloseHandle(f);
     }
-    if (!looksExe) { lstrcpyW(r->msg, L"Завантажений файл не схожий на програму."); DeleteFileW(nw); return; }
+    if (!looksExe) { r->err = Str::UpdErrNotExe; DeleteFileW(nw); return; }
     r->ok = true;
 }
 
@@ -2086,14 +2316,14 @@ void ApplyDownloadedUpdate()
     DeleteFileW(old);
     if (!MoveFileExW(exe, old, MOVEFILE_REPLACE_EXISTING)) {
         g_updState = UpdState::Error;
-        lstrcpyW(g_updMsg, L"Не вдалося замінити файл програми.");
+        g_updErr = Str::UpdErrReplace;
         DeleteFileW(nw);
         return;
     }
     if (!MoveFileExW(nw, exe, MOVEFILE_REPLACE_EXISTING)) {
         MoveFileExW(old, exe, MOVEFILE_REPLACE_EXISTING);
         g_updState = UpdState::Error;
-        lstrcpyW(g_updMsg, L"Не вдалося записати нову версію.");
+        g_updErr = Str::UpdErrWrite;
         return;
     }
     if (!RelaunchAndExit()) {
@@ -2101,7 +2331,7 @@ void ApplyDownloadedUpdate()
         MoveFileExW(old, exe, MOVEFILE_REPLACE_EXISTING);
         DeleteFileW(nw);
         g_updState = UpdState::Error;
-        lstrcpyW(g_updMsg, L"Не вдалося запустити нову версію — повернуто стару.");
+        g_updErr = Str::UpdErrLaunch;
     }
 }
 
@@ -2486,7 +2716,7 @@ void SetCursorValueLabels()
     wchar_t buf[64];
     wsprintfW(buf, L"%d×", g_cur.scale);
     SetWindowTextW(g_curScaleVal, buf);
-    wsprintfW(buf, L"%d,%d с", g_cur.holdMs / 1000, (g_cur.holdMs % 1000) / 100);
+    swprintf(buf, 64, S(Str::FmtSeconds), g_cur.holdMs / 1000, (g_cur.holdMs % 1000) / 100);
     SetWindowTextW(g_curHoldVal, buf);
 }
 
@@ -2500,10 +2730,18 @@ void SelectTab(int index)
     ShowGroup(g_pageSettings, g_pageSettingsN, index == 3);
 }
 
+// CAPS-12: обидві кнопки «Детально» несуть ще й стрілку стану, тож їхній підпис
+// збирається окремо — і при перемиканні секції, і при зміні мови.
+void UpdateAdvButtons()
+{
+    SetWindowTextW(g_curAdvBtn, S(g_advVisible   ? Str::DetailsUp : Str::Details));
+    SetWindowTextW(g_thAdvBtn,  S(g_thAdvVisible ? Str::DetailsUp : Str::Details));
+}
+
 void ToggleAdvanced()
 {
     g_advVisible = !g_advVisible;
-    SetWindowTextW(g_curAdvBtn, g_advVisible ? L"Детально ▴" : L"Детально ▾");
+    UpdateAdvButtons();
     ShowGroup(g_advCtrls, g_advN, g_advVisible);
 }
 
@@ -2512,7 +2750,7 @@ void ToggleAdvanced()
 void ToggleThemeAdvanced()
 {
     g_thAdvVisible = !g_thAdvVisible;
-    SetWindowTextW(g_thAdvBtn, g_thAdvVisible ? L"Детально ▴" : L"Детально ▾");
+    UpdateAdvButtons();
     ShowGroup(g_thAdv, g_thAdvN, g_thAdvVisible);
 }
 
@@ -2536,11 +2774,11 @@ int GetPickerMinutes(HWND p, int fallback)
 const wchar_t* LocSourceName(LocSource s)
 {
     switch (s) {
-    case LocSource::Windows:  return L"служба Windows";
-    case LocSource::Ip:       return L"за IP-адресою";
-    case LocSource::Manual:   return L"задано вручну";
-    case LocSource::TimeZone: return L"часовий пояс і регіон";
-    default:                  return L"автоматично";
+    case LocSource::Windows:  return S(Str::LocSrcWindows);
+    case LocSource::Ip:       return S(Str::LocSrcIp);
+    case LocSource::Manual:   return S(Str::LocSrcManual);
+    case LocSource::TimeZone: return S(Str::LocSrcTz);
+    default:                  return S(Str::LocSrcAuto);
     }
 }
 
@@ -2549,7 +2787,7 @@ void UpdateThemeStatus()
     wchar_t line[256] = {}, c1[8] = {}, c2[8] = {};
     const __time64_t now = NowUnix();
     if (g_th.bySchedule) {
-        swprintf(line, 256, L"Розклад: темна тема з %02d:%02d, світла з %02d:%02d.",
+        swprintf(line, 256, S(Str::ThFmtSchedule),
                  g_th.darkFrom / 60, g_th.darkFrom % 60, g_th.lightFrom / 60, g_th.lightFrom % 60);
     } else if (g_fix.ok) {
         __time64_t r = 0, s = 0;
@@ -2559,23 +2797,23 @@ void UpdateThemeStatus()
                  fabs(g_fix.lon), g_fix.lon >= 0 ? L"E" : L"W");
         if (k == 0) {
             FormatClock(c1, 8, r); FormatClock(c2, 8, s);
-            swprintf(line, 256, L"Схід %s · захід %s · %s · %s", c1, c2, where, LocSourceName(g_fix.src));
+            swprintf(line, 256, S(Str::ThFmtSun), c1, c2, where, LocSourceName(g_fix.src));
         } else {
-            swprintf(line, 256, L"%s · %s · %s", k == 2 ? L"Полярний день" : L"Полярна ніч",
+            swprintf(line, 256, L"%s · %s · %s", S(k == 2 ? Str::ThPolarDay : Str::ThPolarNight),
                      where, LocSourceName(g_fix.src));
         }
     } else if (g_locBusy) {
-        lstrcpyW(line, L"Визначаю розташування…");
+        lstrcpyW(line, S(Str::ThLocating));
     } else if (g_th.src == LocSource::Manual) {
-        lstrcpyW(line, L"Введіть широту й довготу в «Детально». Поки що — розклад 07:00/19:00.");
+        lstrcpyW(line, S(Str::ThEnterCoords));
     } else {
-        lstrcpyW(line, L"Розташування не визначено — тимчасово розклад 07:00/19:00. Джерело — у «Детально».");
+        lstrcpyW(line, S(Str::ThNoLoc));
     }
     SetWindowTextW(g_thStatus, line);
 
     const bool dark = ThemeIsDark();
     if (!g_th.enabled) {
-        swprintf(line, 256, L"Зараз %s тема. Автоматика вимкнена.", dark ? L"темна" : L"світла");
+        swprintf(line, 256, S(Str::ThNowOff), S(dark ? Str::ThDark : Str::ThLight));
         SetWindowTextW(g_thNow, line);
         return;
     }
@@ -2584,14 +2822,12 @@ void UpdateThemeStatus()
     wchar_t nb[8] = L"—";
     if (g_thOvUntil && now < g_thOvUntil) {
         FormatClock(nb, 8, g_thOvUntil);
-        swprintf(line, 256, L"Зараз %s тема (обрано вручну) — автоматика повернеться о %s.",
-                 dark ? L"темна" : L"світла", nb);
+        swprintf(line, 256, S(Str::ThNowManual), S(dark ? Str::ThDark : Str::ThLight), nb);
     } else if (g_thPending) {
-        swprintf(line, 256, L"Перемкну на %s тему, щойно закриється повноекранна програма.",
-                 dark ? L"світлу" : L"темну");
+        swprintf(line, 256, S(Str::ThNowPending), S(dark ? Str::ThLightAcc : Str::ThDarkAcc));
     } else {
         if (next) FormatClock(nb, 8, next);
-        swprintf(line, 256, L"Зараз %s тема · наступне перемикання о %s.", dark ? L"темна" : L"світла", nb);
+        swprintf(line, 256, S(Str::ThNowNext), S(dark ? Str::ThDark : Str::ThLight), nb);
     }
     SetWindowTextW(g_thNow, line);
 }
@@ -2632,18 +2868,19 @@ void FormatDateTime(wchar_t* buf, size_t n, __time64_t t)
 
 void UpdateUpdStatus()
 {
-    wchar_t cur[32] = {}, when[32] = L"ще не перевірялось", line[256] = {};
+    wchar_t cur[32] = {}, when[32] = {}, line[256] = {};
+    lstrcpynW(when, S(Str::UpdNever), 32);
     ExeVersionString(cur, 32);
     if (g_updLast) FormatDateTime(when, 32, g_updLast);
     const wchar_t* avail = (g_updTag[0] == L'v') ? g_updTag + 1 : g_updTag;
     switch (g_updState) {
-    case UpdState::Checking:    lstrcpyW(line, L"Перевіряю…"); break;
-    case UpdState::UpToDate:    swprintf(line, 256, L"Версія %s — остання. Перевірено %s.", cur, when); break;
-    case UpdState::Available:   swprintf(line, 256, L"Доступна версія %s (у вас %s). Натисніть «Оновити».", avail, cur); break;
-    case UpdState::Downloading: swprintf(line, 256, L"Завантажую %s і перевіряю підпис…", avail); break;
-    case UpdState::Verified:    lstrcpyW(line, L"Підпис підтверджено — перезапускаюсь у новій версії…"); break;
-    case UpdState::Error:       lstrcpynW(line, g_updMsg, 256); break;
-    default:                    swprintf(line, 256, L"Версія %s. Остання перевірка: %s.", cur, when); break;
+    case UpdState::Checking:    lstrcpyW(line, S(Str::UpdChecking)); break;
+    case UpdState::UpToDate:    swprintf(line, 256, S(Str::UpdFmtUpToDate), cur, when); break;
+    case UpdState::Available:   swprintf(line, 256, S(Str::UpdFmtAvailable), avail, cur); break;
+    case UpdState::Downloading: swprintf(line, 256, S(Str::UpdFmtDownloading), avail); break;
+    case UpdState::Verified:    lstrcpyW(line, S(Str::UpdVerified)); break;
+    case UpdState::Error:       lstrcpynW(line, S(g_updErr), 256); break;
+    default:                    swprintf(line, 256, S(Str::UpdFmtIdle), cur, when); break;
     }
     SetWindowTextW(g_updStatus, line);
     const bool busy = g_updBusy != 0;
@@ -2708,11 +2945,33 @@ void ShowSettings(HWND hwnd)
 
 void UpdateModeHint()
 {
-    SetWindowTextW(g_modeHint,
-        !g_layoutOn         ? L"Перемикання вимкнено — Caps Lock працює як звичайний Caps Lock."
-        : g_mode == Mode::Hook
-        ? L"CapsLock лише перемикає мову й не вмикає великі літери."
-        : L"Оберіть, якщо основний режим не працює або конфліктує з іншою програмою.");
+    SetWindowTextW(g_modeHint, S(
+        !g_layoutOn           ? Str::LayHintOff
+        : g_mode == Mode::Hook ? Str::LayHintHook
+                               : Str::LayHintHotkey));
+}
+
+// CAPS-12: перемалювати інтерфейс новою мовою. Вікно не перестворюється —
+// позиції й розміри однакові для обох мов (див. вимогу до довжини перекладу),
+// тож достатньо переписати підписи й оновити рядки стану.
+void ApplyLanguage()
+{
+    for (int i = 0; i < g_locCtrlsN; ++i)
+        SetWindowTextW(g_locCtrls[i].h, S(g_locCtrls[i].id));
+
+    TCITEMW t = {};
+    t.mask = TCIF_TEXT;
+    for (int i = 0; i < 4; ++i) {
+        t.pszText = (LPWSTR)S(kTabTitles[i]);
+        SendMessageW(g_tabs, TCM_SETITEMW, i, (LPARAM)&t);
+    }
+
+    UpdateAdvButtons();
+    SetCursorValueLabels();
+    UpdateModeHint();
+    UpdateThemeStatus();
+    UpdateUpdStatus();
+    InvalidateRect(g_mainWnd, nullptr, TRUE);
 }
 
 // CAPS-9: режим і пропуск у remote мають сенс лише поки перемикання ввімкнено.
@@ -2735,8 +2994,7 @@ void ApplyLayoutSwitch(HWND hwnd, bool on)
                 g_mode = other;
                 SaveMode(other);
             } else {
-                MessageBoxW(hwnd, L"Не вдалося перехопити клавішу CapsLock.",
-                            kAppName, MB_ICONERROR | MB_OK);
+                MessageBoxW(hwnd, S(Str::MsgHookFailed), kAppName, MB_ICONERROR | MB_OK);
                 on = false;
             }
         }
@@ -2759,11 +3017,9 @@ void ApplyMode(HWND hwnd, Mode mode)
     if (!StartInterception(mode)) {
         // не вийшло — вертаємось на те, що працювало
         if (StartInterception(g_mode)) {
-            MessageBoxW(hwnd, L"Цей режим зараз недоступний — залишено попередній.",
-                        kAppName, MB_ICONWARNING | MB_OK);
+            MessageBoxW(hwnd, S(Str::MsgModeUnavailable), kAppName, MB_ICONWARNING | MB_OK);
         } else {
-            MessageBoxW(hwnd, L"Не вдалося перехопити клавішу CapsLock.",
-                        kAppName, MB_ICONERROR | MB_OK);
+            MessageBoxW(hwnd, S(Str::MsgHookFailed), kAppName, MB_ICONERROR | MB_OK);
         }
     } else {
         g_mode = mode;
@@ -2780,9 +3036,9 @@ void ShowTrayMenu(HWND hwnd)
     POINT pt;
     GetCursorPos(&pt);
     HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, IDM_SETTINGS, L"Налаштування…");
+    AppendMenuW(menu, MF_STRING, IDM_SETTINGS, S(Str::MenuSettings));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, IDM_EXIT, L"Вихід");
+    AppendMenuW(menu, MF_STRING, IDM_EXIT, S(Str::MenuExit));
     SetForegroundWindow(hwnd); // інакше меню не закриється кліком повз
     TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
     DestroyMenu(menu);
@@ -2825,7 +3081,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_updBusy = 0;
         if (!r->ok) {
             g_updState = UpdState::Error;
-            lstrcpynW(g_updMsg, r->msg, 160);   // .new при збої прибирає сам потік
+            g_updErr = r->err;                  // .new при збої прибирає сам потік
         } else if (!r->install) {
             g_updLast = NowUnix();
             RegSaveInt(kRegUpdLast, (int)(DWORD)g_updLast);
@@ -2836,7 +3092,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 g_updState = UpdState::Available;
                 if (!r->manual && lstrcmpW(g_updNotified, r->tag) != 0) {
                     wchar_t text[128] = {};
-                    swprintf(text, 128, L"Доступна версія %s. Оновити можна у «Налаштуваннях».",
+                    swprintf(text, 128, S(Str::UpdBalloonFmt),
                              r->tag[0] == L'v' ? r->tag + 1 : r->tag);
                     TrayBalloon(kAppName, text);
                     lstrcpynW(g_updNotified, r->tag, 32);
@@ -2984,9 +3240,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (HIWORD(wp) == BN_CLICKED) {
                 bool want = SendMessageW(g_checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED;
                 if (!SetAutostart(want))
-                    MessageBoxW(hwnd,
-                        L"Не вдалося змінити задачу автозапуску.",
-                        kAppName, MB_ICONERROR | MB_OK);
+                    MessageBoxW(hwnd, S(Str::MsgAutostartFailed), kAppName, MB_ICONERROR | MB_OK);
                 SendMessageW(g_checkbox, BM_SETCHECK,
                              AutostartEnabled() ? BST_CHECKED : BST_UNCHECKED, 0);
             }
@@ -3005,9 +3259,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case IDC_UPD_ROLLBACK:
             if (HIWORD(wp) == BN_CLICKED &&
-                MessageBoxW(hwnd, L"Повернути попередню версію і перезапустити Little Helpers?",
+                MessageBoxW(hwnd, S(Str::MsgRollbackConfirm),
                             kAppName, MB_ICONQUESTION | MB_YESNO) == IDYES)
                 RollbackUpdate();
+            return 0;
+        case IDC_LANG_SYSTEM:     // CAPS-12
+        case IDC_LANG_UK:
+        case IDC_LANG_EN:
+            if (HIWORD(wp) == BN_CLICKED) {
+                g_langPref = (LangPref)(LOWORD(wp) - IDC_LANG_SYSTEM);
+                RegSaveInt(kRegLang, (int)g_langPref);
+                const Lang want = ResolveLang(g_langPref);
+                if (want != g_lang) { g_lang = want; ApplyLanguage(); }
+            }
             return 0;
         case IDC_WT_AUTO:         // CAPS-8
         case IDC_WT_LIGHT:
@@ -3218,6 +3482,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     }
     RetireLegacyInstance();    // CAPS-11: capslang ≤1.6.0 ще працює поруч — попросити вийти
     MigrateLegacyRegistry();   // CAPS-11: до першого читання налаштувань
+    // CAPS-12: мова — до будь-якого тексту (перша ж — опис задачі автозапуску нижче)
+    g_langPref = (LangPref)RegLoadInt(kRegLang, 0, 0, 2);
+    g_lang     = ResolveLang(g_langPref);
 
     g_taskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
 
@@ -3297,11 +3564,19 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         SendMessageW(c, WM_SETFONT, (WPARAM)font, TRUE);
         return c;
     };
+    // CAPS-12: те саме, але підпис береться з таблиці й запам'ятовується — щоб
+    // зміна мови переписала його без перестворення вікна.
+    auto mkS = [&](const wchar_t* cls, Str s, DWORD style,
+                   int x, int y, int cx, int cy, int id) {
+        HWND c = mk(cls, S(s), style, x, y, cx, cy, id);
+        RememberLoc(c, s);
+        return c;
+    };
 
     // ---- шапка: логотип, назва, гасло ----
     SetRect(&g_logoRect, sc(24), sc(16), sc(24 + 40), sc(16 + 40));
     SendMessageW(mk(L"STATIC", kAppName, 0, 76, 13, 380, 26, 0), WM_SETFONT, (WPARAM)fontTitle, TRUE);
-    mk(L"STATIC", L"Дрібні зручності для Windows", 0, 76, 41, 400, 18, IDC_HINT_GRAY);
+    mkS(L"STATIC", Str::Tagline, 0, 76, 41, 400, 18, IDC_HINT_GRAY);
 
     // ---- підвал: авторство ліворуч, версія + посилання праворуч ----
     // Шапка — про продукт, підвал — про автора й випуск: так це читається як у
@@ -3309,7 +3584,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     {
         wchar_t ver[32] = {}, about[160] = {};
         ExeVersionString(ver, 32);
-        mk(L"STATIC", L"© 2026 Вадим Слива (Plum)", 0, TAB_X + 2, H - 30, 280, 18, IDC_HINT_GRAY);
+        mkS(L"STATIC", Str::Copyright, 0, TAB_X + 2, H - 30, 280, 18, IDC_HINT_GRAY);
         swprintf(about, 160, L"v%s · <a href=\"https://github.com/V-Plum/lilhelpers\">GitHub</a>", ver);
         mk(L"SysLink", about, LWS_RIGHT, W - TAB_X - 202, H - 30, 200, 18, IDC_COPYRIGHT);   // WC_LINK
     }
@@ -3325,16 +3600,14 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     SendMessageW(g_tabs, WM_SETFONT, (WPARAM)font, TRUE);
     SetWindowSubclass(g_tabs, TabSubclassProc, 1, 0);   // полотно сторінки — див. TabSubclassProc
     SendMessageW(g_tabs, TCM_SETPADDING, 0, MAKELPARAM(sc(10), sc(5)));   // повітря в заголовках
-    TCITEMW tab = {};
-    tab.mask = TCIF_TEXT;
-    tab.pszText = (LPWSTR)L"Розкладка";
-    SendMessageW(g_tabs, TCM_INSERTITEMW, 0, (LPARAM)&tab);
-    tab.pszText = (LPWSTR)L"Курсор";
-    SendMessageW(g_tabs, TCM_INSERTITEMW, 1, (LPARAM)&tab);
-    tab.pszText = (LPWSTR)L"День/ніч";
-    SendMessageW(g_tabs, TCM_INSERTITEMW, 2, (LPARAM)&tab);
-    tab.pszText = (LPWSTR)L"Налаштування";
-    SendMessageW(g_tabs, TCM_INSERTITEMW, 3, (LPARAM)&tab);
+    {
+        TCITEMW tab = {};
+        tab.mask = TCIF_TEXT;
+        for (int i = 0; i < 4; ++i) {
+            tab.pszText = (LPWSTR)S(kTabTitles[i]);
+            SendMessageW(g_tabs, TCM_INSERTITEMW, i, (LPARAM)&tab);
+        }
+    }
 
     auto addL = [&](HWND c) { g_pageLayout[g_pageLayoutN++] = c; return c; };
     auto addC = [&](HWND c) { g_pageCursor[g_pageCursorN++] = c; return c; };
@@ -3345,61 +3618,59 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 
     // Сітка сторінки: y біжить згори вниз, кожен помічник сам відступає під себе.
     int y = PY;
-    auto sec = [&](auto add, const wchar_t* text) {          // заголовок групи
-        HWND c = add(mk(L"STATIC", text, 0, PX, y, PW, 20, 0));
+    auto sec = [&](auto add, Str s) {                        // заголовок групи
+        HWND c = add(mkS(L"STATIC", s, 0, PX, y, PW, 20, 0));
         SendMessageW(c, WM_SETFONT, (WPARAM)fontSemi, TRUE);
         y += 24;
         return c;
     };
-    auto check = [&](auto add, const wchar_t* text, int id, bool on, int lines = 1) {
+    auto check = [&](auto add, Str s, int id, bool on, int lines = 1) {
         const int ch = lines > 1 ? 40 : 24;
-        HWND c = add(mk(L"BUTTON", text, BS_AUTOCHECKBOX | WS_TABSTOP | (lines > 1 ? BS_MULTILINE : 0),
-                        PX, y, PW, ch, id));
+        HWND c = add(mkS(L"BUTTON", s, BS_AUTOCHECKBOX | WS_TABSTOP | (lines > 1 ? BS_MULTILINE : 0),
+                         PX, y, PW, ch, id));
         SendMessageW(c, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
         y += ch + 4;
         return c;
     };
-    auto text = [&](auto add, const wchar_t* s, int lines, int id, int after) {   // звичайний текст
-        HWND c = add(mk(L"STATIC", s, 0, PX, y, PW, 18 * lines, id));
+    auto text = [&](auto add, Str s, int lines, int id, int after) {   // звичайний текст
+        HWND c = add(mkS(L"STATIC", s, 0, PX, y, PW, 18 * lines, id));
         y += 18 * lines + after;
         return c;
     };
-    auto hint = [&](auto add, const wchar_t* s, int lines = 1) {   // сірий, під контролом
+    auto hint = [&](auto add, Str s, int lines = 1) {   // сірий, під контролом
         return text(add, s, lines, IDC_HINT_GRAY, 12);
     };
-    auto radio = [&](auto add, const wchar_t* s, int x, int cx, int id, bool first) {
-        return add(mk(L"BUTTON", s, BS_AUTORADIOBUTTON | (first ? (WS_GROUP | WS_TABSTOP) : 0),
-                      x, y, cx, 22, id));
+    auto radio = [&](auto add, Str s, int x, int cx, int id, bool first) {
+        return add(mkS(L"BUTTON", s, BS_AUTORADIOBUTTON | (first ? (WS_GROUP | WS_TABSTOP) : 0),
+                       x, y, cx, 22, id));
     };
-    auto button = [&](auto add, const wchar_t* s, int x, int cx, int id) {
-        return add(mk(L"BUTTON", s, BS_PUSHBUTTON | WS_TABSTOP, x, y, cx, 30, id));
+    auto button = [&](auto add, Str s, int x, int cx, int id) {
+        return add(mkS(L"BUTTON", s, BS_PUSHBUTTON | WS_TABSTOP, x, y, cx, 30, id));
     };
 
     // ---- вкладка «Розкладка» ----
     y = PY;
-    g_layoutCheckbox = check(addL, L"Перемикати розкладку клавіатури клавішею Caps Lock",
-                             IDC_LAYOUT_ENABLE, g_layoutOn);
-    hint(addL, L"Caps Lock — наступна розкладка. Shift + Caps Lock — звичайний Caps Lock.");
+    g_layoutCheckbox = check(addL, Str::LayEnable, IDC_LAYOUT_ENABLE, g_layoutOn);
+    hint(addL, Str::LayHint);
     y += 6;
-    sec(addL, L"Спосіб перехоплення");
-    radio(addL, L"Основний", PX, 140, IDC_MODE_HOOK, true);
-    radio(addL, L"Запасний", PX + 150, 140, IDC_MODE_HOTKEY, false);
+    sec(addL, Str::LaySecMode);
+    radio(addL, Str::LayModeHook,   PX,       140, IDC_MODE_HOOK,   true);
+    radio(addL, Str::LayModeHotkey, PX + 150, 140, IDC_MODE_HOTKEY, false);
     y += 26;
-    g_modeHint = text(addL, L"", 1, IDC_MODE_HINT, 12);
+    g_modeHint = text(addL, Str::Empty, 1, IDC_MODE_HINT, 12);
     y += 6;
-    sec(addL, L"Віддалені та віртуальні машини");
+    sec(addL, Str::LaySecRemote);
     g_passthrough = LoadPassthrough();
-    g_passthroughCheckbox = check(addL, L"Не перехоплювати Caps Lock у вікнах віддалених і віртуальних машин",
-                                  IDC_PASSTHROUGH, g_passthrough, 2);
-    text(addL, L"Remote Desktop, Windows App, VMware, Hyper-V.", 1, IDC_PASSTHROUGH_HINT, 12);
+    g_passthroughCheckbox = check(addL, Str::LayPassthrough, IDC_PASSTHROUGH, g_passthrough, 2);
+    text(addL, Str::LayRemoteList, 1, IDC_PASSTHROUGH_HINT, 12);
 
     // ---- вкладка «Курсор» ----
     y = PY;
-    g_curEnable = check(addC, L"Збільшувати курсор, якщо потрусити мишею", IDC_CUR_ENABLE, g_cur.enabled);
-    hint(addC, L"Не працює в іграх та інших повноекранних програмах.");
+    g_curEnable = check(addC, Str::CurEnable, IDC_CUR_ENABLE, g_cur.enabled);
+    hint(addC, Str::CurEnableHint);
     y += 6;
-    auto slider = [&](const wchar_t* label, HWND& valueOut, int id, int lo, int hi, int page, int pos) {
-        addC(mk(L"STATIC", label, 0, PX, y, PW - 100, 20, 0));
+    auto slider = [&](Str label, HWND& valueOut, int id, int lo, int hi, int page, int pos) {
+        addC(mkS(L"STATIC", label, 0, PX, y, PW - 100, 20, 0));
         valueOut = addC(mk(L"STATIC", L"", SS_RIGHT, PX + PW - 90, y, 90, 20, 0));
         y += 22;
         HWND t = addC(mk(TRACKBAR_CLASSW, L"", TBS_AUTOTICKS | WS_TABSTOP, PX - 4, y, PW + 8, 30, id));
@@ -3409,20 +3680,20 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         y += 36;
         return t;
     };
-    g_curScale = slider(L"Наскільки збільшувати",      g_curScaleVal, IDC_CUR_SCALE, 2, 8, 0, g_cur.scale);
-    g_curHold  = slider(L"Скільки тримати збільшеним", g_curHoldVal,  IDC_CUR_HOLD,  5, 50, 5, g_cur.holdMs / 100);
+    g_curScale = slider(Str::CurScale, g_curScaleVal, IDC_CUR_SCALE, 2, 8, 0, g_cur.scale);
+    g_curHold  = slider(Str::CurHold,  g_curHoldVal,  IDC_CUR_HOLD,  5, 50, 5, g_cur.holdMs / 100);
     y += 4;
-    g_curOverlay = check(addC, L"Зменшувати плавно (намальованою копією)", IDC_CUR_OVERLAY, g_cur.overlay);
-    hint(addC, L"Інакше зменшується сам системний курсор — помітними стрибками.");
+    g_curOverlay = check(addC, Str::CurOverlay, IDC_CUR_OVERLAY, g_cur.overlay);
+    hint(addC, Str::CurOverlayHint);
     y += 2;
-    g_curAdvBtn = button(addC, L"Детально ▾", PX, 140, IDC_CUR_ADVANCED);
+    g_curAdvBtn = button(addC, Str::Details, PX, 140, IDC_CUR_ADVANCED);
     y += 30 + 14;
 
     // «Детально»: чутливість жесту. Значення приймаються при втраті фокуса й
     // притискаються до робочого діапазону, щоб не можна було вимкнути фічу
     // випадковим нулем.
-    auto advRow = [&](const wchar_t* label, int id, int value) {
-        addA(mk(L"STATIC", label, 0, PX, y + 3, PW - 100, 18, 0));
+    auto advRow = [&](Str label, int id, int value) {
+        addA(mkS(L"STATIC", label, 0, PX, y + 3, PW - 100, 18, 0));
         HWND e = addA(mk(L"EDIT", L"", ES_NUMBER | ES_RIGHT | WS_BORDER | WS_TABSTOP,
                          PX + PW - 90, y, 90, 24, id));
         wchar_t buf[16];
@@ -3431,29 +3702,29 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         y += 28;
         return e;
     };
-    g_edWindow = advRow(L"Вікно розпізнавання жесту, мс", IDC_CUR_WINDOWMS,  g_cur.windowMs);
-    g_edDist   = advRow(L"Мінімальний шлях миші, px",     IDC_CUR_DIST,      g_cur.distance);
-    g_edFactor = advRow(L"Поріг «шлях / розмах», %",      IDC_CUR_FACTOR,    g_cur.factor);
-    g_edRevers = advRow(L"Мінімум змін напрямку",         IDC_CUR_REVERSALS, g_cur.reversals);
-    g_edShrink = advRow(L"Тривалість зменшення, мс",      IDC_CUR_SHRINK,    g_cur.shrinkMs);
+    g_edWindow = advRow(Str::CurAdvWindow, IDC_CUR_WINDOWMS,  g_cur.windowMs);
+    g_edDist   = advRow(Str::CurAdvDist,   IDC_CUR_DIST,      g_cur.distance);
+    g_edFactor = advRow(Str::CurAdvFactor, IDC_CUR_FACTOR,    g_cur.factor);
+    g_edRevers = advRow(Str::CurAdvRevers, IDC_CUR_REVERSALS, g_cur.reversals);
+    g_edShrink = advRow(Str::CurAdvShrink, IDC_CUR_SHRINK,    g_cur.shrinkMs);
 
     SetCursorValueLabels();
 
     // ---- вкладка «День/ніч» (CAPS-7) ----
     // (таб-контрол опускається на низ z-порядку нижче, після створення всіх сторінок)
     y = PY;
-    g_thEnable = check(addT, L"Автоматично перемикати світлу і темну тему Windows", IDC_TH_ENABLE, g_th.enabled);
-    g_thBySun   = radio(addT, L"За сходом і заходом сонця", PX, 230, IDC_TH_BY_SUN, true);
-    g_thBySched = radio(addT, L"За розкладом", PX + 240, 170, IDC_TH_BY_SCHED, false);
+    g_thEnable = check(addT, Str::ThEnable, IDC_TH_ENABLE, g_th.enabled);
+    g_thBySun   = radio(addT, Str::ThBySun,   PX,       230, IDC_TH_BY_SUN,   true);
+    g_thBySched = radio(addT, Str::ThBySched, PX + 240, 170, IDC_TH_BY_SCHED, false);
     CheckRadioButton(hwnd, IDC_TH_BY_SUN, IDC_TH_BY_SCHED,
                      g_th.bySchedule ? IDC_TH_BY_SCHED : IDC_TH_BY_SUN);
     y += 26;
-    g_thStatus = text(addT, L"", 2, IDC_TH_STATUS, 4);
+    g_thStatus = text(addT, Str::Empty, 2, IDC_TH_STATUS, 4);
 
-    addT(mk(L"STATIC", L"Темна тема з", 0, PX, y + 4, 100, 20, 0));
+    addT(mkS(L"STATIC", Str::ThDarkFrom, 0, PX, y + 4, 100, 20, 0));
     g_thDarkFrom = addT(mk(DATETIMEPICK_CLASSW, L"", DTS_TIMEFORMAT | DTS_UPDOWN | WS_TABSTOP,
                            PX + 104, y, 90, 26, IDC_TH_DARK_FROM));
-    addT(mk(L"STATIC", L"світла з", 0, PX + 220, y + 4, 70, 20, 0));
+    addT(mkS(L"STATIC", Str::ThLightFrom, 0, PX + 220, y + 4, 70, 20, 0));
     g_thLightFrom = addT(mk(DATETIMEPICK_CLASSW, L"", DTS_TIMEFORMAT | DTS_UPDOWN | WS_TABSTOP,
                             PX + 294, y, 90, 26, IDC_TH_LIGHT_FROM));
     y += 26 + 14;
@@ -3462,35 +3733,34 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     SetWindowSubclass(g_thDarkFrom,  DtpSubclassProc, 1, 0);   // CAPS-8: темний режим
     SetWindowSubclass(g_thLightFrom, DtpSubclassProc, 1, 0);
 
-    g_thToggle = button(addT, L"Переключити зараз", PX, 170, IDC_TH_TOGGLE);
+    g_thToggle = button(addT, Str::ThToggle, PX, 170, IDC_TH_TOGGLE);
     y += 30 + 8;
-    g_thNow = text(addT, L"", 2, IDC_TH_NOW, 4);
-    hint(addT, L"Поки відкрита повноекранна програма, тема не змінюється — "
-               L"перемкнеться після її закриття.", 2);
-    g_thAdvBtn = button(addT, L"Детально ▾", PX, 140, IDC_TH_ADVANCED);
+    g_thNow = text(addT, Str::Empty, 2, IDC_TH_NOW, 4);
+    hint(addT, Str::ThFullscreenHint, 2);
+    g_thAdvBtn = button(addT, Str::Details, PX, 140, IDC_TH_ADVANCED);
     y += 30 + 10;
 
     // «Детально»: звідки брати розташування для сходу/заходу
-    text(addTA, L"Розташування для сходу й заходу", 1, 0, 4);
+    text(addTA, Str::ThLocTitle, 1, 0, 4);
     {
-        const wchar_t* names[5] = { L"Автоматично", L"Служба Windows", L"За IP-адресою",
-                                    L"Вручну", L"Часовий пояс і регіон" };
+        const Str names[5] = { Str::ThSrcAuto, Str::ThSrcWin, Str::ThSrcIp,
+                               Str::ThSrcManual, Str::ThSrcTz };
         const int xs[5] = { PX, PX + 126, PX + 272, PX, PX + 126 };
         const int ys[5] = { 0, 0, 0, 24, 24 };
         const int ws[5] = { 120, 140, 148, 120, 200 };
         for (int i = 0; i < 5; ++i)
-            g_thSrc[i] = addTA(mk(L"BUTTON", names[i],
+            g_thSrc[i] = addTA(mkS(L"BUTTON", names[i],
                 BS_AUTORADIOBUTTON | (i == 0 ? (WS_GROUP | WS_TABSTOP) : 0),
                 xs[i], y + ys[i], ws[i], 22, IDC_TH_SRC_AUTO + i));
         CheckRadioButton(hwnd, IDC_TH_SRC_AUTO, IDC_TH_SRC_TZ, IDC_TH_SRC_AUTO + (int)g_th.src);
         y += 24 + 28;
     }
-    addTA(mk(L"STATIC", L"Широта", 0, PX, y + 4, 60, 18, 0));
+    addTA(mkS(L"STATIC", Str::ThLat, 0, PX, y + 4, 60, 18, 0));
     g_thLat = addTA(mk(L"EDIT", L"", ES_RIGHT | WS_BORDER | WS_TABSTOP, PX + 64, y, 90, 24, IDC_TH_LAT));
-    addTA(mk(L"STATIC", L"Довгота", 0, PX + 176, y + 4, 64, 18, 0));
+    addTA(mkS(L"STATIC", Str::ThLon, 0, PX + 176, y + 4, 64, 18, 0));
     g_thLon = addTA(mk(L"EDIT", L"", ES_RIGHT | WS_BORDER | WS_TABSTOP, PX + 244, y, 90, 24, IDC_TH_LON));
     y += 24 + 8;
-    hint(addTA, L"За IP-адресою під VPN покаже розташування VPN-сервера.");
+    hint(addTA, Str::ThVpnHint);
     if (g_th.hasManual) {
         wchar_t b[32];
         swprintf(b, 32, L"%.4f", g_th.lat); SetWindowTextW(g_thLat, b);
@@ -3499,27 +3769,33 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 
     // ---- вкладка «Налаштування» (CAPS-9) ----
     y = PY;
-    g_checkbox = check(addS, L"Запускати при вході в Windows", IDC_AUTOSTART, false);
-    hint(addS, L"Задача Планувальника з найвищими правами, без запиту UAC. "
-               L"Вікно можна закрити — програма лишається в треї.", 2);
+    g_checkbox = check(addS, Str::SetAutostart, IDC_AUTOSTART, false);
+    hint(addS, Str::SetAutostartHint, 2);
     y += 6;
-    sec(addS, L"Тема вікна");   // CAPS-8
-    radio(addS, L"Автоматично",   PX,       130, IDC_WT_AUTO,  true);
-    radio(addS, L"Завжди світла", PX + 140, 130, IDC_WT_LIGHT, false);
-    radio(addS, L"Завжди темна",  PX + 280, 130, IDC_WT_DARK,  false);
+    sec(addS, Str::SetSecLang);   // CAPS-12
+    radio(addS, Str::SetLangSystem, PX,       130, IDC_LANG_SYSTEM, true);
+    radio(addS, Str::SetLangUk,     PX + 140, 130, IDC_LANG_UK,     false);
+    radio(addS, Str::SetLangEn,     PX + 280, 130, IDC_LANG_EN,     false);
+    CheckRadioButton(hwnd, IDC_LANG_SYSTEM, IDC_LANG_EN, IDC_LANG_SYSTEM + (int)g_langPref);
+    y += 26;
+    hint(addS, Str::SetLangHint);
+    y += 6;
+    sec(addS, Str::SetSecTheme);   // CAPS-8
+    radio(addS, Str::SetThAuto,  PX,       130, IDC_WT_AUTO,  true);
+    radio(addS, Str::SetThLight, PX + 140, 130, IDC_WT_LIGHT, false);
+    radio(addS, Str::SetThDark,  PX + 280, 130, IDC_WT_DARK,  false);
     CheckRadioButton(hwnd, IDC_WT_AUTO, IDC_WT_DARK, IDC_WT_AUTO + (int)g_winTheme);
     y += 26;
-    hint(addS, L"«Автоматично» — як тема застосунків Windows (див. «День/ніч»).");
+    hint(addS, Str::SetThHint);
     y += 6;
-    sec(addS, L"Оновлення");    // CAPS-10
-    g_updDailyCb = check(addS, L"Щоденна перевірка оновлень", IDC_UPD_DAILY, g_updDaily);
-    g_updStatus  = text(addS, L"", 2, IDC_UPD_STATUS, 8);
-    g_updCheckBtn    = button(addS, L"Перевірити зараз",    PX,       150, IDC_UPD_CHECK);
-    g_updInstallBtn  = button(addS, L"Оновити",             PX + 160, 110, IDC_UPD_INSTALL);
-    g_updRollbackBtn = button(addS, L"Повернути попередню", PX + 280, 140, IDC_UPD_ROLLBACK);
+    sec(addS, Str::SetSecUpd);    // CAPS-10
+    g_updDailyCb = check(addS, Str::UpdDaily, IDC_UPD_DAILY, g_updDaily);
+    g_updStatus  = text(addS, Str::Empty, 2, IDC_UPD_STATUS, 8);
+    g_updCheckBtn    = button(addS, Str::UpdCheck,    PX,       150, IDC_UPD_CHECK);
+    g_updInstallBtn  = button(addS, Str::UpdInstall,  PX + 160, 110, IDC_UPD_INSTALL);
+    g_updRollbackBtn = button(addS, Str::UpdRollback, PX + 280, 140, IDC_UPD_ROLLBACK);
     y += 30 + 12;
-    hint(addS, L"Оновлення з GitHub Releases; підпис релізу перевіряється перед заміною. "
-               L"Попередня версія лишається поруч як lilhelpers.exe.old.", 2);
+    hint(addS, Str::UpdHint, 2);
     UpdateUpdStatus();
 
     // Таб-контрол — НА САМИЙ НИЗ z-порядку. Попри те, що він створений першим,
@@ -3574,8 +3850,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         Mode other = (g_mode == Mode::Hook) ? Mode::Hotkey : Mode::Hook;
         if (!StartInterception(other)) {
             Shell_NotifyIconW(NIM_DELETE, &g_nid);
-            MessageBoxW(nullptr, L"Не вдалося перехопити клавішу CapsLock.",
-                        kAppName, MB_ICONERROR | MB_OK);
+            MessageBoxW(nullptr, S(Str::MsgHookFailed), kAppName, MB_ICONERROR | MB_OK);
             return 1;
         }
         g_mode = other;
