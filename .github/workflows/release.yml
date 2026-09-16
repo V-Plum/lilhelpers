@@ -1,6 +1,6 @@
 name: build
 
-# Tag push (v1.0.0, v1.1.0, ...) -> build + attach capslang.exe to a release.
+# Tag push (v1.0.0, v1.1.0, ...) -> build + attach lilhelpers.exe to a release.
 # Manual run -> build only, exe available as a workflow artifact.
 on:
   push:
@@ -25,7 +25,7 @@ jobs:
 
       - name: Show binary metadata
         run: |
-          $exe = Get-Item capslang.exe
+          $exe = Get-Item lilhelpers.exe
           "size: $($exe.Length) bytes"
           $exe.VersionInfo | Format-List ProductName, FileVersion, CompanyName, LegalCopyright
 
@@ -37,60 +37,72 @@ jobs:
         run: |
           $want = -join (0x0417,0x0430,0x043F,0x0443,0x0441,0x043A,0x0430,0x0442,0x0438 |
                          ForEach-Object { [char]$_ })   # "Zapuskaty" in Cyrillic
-          $bytes = [IO.File]::ReadAllBytes("capslang.exe")
+          $bytes = [IO.File]::ReadAllBytes("lilhelpers.exe")
           $utf16 = [Text.Encoding]::Unicode.GetString($bytes)
           if ($utf16 -notlike "*$want*") { throw "Cyrillic UI strings are mangled - is /utf-8 set?" }
           "UI strings ok"
 
       # Catches the easy mistake of tagging a release without bumping the
-      # version in capslang.rc - the release then ships mislabelled.
+      # version in lilhelpers.rc - the release then ships mislabelled.
       - name: Version must match the tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           $want = ($env:GITHUB_REF_NAME -replace '^v','') + '.0'
-          $got = (Get-Item capslang.exe).VersionInfo.FileVersion
-          if ($got -ne $want) { throw "capslang.rc says $got, tag says $want" }
+          $got = (Get-Item lilhelpers.exe).VersionInfo.FileVersion
+          if ($got -ne $want) { throw "lilhelpers.rc says $got, tag says $want" }
           "version ok: $got"
 
       # CAPS-10: the in-app updater verifies an ECDSA P-256 signature over SHA-256
-      # of capslang.exe with a public key embedded in the source. The private key
-      # lives only in the CAPSLANG_SIGNING_KEY secret; the public half is committed
-      # as capslang_signing_pub.pem and must match the hex constant in the source.
-      - name: Embedded public key must match capslang_signing_pub.pem
+      # of lilhelpers.exe with a public key embedded in the source. The private key
+      # lives only in the LILHELPERS_SIGNING_KEY secret; the public half is committed
+      # as lilhelpers_signing_pub.pem and must match the hex constant in the source.
+      - name: Embedded public key must match lilhelpers_signing_pub.pem
         run: |
           $ossl = "C:\Program Files\Git\usr\bin\openssl.exe"
-          # DER — у файл: PowerShell перетворює бінарний stdout на текст і псує байти
+          # DER to a file: PowerShell would turn binary stdout into text and corrupt it
           $derPath = Join-Path $env:RUNNER_TEMP "pub.der"
-          & $ossl ec -pubin -in capslang_signing_pub.pem -outform DER -out $derPath
-          if ($LASTEXITCODE -ne 0) { throw "openssl could not read capslang_signing_pub.pem" }
+          & $ossl ec -pubin -in lilhelpers_signing_pub.pem -outform DER -out $derPath
+          if ($LASTEXITCODE -ne 0) { throw "openssl could not read lilhelpers_signing_pub.pem" }
           $bytes = [IO.File]::ReadAllBytes($derPath)
           $xy = ($bytes[($bytes.Length - 64)..($bytes.Length - 1)] | ForEach-Object { $_.ToString("x2") }) -join ""
-          if (-not (Select-String -Path capslang.cpp -Pattern $xy -SimpleMatch -Quiet)) { throw "kUpdatePubKeyHex in capslang.cpp does not match capslang_signing_pub.pem" }
+          if (-not (Select-String -Path lilhelpers.cpp -Pattern $xy -SimpleMatch -Quiet)) { throw "kUpdatePubKeyHex in lilhelpers.cpp does not match lilhelpers_signing_pub.pem" }
           "public key ok: $($xy.Substring(0,16))..."
 
       - name: Sign release binary
         if: startsWith(github.ref, 'refs/tags/v')
         env:
-          SIGNING_KEY: ${{ secrets.CAPSLANG_SIGNING_KEY }}
+          SIGNING_KEY: ${{ secrets.LILHELPERS_SIGNING_KEY }}
         run: |
-          if (-not $env:SIGNING_KEY) { throw "CAPSLANG_SIGNING_KEY secret is missing" }
+          if (-not $env:SIGNING_KEY) { throw "LILHELPERS_SIGNING_KEY secret is missing" }
           $ossl = "C:\Program Files\Git\usr\bin\openssl.exe"
           $key = Join-Path $env:RUNNER_TEMP "signing.pem"
           [IO.File]::WriteAllText($key, $env:SIGNING_KEY)
-          & $ossl dgst -sha256 -sign $key -out capslang.exe.sig capslang.exe
+          & $ossl dgst -sha256 -sign $key -out lilhelpers.exe.sig lilhelpers.exe
           Remove-Item $key -Force
-          & $ossl dgst -sha256 -verify capslang_signing_pub.pem -signature capslang.exe.sig capslang.exe
+          & $ossl dgst -sha256 -verify lilhelpers_signing_pub.pem -signature lilhelpers.exe.sig lilhelpers.exe
           if ($LASTEXITCODE -ne 0) { throw "signature does not verify with the committed public key" }
-          "signed: $((Get-Item capslang.exe.sig).Length) bytes"
+          "signed: $((Get-Item lilhelpers.exe.sig).Length) bytes"
+
+      # CAPS-11: the program was called capslang up to v1.6.0, and that updater
+      # downloads <tag>/capslang.exe + .sig by that exact name (GitHub redirects
+      # a renamed repository, but not a renamed asset). Ship the same signed
+      # bytes under the old name too, so those installs can still reach us; the
+      # binary renames itself to lilhelpers.exe on first start. Drop this step
+      # once no capslang installs are left.
+      - name: Legacy asset for capslang <= 1.6.0 updaters
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          Copy-Item lilhelpers.exe capslang.exe
+          Copy-Item lilhelpers.exe.sig capslang.exe.sig
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: capslang-exe
-          path: capslang.exe
+          name: lilhelpers-exe
+          path: lilhelpers.exe
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$env:GITHUB_REF_NAME" capslang.exe capslang.exe.sig --generate-notes
+        run: gh release create "$env:GITHUB_REF_NAME" lilhelpers.exe lilhelpers.exe.sig capslang.exe capslang.exe.sig --generate-notes

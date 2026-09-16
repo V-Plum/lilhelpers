@@ -1,4 +1,4 @@
-# Build script for capslang (ASCII only - no BOM issues).
+# Build script for lilhelpers (ASCII only - no BOM issues).
 #
 # Prefers MSVC (that is what CI releases are built with: MinGW-built binaries
 # trip antivirus ML heuristics far more often). Falls back to a mingw-w64
@@ -47,19 +47,19 @@ function Import-VcEnv([string]$vcvars) {
 function Build-Msvc([string]$vcvars) {
     Import-VcEnv $vcvars
 
-    & rc.exe /nologo /fo capslang.res capslang.rc
+    & rc.exe /nologo /fo lilhelpers.res lilhelpers.rc
     if ($LASTEXITCODE -ne 0) { throw "rc.exe failed" }
 
     # /utf-8: the source is UTF-8 without a BOM, and cl.exe would otherwise
     # read it in the system ANSI codepage and mangle every Cyrillic literal.
     # /MT: static CRT, no VC++ redistributable needed on the target machine.
     & cl.exe /nologo /std:c++17 /utf-8 /W3 /O2 /MT /DNDEBUG /DUNICODE /D_UNICODE `
-        capslang.cpp capslang.res `
-        /link /SUBSYSTEM:WINDOWS /OUT:capslang.exe $LIBS
+        lilhelpers.cpp lilhelpers.res `
+        /link /SUBSYSTEM:WINDOWS /OUT:lilhelpers.exe $LIBS
     if ($LASTEXITCODE -ne 0) { throw "cl.exe failed" }
 
-    Remove-Item capslang.obj, capslang.res -ErrorAction SilentlyContinue
-    Write-Host "OK: capslang.exe built with MSVC"
+    Remove-Item lilhelpers.obj, lilhelpers.res -ErrorAction SilentlyContinue
+    Write-Host "OK: lilhelpers.exe built with MSVC"
 }
 
 function Resolve-MingwTool([string]$name) {
@@ -81,19 +81,19 @@ function Build-Mingw {
     $windres = Resolve-MingwTool "windres"
     $gxx     = Resolve-MingwTool "g++"
 
-    & $windres -i capslang.rc -o capslang_res.o
+    & $windres -i lilhelpers.rc -o lilhelpers_res.o
     if ($LASTEXITCODE -ne 0) { throw "windres failed" }
 
     # -fno-exceptions/-fno-rtti: GDI+ and the Task Scheduler COM API report
     # status codes rather than throwing; this drops ~240 KB of C++ runtime.
-    & $gxx capslang.cpp capslang_res.o -o capslang.exe `
+    & $gxx lilhelpers.cpp lilhelpers_res.o -o lilhelpers.exe `
         -municode -mwindows -O2 -s -static -fno-exceptions -fno-rtti `
         -lshell32 -lgdi32 -lgdiplus -lshlwapi -lole32 -loleaut32 -lcomctl32 -ltaskschd -luuid -ladvapi32 `
         -lwininet -lversion -luxtheme -ldwmapi -lbcrypt
     if ($LASTEXITCODE -ne 0) { throw "compile failed" }
 
-    Remove-Item capslang_res.o -ErrorAction SilentlyContinue
-    Write-Host "OK: capslang.exe built with mingw-w64"
+    Remove-Item lilhelpers_res.o -ErrorAction SilentlyContinue
+    Write-Host "OK: lilhelpers.exe built with mingw-w64"
 }
 
 $vcvars = if ($Toolchain -eq "mingw") { $null } else { Find-VcVars }

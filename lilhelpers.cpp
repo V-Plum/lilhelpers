@@ -1,6 +1,8 @@
-// capslang — перемикання розкладки клавіатури по CapsLock (Windows 11).
+// Little Helpers (lilhelpers) — дрібні зручності для Windows 11 в одному треї:
+// розкладка по CapsLock, пошук курсора трусінням, день/ніч, темна тема вікна,
+// автооновлення. Виріс із capslang (CAPS-11: перейменування у v2.0.0).
 //
-// Механізм: low-level клавіатурний хук, який ковтає CapsLock (повертає 1) і
+// Механізм розкладки: low-level клавіатурний хук, який ковтає CapsLock (повертає 1) і
 // віддає роботу головному потоку. RegisterHotKey тут НЕ підходить, хоч і
 // виглядає охайніше: він перехоплює доставку повідомлення, але сам тогл
 // Caps Lock відбувається рівнем нижче й однаково спрацьовує, тобто після
@@ -117,7 +119,7 @@ constexpr int  IDC_UPD_STATUS    = 161;
 constexpr int  IDC_UPD_CHECK     = 162;
 constexpr int  IDC_UPD_INSTALL   = 163;
 constexpr int  IDC_UPD_ROLLBACK  = 164;
-constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з capslang.png
+constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
 constexpr UINT IDM_EXIT        = 2;
@@ -126,9 +128,18 @@ constexpr UINT TIMER_MAG_FRAME  = 2;   // кадр оверлейної анім
 constexpr UINT TIMER_THEME      = 3;   // CAPS-7: перевірка теми раз на хвилину
 constexpr UINT TIMER_UPDATE     = 4;   // CAPS-10: хвилина після старту, далі кожні 30 хв
 
-const wchar_t* kWndClass = L"capslang";
-const wchar_t* kTaskName = L"capslang";
-const wchar_t* kRegPath  = L"Software\\capslang";
+const wchar_t* kAppName  = L"Little Helpers";   // заголовки вікна/повідомлень, трей
+const wchar_t* kWndClass = L"lilhelpers";
+const wchar_t* kTaskName = L"lilhelpers";
+const wchar_t* kRegPath  = L"Software\\lilhelpers";
+// CAPS-11: сліди capslang (≤1.6.0), які v1.7.0 підхоплює при першому старті —
+// налаштування переносяться, задача автозапуску перестворюється, файл
+// capslang.exe замінюється на lilhelpers.exe (див. MigrateLegacy* нижче).
+const wchar_t* kLegacyTaskName = L"capslang";
+const wchar_t* kLegacyRegPath  = L"Software\\capslang";
+const wchar_t* kLegacyExeName  = L"capslang.exe";
+const wchar_t* kLegacyWndClass = L"capslang";
+const wchar_t* kExeName        = L"lilhelpers.exe";
 const wchar_t* kRegMode  = L"Mode";
 const wchar_t* kRegPassthrough = L"PassthroughRemote";
 const wchar_t* kRegLayoutSwitch = L"LayoutSwitch";   // CAPS-9: перемикання розкладок увімкнено (1)
@@ -187,19 +198,23 @@ HBRUSH g_brDkBorder = nullptr, g_brDkThumb = nullptr, g_brDkAccent = nullptr;
 
 // ---------- CAPS-10: автооновлення з GitHub Releases ----------
 //
-// Перевірка: GET releases/latest → tag_name. Завантаження capslang.exe і
-// capslang.exe.sig з releases/download/<tag>/. Справжність — ECDSA P-256 підпис
-// SHA-256 файлу, зроблений у CI приватним ключем (GitHub Secret CAPSLANG_SIGNING_KEY);
-// публічний ключ зашитий нижче і лежить у репо як capslang_signing_pub.pem — CI
+// Перевірка: GET releases/latest → tag_name. Завантаження lilhelpers.exe і
+// lilhelpers.exe.sig з releases/download/<tag>/. Справжність — ECDSA P-256 підпис
+// SHA-256 файлу, зроблений у CI приватним ключем (GitHub Secret LILHELPERS_SIGNING_KEY);
+// публічний ключ зашитий нижче і лежить у репо як lilhelpers_signing_pub.pem — CI
 // перевіряє їх збіг. Підпис Authenticode не потрібен: файл, записаний самою
 // програмою, не має Mark-of-the-Web, SmartScreen мовчить. Заміна: запущений exe →
-// capslang.exe.old, новий на його місце, запуск нового з --after-update <pid>
+// lilhelpers.exe.old, новий на його місце, запуск нового з --after-update <pid>
 // (чекає виходу старого, бо м'ютекс одного екземпляра), старий виходить. .old
 // лишається для «Повернути попередню версію».
-// X||Y публічного ключа (одним літералом — CI звіряє його з capslang_signing_pub.pem)
+// CAPS-11: ім'я ассету зашите (не береться з власного імені файла), щоб
+// перейменована вручну копія не шукала неіснуючий ассет. Реліз переходу з
+// capslang додатково несе ассет capslang.exe для апдейтера ≤1.6.0 (release.yml).
+// X||Y публічного ключа (одним літералом — CI звіряє його з lilhelpers_signing_pub.pem)
 const char*    kUpdatePubKeyHex = "86a4bec4e053f5a79786c1f5493c1faebd1f1909b4606616eaf93afc39cd100f821fd2724675adb0721049e70df4cc6130bdc4424b75049b21f31c09e5a065c9";
-const wchar_t* kUpdApiUrl = L"https://api.github.com/repos/V-Plum/capslang/releases/latest";
-const wchar_t* kUpdDlBase = L"https://github.com/V-Plum/capslang/releases/download/";
+const wchar_t* kUpdApiUrl = L"https://api.github.com/repos/V-Plum/lilhelpers/releases/latest";
+const wchar_t* kUpdDlBase = L"https://github.com/V-Plum/lilhelpers/releases/download/";
+const wchar_t* kUpdAsset  = L"lilhelpers.exe";
 
 enum class UpdState { Idle, Checking, UpToDate, Available, Downloading, Verified, Error };
 struct UpdResult {
@@ -673,10 +688,10 @@ DWORD WINAPI HookThreadProc(LPVOID param)
     WNDCLASSW wc = {};
     wc.lpfnWndProc   = HookWndProc;
     wc.hInstance     = inst;
-    wc.lpszClassName = L"capslang_hook";
+    wc.lpszClassName = L"lilhelpers_hook";
     RegisterClassW(&wc);
 
-    g_hookWnd = CreateWindowExW(0, L"capslang_hook", nullptr, 0,
+    g_hookWnd = CreateWindowExW(0, L"lilhelpers_hook", nullptr, 0,
                                 0, 0, 0, 0, HWND_MESSAGE, nullptr, inst, nullptr);
     SetEvent(ready);  // головний потік чекає, поки вікно готове
 
@@ -1129,7 +1144,7 @@ bool OverlayBeginShrink()
     g_overlayIcon = copy;
     g_overlay = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST |
                                 WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-                                L"capslang_overlay", nullptr, WS_POPUP,
+                                L"lilhelpers_overlay", nullptr, WS_POPUP,
                                 0, 0, 1, 1, nullptr, nullptr,
                                 GetModuleHandleW(nullptr), nullptr);
     if (!g_overlay) { OverlayDestroy(); return false; }
@@ -1263,7 +1278,7 @@ void FillTaskDefinition(ITaskDefinition* def)
 {
     IRegistrationInfo* info = nullptr;
     if (SUCCEEDED(def->get_RegistrationInfo(&info)) && info) {
-        BSTR s = SysAllocString(L"capslang — CapsLock перемикає розкладку клавіатури");
+        BSTR s = SysAllocString(L"Little Helpers — розкладка по Caps Lock, пошук курсора, день/ніч");
         info->put_Description(s);
         SysFreeString(s);
         info->Release();
@@ -1618,7 +1633,7 @@ bool LocateWindows(double& lat, double& lon, bool allowPrompt)
 // Один GET до ip-api.com (без ключа, HTTP — координати міста, не секрет).
 bool LocateIp(double& lat, double& lon)
 {
-    HINTERNET h = InternetOpenW(L"capslang", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+    HINTERNET h = InternetOpenW(L"lilhelpers", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
     if (!h) return false;
     DWORD to = 8000;
     InternetSetOptionW(h, INTERNET_OPTION_CONNECT_TIMEOUT, &to, sizeof(to));
@@ -1784,7 +1799,7 @@ void SaveThemeSettings()
     RegSaveInt(kRegThemeLocSrc,    (int)g_th.src);
 }
 
-// Версія з VERSIONINFO самого exe — єдине джерело лишається capslang.rc.
+// Версія з VERSIONINFO самого exe — єдине джерело лишається lilhelpers.rc.
 void ExeVersionString(wchar_t* buf, size_t n)
 {
     buf[0] = 0;
@@ -1812,7 +1827,7 @@ bool HttpGet(const wchar_t* url, std::vector<BYTE>& out, const wchar_t* toFile)
 {
     wchar_t ver[32] = {}, ua[64] = {};
     ExeVersionString(ver, 32);
-    swprintf(ua, 64, L"capslang/%s", ver);
+    swprintf(ua, 64, L"lilhelpers/%s", ver);
     HINTERNET h = InternetOpenW(ua, INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
     if (!h) return false;
     DWORD to = 15000;
@@ -1980,14 +1995,14 @@ void UpdateWork(UpdResult* r)
     wchar_t exe[MAX_PATH] = {}, nw[MAX_PATH + 8] = {}, url[256] = {};
     ExePath(exe);
     swprintf(nw, MAX_PATH + 8, L"%s.new", exe);
-    swprintf(url, 256, L"%s%s/capslang.exe", kUpdDlBase, r->tag);
+    swprintf(url, 256, L"%s%s/%s", kUpdDlBase, r->tag, kUpdAsset);
     std::vector<BYTE> sink;
     if (!HttpGet(url, sink, nw)) {
         lstrcpyW(r->msg, L"Не вдалося завантажити оновлення.");
         DeleteFileW(nw);
         return;
     }
-    swprintf(url, 256, L"%s%s/capslang.exe.sig", kUpdDlBase, r->tag);
+    swprintf(url, 256, L"%s%s/%s.sig", kUpdDlBase, r->tag, kUpdAsset);
     std::vector<BYTE> sig;
     if (!HttpGet(url, sig, nullptr) || sig.size() < 8) {
         lstrcpyW(r->msg, L"Не вдалося завантажити підпис релізу.");
@@ -2117,17 +2132,125 @@ void TrayBalloon(const wchar_t* title, const wchar_t* text)
     Shell_NotifyIconW(NIM_MODIFY, &n);
 }
 
-// --after-update <pid>: зачекати, поки попередній екземпляр вийде (м'ютекс).
+// --after-update <pid> / --after-rename <pid>: зачекати, поки попередній
+// екземпляр вийде (м'ютекс одного екземпляра; після перейменування — ще й файл).
+void CleanupLegacyFiles();
 void WaitForPreviousInstance()
 {
-    const wchar_t* p = wcsstr(GetCommandLineW(), L"--after-update ");
+    const wchar_t* cl = GetCommandLineW();
+    const wchar_t* p = wcsstr(cl, L"--after-update ");
+    const bool renamed = !p && (p = wcsstr(cl, L"--after-rename ")) != nullptr;
     if (!p) return;
     const DWORD pid = (DWORD)wcstoul(p + 15, nullptr, 10);
-    if (!pid) return;
-    if (HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, pid)) {
-        WaitForSingleObject(h, 15000);
-        CloseHandle(h);
+    if (pid) {
+        if (HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, pid)) {
+            WaitForSingleObject(h, 15000);
+            CloseHandle(h);
+        }
     }
+    if (renamed) CleanupLegacyFiles();
+}
+
+// ---------- CAPS-11: перехід із capslang (≤1.6.0) ----------
+//
+// Апдейтер 1.6.0 кладе цю версію на місце capslang.exe і запускає її під старим
+// ім'ям. Три сліди старої назви переносяться окремо, кожен — лише якщо він є:
+//  1. файл: запущені як capslang.exe → копіюємо себе в lilhelpers.exe поруч і
+//     перезапускаємось із нього з --after-rename <pid>; новий процес дочікується
+//     нашого виходу і прибирає capslang.exe та capslang.exe.old. Відкат на 1.6.0
+//     після цього навмисно неможливий: стара версія під новим ім'ям файла жила б
+//     із чужою гілкою реєстру й без задачі автозапуску;
+//  2. реєстр: HKCU\Software\capslang → \lilhelpers (усі значення, старе видаляється)
+//     — до першого читання налаштувань;
+//  3. задача автозапуску «capslang» → «lilhelpers» з новим шляхом exe.
+// Плюс ввічливість: якщо capslang ≤1.6.0 ще працює поруч (запустили нову версію
+// вручну), просимо його вийти — два перехоплювачі Caps Lock одночасно не потрібні.
+
+void LegacySibling(wchar_t* out, const wchar_t* name)   // <тека exe>\<name>
+{
+    ExePath(out);
+    PathRemoveFileSpecW(out);
+    PathAppendW(out, name);
+}
+
+// true = запущено як capslang.exe і вже стартував lilhelpers.exe — цей процес має вийти.
+bool SelfRenameIfLegacyName()
+{
+    wchar_t exe[MAX_PATH] = {};
+    ExePath(exe);
+    if (lstrcmpiW(PathFindFileNameW(exe), kLegacyExeName) != 0) return false;
+
+    wchar_t nw[MAX_PATH] = {};
+    LegacySibling(nw, kExeName);
+    if (!CopyFileW(exe, nw, FALSE)) return false;   // зайнятий чи не пише — лишаємось під старим ім'ям
+
+    wchar_t cmd[MAX_PATH + 64] = {};
+    swprintf(cmd, MAX_PATH + 64, L"\"%s\" --after-rename %lu", nw, (unsigned long)GetCurrentProcessId());
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(nw, cmd, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+        DeleteFileW(nw);
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
+}
+
+void CleanupLegacyFiles()
+{
+    wchar_t old[MAX_PATH] = {}, bak[MAX_PATH + 8] = {};
+    LegacySibling(old, kLegacyExeName);
+    swprintf(bak, MAX_PATH + 8, L"%s.old", old);
+    for (int i = 0; i < 20; ++i) {   // образ exe звільняється щойно процес вийшов; страховка на 4 с
+        DeleteFileW(bak);
+        if (DeleteFileW(old) || GetLastError() == ERROR_FILE_NOT_FOUND) break;
+        Sleep(200);
+    }
+}
+
+void MigrateLegacyRegistry()
+{
+    HKEY k = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRegPath, 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        RegCloseKey(k);
+        return;   // нова гілка вже є — переносити нічого
+    }
+    HKEY oldKey = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kLegacyRegPath, 0, KEY_READ, &oldKey) != ERROR_SUCCESS) return;
+    HKEY newKey = nullptr;
+    bool copied = false;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegPath, 0, nullptr, 0, KEY_WRITE, nullptr,
+                        &newKey, nullptr) == ERROR_SUCCESS) {
+        copied = SHCopyKeyW(oldKey, nullptr, newKey, 0) == ERROR_SUCCESS;
+        RegCloseKey(newKey);
+    }
+    RegCloseKey(oldKey);
+    if (copied) RegDeleteTreeW(HKEY_CURRENT_USER, kLegacyRegPath);
+}
+
+void MigrateLegacyTask()   // після CoInitializeEx
+{
+    ITaskService* svc;
+    ITaskFolder* root;
+    if (!OpenTaskRoot(&svc, &root)) return;
+    IRegisteredTask* task = nullptr;
+    BSTR name = SysAllocString(kLegacyTaskName);
+    const bool had = SUCCEEDED(root->GetTask(name, &task)) && task;
+    if (task) task->Release();
+    if (had) root->DeleteTask(name, 0);
+    SysFreeString(name);
+    root->Release();
+    svc->Release();
+    if (had) SetAutostart(true);   // той самий стан «увімкнено», але вже новий шлях
+}
+
+void RetireLegacyInstance()
+{
+    HWND old = FindWindowW(kLegacyWndClass, nullptr);
+    if (!old) return;
+    PostMessageW(old, WM_COMMAND, IDM_EXIT, 0);   // «Вихід» із його трей-меню
+    for (int i = 0; i < 15 && IsWindow(old); ++i) Sleep(200);
 }
 
 // ---------- CAPS-2: вкладки ----------
@@ -2613,7 +2736,7 @@ void ApplyLayoutSwitch(HWND hwnd, bool on)
                 SaveMode(other);
             } else {
                 MessageBoxW(hwnd, L"Не вдалося перехопити клавішу CapsLock.",
-                            L"capslang", MB_ICONERROR | MB_OK);
+                            kAppName, MB_ICONERROR | MB_OK);
                 on = false;
             }
         }
@@ -2637,10 +2760,10 @@ void ApplyMode(HWND hwnd, Mode mode)
         // не вийшло — вертаємось на те, що працювало
         if (StartInterception(g_mode)) {
             MessageBoxW(hwnd, L"Цей режим зараз недоступний — залишено попередній.",
-                        L"capslang", MB_ICONWARNING | MB_OK);
+                        kAppName, MB_ICONWARNING | MB_OK);
         } else {
             MessageBoxW(hwnd, L"Не вдалося перехопити клавішу CapsLock.",
-                        L"capslang", MB_ICONERROR | MB_OK);
+                        kAppName, MB_ICONERROR | MB_OK);
         }
     } else {
         g_mode = mode;
@@ -2715,7 +2838,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                     wchar_t text[128] = {};
                     swprintf(text, 128, L"Доступна версія %s. Оновити можна у «Налаштуваннях».",
                              r->tag[0] == L'v' ? r->tag + 1 : r->tag);
-                    TrayBalloon(L"capslang", text);
+                    TrayBalloon(kAppName, text);
                     lstrcpynW(g_updNotified, r->tag, 32);
                     RegSaveStr(kRegUpdNotified, r->tag);
                 }
@@ -2803,6 +2926,25 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 DrawCheckDark(nm->hwndFrom, cd->hdc, cd->rc);
                 return CDRF_SKIPDEFAULT;
             }
+            // CAPS-11: тема DarkMode_Explorer малює ВИМКНЕНУ кнопку як увімкнену —
+            // «Оновити» без доступного оновлення виглядало натискабельним. Малюємо самі:
+            // трохи світліша плашка, тьмяна рамка, сірий текст.
+            if (!lstrcmpiW(cls, L"Button") && !IsCheckOrRadio(nm->hwndFrom) &&
+                cd->dwDrawStage == CDDS_PREPAINT && !IsWindowEnabled(nm->hwndFrom)) {
+                HBRUSH fill = CreateSolidBrush(RGB(50, 50, 50));
+                FillRect(cd->hdc, &cd->rc, fill);
+                DeleteObject(fill);
+                FrameRect(cd->hdc, &cd->rc, g_brDkBorder);
+                wchar_t label[64] = {};
+                GetWindowTextW(nm->hwndFrom, label, 63);
+                HGDIOBJ old = SelectObject(cd->hdc, (HFONT)SendMessageW(nm->hwndFrom, WM_GETFONT, 0, 0));
+                SetBkMode(cd->hdc, TRANSPARENT);
+                SetTextColor(cd->hdc, kDkGray);
+                RECT rc = cd->rc;
+                DrawTextW(cd->hdc, label, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(cd->hdc, old);
+                return CDRF_SKIPDEFAULT;
+            }
         }
         if (nm->hwndFrom == g_tabs && nm->code == TCN_SELCHANGE)
             SelectTab((int)SendMessageW(g_tabs, TCM_GETCURSEL, 0, 0));
@@ -2815,7 +2957,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             ThemeTick();
             UpdateThemeStatus();
         }
-        // CAPS-7: посилання на GitHub у підвалі. Через explorer, бо capslang
+        // CAPS-7: посилання на GitHub у шапці. Через explorer, бо програма
         // елевейтований, а браузер має відкритись звичайним користувачем.
         if (nm->idFrom == IDC_COPYRIGHT && (nm->code == NM_CLICK || nm->code == NM_RETURN)) {
             const NMLINK* l = (const NMLINK*)lp;
@@ -2844,7 +2986,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 if (!SetAutostart(want))
                     MessageBoxW(hwnd,
                         L"Не вдалося змінити задачу автозапуску.",
-                        L"capslang", MB_ICONERROR | MB_OK);
+                        kAppName, MB_ICONERROR | MB_OK);
                 SendMessageW(g_checkbox, BM_SETCHECK,
                              AutostartEnabled() ? BST_CHECKED : BST_UNCHECKED, 0);
             }
@@ -2863,8 +3005,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case IDC_UPD_ROLLBACK:
             if (HIWORD(wp) == BN_CLICKED &&
-                MessageBoxW(hwnd, L"Повернути попередню версію і перезапустити capslang?",
-                            L"capslang", MB_ICONQUESTION | MB_YESNO) == IDYES)
+                MessageBoxW(hwnd, L"Повернути попередню версію і перезапустити Little Helpers?",
+                            kAppName, MB_ICONQUESTION | MB_YESNO) == IDYES)
                 RollbackUpdate();
             return 0;
         case IDC_WT_AUTO:         // CAPS-8
@@ -2995,7 +3137,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_CTLCOLORSTATIC: {
         const int id = GetDlgCtrlID((HWND)lp);
-        const bool gray = (id == IDC_COPYRIGHT || id == IDC_PASSTHROUGH_HINT || id == IDC_HINT_GRAY);
+        const bool gray = (id == IDC_COPYRIGHT || id == IDC_PASSTHROUGH_HINT || id == IDC_HINT_GRAY ||
+                           id == IDC_MODE_HINT);
         if (g_dark) {
             wchar_t cls[16] = {};
             GetClassNameW((HWND)lp, cls, 16);
@@ -3048,29 +3191,38 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-HFONT CreateUIFont()
+// Системний шрифт повідомлень (уже в пікселях системного DPI); CAPS-11: масштаб у
+// відсотках і вага — для назви в шапці (165 %, напівжирний) і заголовків груп.
+HFONT CreateUIFont(int percent, int weight)
 {
     NONCLIENTMETRICSW ncm = { sizeof(ncm) };
     SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
-    return CreateFontIndirectW(&ncm.lfMessageFont);
+    LOGFONTW lf = ncm.lfMessageFont;
+    lf.lfHeight = MulDiv(lf.lfHeight, percent, 100);
+    lf.lfWeight = weight;
+    return CreateFontIndirectW(&lf);
 }
 
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 {
-    WaitForPreviousInstance();   // CAPS-10: після оновлення — дочекатись виходу старого
-    CreateMutexW(nullptr, TRUE, L"capslang_single_instance");
+    WaitForPreviousInstance();   // CAPS-10/11: після оновлення чи перейменування — дочекатись попередника
+    if (SelfRenameIfLegacyName()) return 0;   // CAPS-11: ми capslang.exe → вже стартував lilhelpers.exe
+    CreateMutexW(nullptr, TRUE, L"lilhelpers_single_instance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         // Другий запуск — показуємо вікно першого екземпляра
         if (HWND prev = FindWindowW(kWndClass, nullptr))
             PostMessageW(prev, WMAPP_SHOWSETTINGS, 0, 0);
         return 0;
     }
+    RetireLegacyInstance();    // CAPS-11: capslang ≤1.6.0 ще працює поруч — попросити вийти
+    MigrateLegacyRegistry();   // CAPS-11: до першого читання налаштувань
 
     g_taskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    MigrateLegacyTask();       // CAPS-11: задача автозапуску під новим ім'ям і шляхом
 
     INITCOMMONCONTROLSEX icc = { sizeof(icc),
                                  ICC_STANDARD_CLASSES | ICC_TAB_CLASSES | ICC_BAR_CLASSES |
@@ -3114,19 +3266,29 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     WNDCLASSW ov = {};
     ov.lpfnWndProc   = DefWindowProcW;
     ov.hInstance     = hInst;
-    ov.lpszClassName = L"capslang_overlay";
+    ov.lpszClassName = L"lilhelpers_overlay";
     RegisterClassW(&ov);
 
-    const int w = sc(470), h = sc(520);
+    // ---- геометрія вікна (логічні px при 96 dpi, sc() масштабує) ----
+    //
+    // CAPS-11: шапка з логотипом, назвою і версією; сторінки на єдиній сітці —
+    // 20 px від краю полотна, крок 8 px між елементами, підказка одразу під
+    // своїм контролом, між групами 6–8 px повітря плюс заголовок групи.
+    constexpr int W = 500, H = 584;
+    constexpr int TAB_X = 20, TAB_Y = 74;                 // таб-контрол під шапкою
+    constexpr int PX = TAB_X + 20, PW = 420, PY = 116;    // сторінка: лівий край, ширина, перший рядок
+    const int w = sc(W), h = sc(H);
     RECT rc = { 0, 0, w, h };
     AdjustWindowRect(&rc, WS_CAPTION | WS_SYSMENU, FALSE);
-    HWND hwnd = CreateWindowW(kWndClass, L"capslang", WS_CAPTION | WS_SYSMENU,
+    HWND hwnd = CreateWindowW(kWndClass, kAppName, WS_CAPTION | WS_SYSMENU,
         (GetSystemMetrics(SM_CXSCREEN) - w) / 2,
         (GetSystemMetrics(SM_CYSCREEN) - h) / 2,
         rc.right - rc.left, rc.bottom - rc.top,
         nullptr, nullptr, hInst, nullptr);
 
-    HFONT font = CreateUIFont();
+    HFONT font      = CreateUIFont(100, FW_NORMAL);
+    HFONT fontSemi  = CreateUIFont(100, FW_SEMIBOLD);   // заголовки груп
+    HFONT fontTitle = CreateUIFont(165, FW_SEMIBOLD);   // назва програми в шапці
     auto mk = [&](const wchar_t* cls, const wchar_t* text, DWORD style,
                   int x, int y, int cx, int cy, int id) {
         HWND c = CreateWindowW(cls, text, WS_CHILD | WS_VISIBLE | style,
@@ -3136,16 +3298,28 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         return c;
     };
 
+    // ---- шапка ----
+    SetRect(&g_logoRect, sc(24), sc(16), sc(24 + 40), sc(16 + 40));
+    SendMessageW(mk(L"STATIC", kAppName, 0, 76, 13, 380, 26, 0), WM_SETFONT, (WPARAM)fontTitle, TRUE);
+    {
+        wchar_t ver[32] = {}, about[224] = {};
+        ExeVersionString(ver, 32);
+        swprintf(about, 224, L"Дрібні зручності для Windows · v%s · "
+                             L"<a href=\"https://github.com/V-Plum/lilhelpers\">GitHub</a>", ver);
+        mk(L"SysLink", about, 0, 76, 41, 400, 18, IDC_COPYRIGHT);   // WC_LINK
+    }
+
     // Таб-контрол створюємо першим, але на порядок створення НЕ покладаємось:
     // після створення сторінок він явно опускається на низ z-порядку (див. нижче).
     // WS_CLIPSIBLINGS обов'язковий: контроли сторінок — сусіди таба вище за
     // z-order, і без нього будь-яке перемальовування самого таба (наведення на
     // заголовок) зафарбовує їх нашим полотном — «порожнє вікно» у v1.5.0.
     g_tabs = CreateWindowW(WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS,
-                           sc(12), sc(12), sc(446), sc(440),
+                           sc(TAB_X), sc(TAB_Y), sc(W - 2 * TAB_X), sc(H - TAB_Y - TAB_X),
                            hwnd, (HMENU)(INT_PTR)IDC_TABS, hInst, nullptr);
     SendMessageW(g_tabs, WM_SETFONT, (WPARAM)font, TRUE);
     SetWindowSubclass(g_tabs, TabSubclassProc, 1, 0);   // полотно сторінки — див. TabSubclassProc
+    SendMessageW(g_tabs, TCM_SETPADDING, 0, MAKELPARAM(sc(10), sc(5)));   // повітря в заголовках
     TCITEMW tab = {};
     tab.mask = TCIF_TEXT;
     tab.pszText = (LPWSTR)L"Розкладка";
@@ -3164,180 +3338,184 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     auto addTA = [&](HWND c) { g_thAdv[g_thAdvN++] = c; return c; };
     auto addS = [&](HWND c) { g_pageSettings[g_pageSettingsN++] = c; return c; };
 
+    // Сітка сторінки: y біжить згори вниз, кожен помічник сам відступає під себе.
+    int y = PY;
+    auto sec = [&](auto add, const wchar_t* text) {          // заголовок групи
+        HWND c = add(mk(L"STATIC", text, 0, PX, y, PW, 20, 0));
+        SendMessageW(c, WM_SETFONT, (WPARAM)fontSemi, TRUE);
+        y += 24;
+        return c;
+    };
+    auto check = [&](auto add, const wchar_t* text, int id, bool on, int lines = 1) {
+        const int ch = lines > 1 ? 40 : 24;
+        HWND c = add(mk(L"BUTTON", text, BS_AUTOCHECKBOX | WS_TABSTOP | (lines > 1 ? BS_MULTILINE : 0),
+                        PX, y, PW, ch, id));
+        SendMessageW(c, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+        y += ch + 4;
+        return c;
+    };
+    auto text = [&](auto add, const wchar_t* s, int lines, int id, int after) {   // звичайний текст
+        HWND c = add(mk(L"STATIC", s, 0, PX, y, PW, 18 * lines, id));
+        y += 18 * lines + after;
+        return c;
+    };
+    auto hint = [&](auto add, const wchar_t* s, int lines = 1) {   // сірий, під контролом
+        return text(add, s, lines, IDC_HINT_GRAY, 12);
+    };
+    auto radio = [&](auto add, const wchar_t* s, int x, int cx, int id, bool first) {
+        return add(mk(L"BUTTON", s, BS_AUTORADIOBUTTON | (first ? (WS_GROUP | WS_TABSTOP) : 0),
+                      x, y, cx, 22, id));
+    };
+    auto button = [&](auto add, const wchar_t* s, int x, int cx, int id) {
+        return add(mk(L"BUTTON", s, BS_PUSHBUTTON | WS_TABSTOP, x, y, cx, 30, id));
+    };
+
     // ---- вкладка «Розкладка» ----
-    addL(mk(L"STATIC", L"CapsLock — перемкнути розкладку", 0, 28, 52, 300, 20, 0));
-    addL(mk(L"STATIC", L"Shift + CapsLock — звичайний Caps Lock", 0, 28, 76, 300, 20, 0));
-    g_layoutCheckbox = addL(mk(L"BUTTON", L"Переключати розкладки з Caps Lock",
-                               BS_AUTOCHECKBOX | WS_TABSTOP, 28, 110, 300, 24, IDC_LAYOUT_ENABLE));
-    SendMessageW(g_layoutCheckbox, BM_SETCHECK, g_layoutOn ? BST_CHECKED : BST_UNCHECKED, 0);
-
-    addL(mk(L"STATIC", L"Режим роботи:", 0, 28, 148, 200, 20, 0));
-    addL(mk(L"BUTTON", L"Основний", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,
-            28, 172, 130, 22, IDC_MODE_HOOK));
-    addL(mk(L"BUTTON", L"Запасний", BS_AUTORADIOBUTTON,
-            168, 172, 130, 22, IDC_MODE_HOTKEY));
-    g_modeHint = addL(mk(L"STATIC", L"", 0, 28, 200, 410, 20, IDC_MODE_HINT));
-
+    y = PY;
+    g_layoutCheckbox = check(addL, L"Перемикати розкладку клавіатури клавішею Caps Lock",
+                             IDC_LAYOUT_ENABLE, g_layoutOn);
+    hint(addL, L"Caps Lock — наступна розкладка. Shift + Caps Lock — звичайний Caps Lock.");
+    y += 6;
+    sec(addL, L"Спосіб перехоплення");
+    radio(addL, L"Основний", PX, 140, IDC_MODE_HOOK, true);
+    radio(addL, L"Запасний", PX + 150, 140, IDC_MODE_HOTKEY, false);
+    y += 26;
+    g_modeHint = text(addL, L"", 1, IDC_MODE_HINT, 12);
+    y += 6;
+    sec(addL, L"Віддалені та віртуальні машини");
     g_passthrough = LoadPassthrough();
-    g_passthroughCheckbox = addL(mk(L"BUTTON",
-        L"Не перехоплювати Caps Lock при роботі з віртуальними та віддаленими машинами",
-        BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 28, 232, 410, 38, IDC_PASSTHROUGH));
-    SendMessageW(g_passthroughCheckbox, BM_SETCHECK,
-                 g_passthrough ? BST_CHECKED : BST_UNCHECKED, 0);
-    addL(mk(L"STATIC", L"Remote Desktop, Windows App, VMware, Hyper-V.",
-            0, 28, 274, 410, 18, IDC_PASSTHROUGH_HINT));
-
-    // ---- вкладка «Налаштування» (CAPS-9) ----
-    g_checkbox = addS(mk(L"BUTTON", L"Запускати при вході в Windows",
-                         BS_AUTOCHECKBOX | WS_TABSTOP, 28, 52, 410, 24, IDC_AUTOSTART));
-    addS(mk(L"STATIC", L"Задача Планувальника з найвищими правами, без запиту UAC.",
-            0, 28, 78, 410, 18, IDC_HINT_GRAY));
-    addS(mk(L"STATIC", L"Вікно можна закрити — програма лишається в треї.",
-            0, 28, 112, 410, 18, IDC_HINT_GRAY));
-    // CAPS-8: тема самого вікна
-    addS(mk(L"STATIC", L"Тема вікна:", 0, 28, 150, 200, 20, 0));
-    addS(mk(L"BUTTON", L"Автоматично", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,
-            28, 172, 130, 22, IDC_WT_AUTO));
-    addS(mk(L"BUTTON", L"Завжди світла", BS_AUTORADIOBUTTON, 168, 172, 130, 22, IDC_WT_LIGHT));
-    addS(mk(L"BUTTON", L"Завжди темна",  BS_AUTORADIOBUTTON, 308, 172, 130, 22, IDC_WT_DARK));
-    CheckRadioButton(hwnd, IDC_WT_AUTO, IDC_WT_DARK, IDC_WT_AUTO + (int)g_winTheme);
-    addS(mk(L"STATIC", L"«Автоматично» — як тема застосунків Windows (див. «День/ніч»).",
-            0, 28, 198, 410, 18, IDC_HINT_GRAY));
-    // CAPS-10: оновлення
-    g_updDailyCb = addS(mk(L"BUTTON", L"Щоденна перевірка оновлень", BS_AUTOCHECKBOX | WS_TABSTOP,
-                           28, 236, 410, 24, IDC_UPD_DAILY));
-    SendMessageW(g_updDailyCb, BM_SETCHECK, g_updDaily ? BST_CHECKED : BST_UNCHECKED, 0);
-    g_updStatus = addS(mk(L"STATIC", L"", 0, 28, 264, 410, 36, IDC_UPD_STATUS));
-    g_updCheckBtn    = addS(mk(L"BUTTON", L"Перевірити зараз", BS_PUSHBUTTON | WS_TABSTOP,
-                              28, 304, 140, 26, IDC_UPD_CHECK));
-    g_updInstallBtn  = addS(mk(L"BUTTON", L"Оновити", BS_PUSHBUTTON | WS_TABSTOP,
-                              178, 304, 110, 26, IDC_UPD_INSTALL));
-    g_updRollbackBtn = addS(mk(L"BUTTON", L"Повернути попередню", BS_PUSHBUTTON | WS_TABSTOP,
-                              298, 304, 140, 26, IDC_UPD_ROLLBACK));
-    addS(mk(L"STATIC", L"Оновлення з GitHub Releases; підпис релізу перевіряється перед заміною. "
-                       L"Попередня версія лишається поруч як capslang.exe.old.",
-            0, 28, 338, 410, 34, IDC_HINT_GRAY));
-    UpdateUpdStatus();
+    g_passthroughCheckbox = check(addL, L"Не перехоплювати Caps Lock у вікнах віддалених і віртуальних машин",
+                                  IDC_PASSTHROUGH, g_passthrough, 2);
+    text(addL, L"Remote Desktop, Windows App, VMware, Hyper-V.", 1, IDC_PASSTHROUGH_HINT, 12);
 
     // ---- вкладка «Курсор» ----
-    g_curEnable = addC(mk(L"BUTTON", L"Збільшувати курсор, якщо потрусити мишею",
-                          BS_AUTOCHECKBOX | WS_TABSTOP, 28, 52, 410, 24, IDC_CUR_ENABLE));
-    SendMessageW(g_curEnable, BM_SETCHECK, g_cur.enabled ? BST_CHECKED : BST_UNCHECKED, 0);
-    addC(mk(L"STATIC", L"Не працює в іграх та інших повноекранних програмах.",
-            0, 28, 78, 410, 18, IDC_HINT_GRAY));
-
-    addC(mk(L"STATIC", L"Наскільки збільшувати", 0, 28, 110, 260, 20, 0));
-    g_curScaleVal = addC(mk(L"STATIC", L"", SS_RIGHT, 350, 110, 88, 20, 0));
-    g_curScale = addC(mk(TRACKBAR_CLASSW, L"", TBS_AUTOTICKS | WS_TABSTOP,
-                         24, 130, 414, 30, IDC_CUR_SCALE));
-    SendMessageW(g_curScale, TBM_SETRANGE, TRUE, MAKELPARAM(2, 8));
-    SendMessageW(g_curScale, TBM_SETPOS, TRUE, g_cur.scale);
-
-    addC(mk(L"STATIC", L"Скільки тримати збільшеним", 0, 28, 172, 260, 20, 0));
-    g_curHoldVal = addC(mk(L"STATIC", L"", SS_RIGHT, 350, 172, 88, 20, 0));
-    g_curHold = addC(mk(TRACKBAR_CLASSW, L"", TBS_AUTOTICKS | WS_TABSTOP,
-                        24, 192, 414, 30, IDC_CUR_HOLD));
-    SendMessageW(g_curHold, TBM_SETRANGE, TRUE, MAKELPARAM(5, 50));
-    SendMessageW(g_curHold, TBM_SETPAGESIZE, 0, 5);
-    SendMessageW(g_curHold, TBM_SETPOS, TRUE, g_cur.holdMs / 100);
-
-    g_curOverlay = addC(mk(L"BUTTON", L"Зменшувати плавно (намальованою копією)",
-                           BS_AUTOCHECKBOX | WS_TABSTOP, 28, 230, 410, 24, IDC_CUR_OVERLAY));
-    SendMessageW(g_curOverlay, BM_SETCHECK, g_cur.overlay ? BST_CHECKED : BST_UNCHECKED, 0);
-    addC(mk(L"STATIC", L"Інакше зменшує сам системний курсор — помітними стрибками.",
-            0, 28, 256, 410, 18, IDC_HINT_GRAY));
-
-    g_curAdvBtn = addC(mk(L"BUTTON", L"Детально ▾", BS_PUSHBUTTON | WS_TABSTOP,
-                          28, 288, 130, 26, IDC_CUR_ADVANCED));
+    y = PY;
+    g_curEnable = check(addC, L"Збільшувати курсор, якщо потрусити мишею", IDC_CUR_ENABLE, g_cur.enabled);
+    hint(addC, L"Не працює в іграх та інших повноекранних програмах.");
+    y += 6;
+    auto slider = [&](const wchar_t* label, HWND& valueOut, int id, int lo, int hi, int page, int pos) {
+        addC(mk(L"STATIC", label, 0, PX, y, PW - 100, 20, 0));
+        valueOut = addC(mk(L"STATIC", L"", SS_RIGHT, PX + PW - 90, y, 90, 20, 0));
+        y += 22;
+        HWND t = addC(mk(TRACKBAR_CLASSW, L"", TBS_AUTOTICKS | WS_TABSTOP, PX - 4, y, PW + 8, 30, id));
+        SendMessageW(t, TBM_SETRANGE, TRUE, MAKELPARAM(lo, hi));
+        if (page) SendMessageW(t, TBM_SETPAGESIZE, 0, page);
+        SendMessageW(t, TBM_SETPOS, TRUE, pos);
+        y += 36;
+        return t;
+    };
+    g_curScale = slider(L"Наскільки збільшувати",      g_curScaleVal, IDC_CUR_SCALE, 2, 8, 0, g_cur.scale);
+    g_curHold  = slider(L"Скільки тримати збільшеним", g_curHoldVal,  IDC_CUR_HOLD,  5, 50, 5, g_cur.holdMs / 100);
+    y += 4;
+    g_curOverlay = check(addC, L"Зменшувати плавно (намальованою копією)", IDC_CUR_OVERLAY, g_cur.overlay);
+    hint(addC, L"Інакше зменшується сам системний курсор — помітними стрибками.");
+    y += 2;
+    g_curAdvBtn = button(addC, L"Детально ▾", PX, 140, IDC_CUR_ADVANCED);
+    y += 30 + 14;
 
     // «Детально»: чутливість жесту. Значення приймаються при втраті фокуса й
     // притискаються до робочого діапазону, щоб не можна було вимкнути фічу
     // випадковим нулем.
-    auto advRow = [&](const wchar_t* label, int y, int id, int value) {
-        addA(mk(L"STATIC", label, 0, 28, y + 3, 250, 18, 0));
+    auto advRow = [&](const wchar_t* label, int id, int value) {
+        addA(mk(L"STATIC", label, 0, PX, y + 3, PW - 100, 18, 0));
         HWND e = addA(mk(L"EDIT", L"", ES_NUMBER | ES_RIGHT | WS_BORDER | WS_TABSTOP,
-                         300, y, 80, 22, id));
+                         PX + PW - 90, y, 90, 24, id));
         wchar_t buf[16];
         wsprintfW(buf, L"%d", value);
         SetWindowTextW(e, buf);
+        y += 28;
         return e;
     };
-    g_edWindow = advRow(L"Вікно розпізнавання жесту, мс", 322, IDC_CUR_WINDOWMS,  g_cur.windowMs);
-    g_edDist   = advRow(L"Мінімальний шлях миші, px",     348, IDC_CUR_DIST,      g_cur.distance);
-    g_edFactor = advRow(L"Поріг «шлях / розмах», %",      374, IDC_CUR_FACTOR,    g_cur.factor);
-    g_edRevers = advRow(L"Мінімум змін напрямку",         400, IDC_CUR_REVERSALS, g_cur.reversals);
-    g_edShrink = advRow(L"Тривалість зменшення, мс",      426, IDC_CUR_SHRINK,    g_cur.shrinkMs);
+    g_edWindow = advRow(L"Вікно розпізнавання жесту, мс", IDC_CUR_WINDOWMS,  g_cur.windowMs);
+    g_edDist   = advRow(L"Мінімальний шлях миші, px",     IDC_CUR_DIST,      g_cur.distance);
+    g_edFactor = advRow(L"Поріг «шлях / розмах», %",      IDC_CUR_FACTOR,    g_cur.factor);
+    g_edRevers = advRow(L"Мінімум змін напрямку",         IDC_CUR_REVERSALS, g_cur.reversals);
+    g_edShrink = advRow(L"Тривалість зменшення, мс",      IDC_CUR_SHRINK,    g_cur.shrinkMs);
 
     SetCursorValueLabels();
 
     // ---- вкладка «День/ніч» (CAPS-7) ----
     // (таб-контрол опускається на низ z-порядку нижче, після створення всіх сторінок)
-    g_thEnable = addT(mk(L"BUTTON", L"Автоматично перемикати світлу і темну тему Windows",
-                         BS_AUTOCHECKBOX | WS_TABSTOP, 28, 52, 410, 24, IDC_TH_ENABLE));
-    SendMessageW(g_thEnable, BM_SETCHECK, g_th.enabled ? BST_CHECKED : BST_UNCHECKED, 0);
-    g_thBySun = addT(mk(L"BUTTON", L"За сходом і заходом сонця",
-                        BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 28, 84, 220, 22, IDC_TH_BY_SUN));
-    g_thBySched = addT(mk(L"BUTTON", L"За розкладом", BS_AUTORADIOBUTTON,
-                          262, 84, 176, 22, IDC_TH_BY_SCHED));
+    y = PY;
+    g_thEnable = check(addT, L"Автоматично перемикати світлу і темну тему Windows", IDC_TH_ENABLE, g_th.enabled);
+    g_thBySun   = radio(addT, L"За сходом і заходом сонця", PX, 230, IDC_TH_BY_SUN, true);
+    g_thBySched = radio(addT, L"За розкладом", PX + 240, 170, IDC_TH_BY_SCHED, false);
     CheckRadioButton(hwnd, IDC_TH_BY_SUN, IDC_TH_BY_SCHED,
                      g_th.bySchedule ? IDC_TH_BY_SCHED : IDC_TH_BY_SUN);
-    g_thStatus = addT(mk(L"STATIC", L"", 0, 28, 112, 410, 36, IDC_TH_STATUS));
+    y += 26;
+    g_thStatus = text(addT, L"", 2, IDC_TH_STATUS, 4);
 
-    addT(mk(L"STATIC", L"Темна тема з", 0, 28, 158, 110, 20, 0));
+    addT(mk(L"STATIC", L"Темна тема з", 0, PX, y + 4, 100, 20, 0));
     g_thDarkFrom = addT(mk(DATETIMEPICK_CLASSW, L"", DTS_TIMEFORMAT | DTS_UPDOWN | WS_TABSTOP,
-                           140, 155, 90, 24, IDC_TH_DARK_FROM));
-    addT(mk(L"STATIC", L"світла з", 0, 262, 158, 74, 20, 0));
+                           PX + 104, y, 90, 26, IDC_TH_DARK_FROM));
+    addT(mk(L"STATIC", L"світла з", 0, PX + 220, y + 4, 70, 20, 0));
     g_thLightFrom = addT(mk(DATETIMEPICK_CLASSW, L"", DTS_TIMEFORMAT | DTS_UPDOWN | WS_TABSTOP,
-                            348, 155, 90, 24, IDC_TH_LIGHT_FROM));
+                            PX + 294, y, 90, 26, IDC_TH_LIGHT_FROM));
+    y += 26 + 14;
     SetPickerMinutes(g_thDarkFrom,  g_th.darkFrom);
     SetPickerMinutes(g_thLightFrom, g_th.lightFrom);
     SetWindowSubclass(g_thDarkFrom,  DtpSubclassProc, 1, 0);   // CAPS-8: темний режим
     SetWindowSubclass(g_thLightFrom, DtpSubclassProc, 1, 0);
 
-    g_thToggle = addT(mk(L"BUTTON", L"Переключити зараз", BS_PUSHBUTTON | WS_TABSTOP,
-                         28, 196, 170, 26, IDC_TH_TOGGLE));
-    g_thNow = addT(mk(L"STATIC", L"", 0, 28, 230, 410, 36, IDC_TH_NOW));
-    addT(mk(L"STATIC", L"Поки відкрита повноекранна програма, тема не змінюється — "
-                       L"перемкнеться після її закриття.", 0, 28, 268, 410, 34, IDC_HINT_GRAY));
-    g_thAdvBtn = addT(mk(L"BUTTON", L"Детально ▾", BS_PUSHBUTTON | WS_TABSTOP,
-                         28, 310, 130, 26, IDC_TH_ADVANCED));
+    g_thToggle = button(addT, L"Переключити зараз", PX, 170, IDC_TH_TOGGLE);
+    y += 30 + 8;
+    g_thNow = text(addT, L"", 2, IDC_TH_NOW, 4);
+    hint(addT, L"Поки відкрита повноекранна програма, тема не змінюється — "
+               L"перемкнеться після її закриття.", 2);
+    g_thAdvBtn = button(addT, L"Детально ▾", PX, 140, IDC_TH_ADVANCED);
+    y += 30 + 10;
 
     // «Детально»: звідки брати розташування для сходу/заходу
-    addTA(mk(L"STATIC", L"Розташування для сходу/заходу:", 0, 28, 340, 410, 18, 0));
+    text(addTA, L"Розташування для сходу й заходу", 1, 0, 4);
     {
         const wchar_t* names[5] = { L"Автоматично", L"Служба Windows", L"За IP-адресою",
                                     L"Вручну", L"Часовий пояс і регіон" };
-        const int xs[5] = { 28, 150, 290, 28, 150 };
-        const int ys[5] = { 358, 358, 358, 378, 378 };
-        const int ws[5] = { 116, 134, 148, 116, 210 };
+        const int xs[5] = { PX, PX + 126, PX + 272, PX, PX + 126 };
+        const int ys[5] = { 0, 0, 0, 24, 24 };
+        const int ws[5] = { 120, 140, 148, 120, 200 };
         for (int i = 0; i < 5; ++i)
             g_thSrc[i] = addTA(mk(L"BUTTON", names[i],
                 BS_AUTORADIOBUTTON | (i == 0 ? (WS_GROUP | WS_TABSTOP) : 0),
-                xs[i], ys[i], ws[i], 20, IDC_TH_SRC_AUTO + i));
+                xs[i], y + ys[i], ws[i], 22, IDC_TH_SRC_AUTO + i));
         CheckRadioButton(hwnd, IDC_TH_SRC_AUTO, IDC_TH_SRC_TZ, IDC_TH_SRC_AUTO + (int)g_th.src);
+        y += 24 + 28;
     }
-    addTA(mk(L"STATIC", L"Широта", 0, 28, 403, 60, 18, 0));
-    g_thLat = addTA(mk(L"EDIT", L"", ES_RIGHT | WS_BORDER | WS_TABSTOP, 92, 400, 90, 22, IDC_TH_LAT));
-    addTA(mk(L"STATIC", L"Довгота", 0, 200, 403, 64, 18, 0));
-    g_thLon = addTA(mk(L"EDIT", L"", ES_RIGHT | WS_BORDER | WS_TABSTOP, 268, 400, 90, 22, IDC_TH_LON));
-    addTA(mk(L"STATIC", L"За IP-адресою під VPN покаже розташування VPN-сервера.",
-             0, 28, 427, 410, 18, IDC_HINT_GRAY));
+    addTA(mk(L"STATIC", L"Широта", 0, PX, y + 4, 60, 18, 0));
+    g_thLat = addTA(mk(L"EDIT", L"", ES_RIGHT | WS_BORDER | WS_TABSTOP, PX + 64, y, 90, 24, IDC_TH_LAT));
+    addTA(mk(L"STATIC", L"Довгота", 0, PX + 176, y + 4, 64, 18, 0));
+    g_thLon = addTA(mk(L"EDIT", L"", ES_RIGHT | WS_BORDER | WS_TABSTOP, PX + 244, y, 90, 24, IDC_TH_LON));
+    y += 24 + 8;
+    hint(addTA, L"За IP-адресою під VPN покаже розташування VPN-сервера.");
     if (g_th.hasManual) {
         wchar_t b[32];
         swprintf(b, 32, L"%.4f", g_th.lat); SetWindowTextW(g_thLat, b);
         swprintf(b, 32, L"%.4f", g_th.lon); SetWindowTextW(g_thLon, b);
     }
 
-    // Підвал: © + версія з VERSIONINFO + посилання (CAPS-7)
-    {
-        wchar_t ver[32] = {}, about[192] = {};
-        ExeVersionString(ver, 32);
-        swprintf(about, 192, L"© Plum, 2026 · v%s · <a href=\"https://github.com/V-Plum/capslang\">GitHub</a>", ver);
-        mk(L"SysLink", about, 0, 20, 464, 300, 18, IDC_COPYRIGHT);   // WC_LINK
-    }
-
-    // Логотип — поза вкладками, інакше його перекриє полотно таб-контрола
-    SetRect(&g_logoRect, sc(398), sc(456), sc(398 + 48), sc(456 + 48));
+    // ---- вкладка «Налаштування» (CAPS-9) ----
+    y = PY;
+    g_checkbox = check(addS, L"Запускати при вході в Windows", IDC_AUTOSTART, false);
+    hint(addS, L"Задача Планувальника з найвищими правами, без запиту UAC. "
+               L"Вікно можна закрити — програма лишається в треї.", 2);
+    y += 6;
+    sec(addS, L"Тема вікна");   // CAPS-8
+    radio(addS, L"Автоматично",   PX,       130, IDC_WT_AUTO,  true);
+    radio(addS, L"Завжди світла", PX + 140, 130, IDC_WT_LIGHT, false);
+    radio(addS, L"Завжди темна",  PX + 280, 130, IDC_WT_DARK,  false);
+    CheckRadioButton(hwnd, IDC_WT_AUTO, IDC_WT_DARK, IDC_WT_AUTO + (int)g_winTheme);
+    y += 26;
+    hint(addS, L"«Автоматично» — як тема застосунків Windows (див. «День/ніч»).");
+    y += 6;
+    sec(addS, L"Оновлення");    // CAPS-10
+    g_updDailyCb = check(addS, L"Щоденна перевірка оновлень", IDC_UPD_DAILY, g_updDaily);
+    g_updStatus  = text(addS, L"", 2, IDC_UPD_STATUS, 8);
+    g_updCheckBtn    = button(addS, L"Перевірити зараз",    PX,       150, IDC_UPD_CHECK);
+    g_updInstallBtn  = button(addS, L"Оновити",             PX + 160, 110, IDC_UPD_INSTALL);
+    g_updRollbackBtn = button(addS, L"Повернути попередню", PX + 280, 140, IDC_UPD_ROLLBACK);
+    y += 30 + 12;
+    hint(addS, L"Оновлення з GitHub Releases; підпис релізу перевіряється перед заміною. "
+               L"Попередня версія лишається поруч як lilhelpers.exe.old.", 2);
+    UpdateUpdStatus();
 
     // Таб-контрол — НА САМИЙ НИЗ z-порядку. Попри те, що він створений першим,
     // дамп z-порядку (15.09.2026) показав його НАД усіма сторінками — тому кожне
@@ -3357,7 +3535,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     g_nid.hIcon = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(1), IMAGE_ICON,
                                     GetSystemMetrics(SM_CXSMICON),
                                     GetSystemMetrics(SM_CYSMICON), 0);
-    lstrcpyW(g_nid.szTip, L"capslang — CapsLock перемикає розкладку");
+    lstrcpyW(g_nid.szTip, L"Little Helpers");
     Shell_NotifyIconW(NIM_ADD, &g_nid);
 
     g_mainWnd = hwnd;
@@ -3392,7 +3570,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         if (!StartInterception(other)) {
             Shell_NotifyIconW(NIM_DELETE, &g_nid);
             MessageBoxW(nullptr, L"Не вдалося перехопити клавішу CapsLock.",
-                        L"capslang", MB_ICONERROR | MB_OK);
+                        kAppName, MB_ICONERROR | MB_OK);
             return 1;
         }
         g_mode = other;

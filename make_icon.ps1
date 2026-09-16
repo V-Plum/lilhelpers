@@ -1,9 +1,12 @@
-# make_icon.ps1 - rebuild capslang.ico and capslang.png from capslang.svg.
+# make_icon.ps1 - rebuild <name>.ico and <name>.png from an SVG (default lilhelpers.svg).
 # ASCII only - no BOM issues.
 #
 # This script NEVER edits the artwork. It rasterizes the SVG at each target
 # size (vector -> pixels, no downscaling of a raster) and packs those frames
-# into a multi-size .ico. Edit capslang.svg, rerun this, rebuild the exe.
+# into a multi-size .ico. Edit the SVG, rerun this, rebuild the exe.
+#   .\make_icon.ps1                                   -> lilhelpers.ico + lilhelpers.png here
+#   .\make_icon.ps1 -Svg lh_icon.svg -OutDir preview -KeepPngs
+#                                                     -> preview\lh_icon.{ico,png} + one png per size
 #
 # Sizes cover what Windows actually asks for, at every common DPI scaling:
 #   tray / small icon : 16 (100%), 20 (125%), 24 (150%), 28 (175%), 32 (200%)
@@ -20,16 +23,23 @@
 
 param(
     [int[]]$Sizes    = @(16, 20, 24, 28, 32, 40, 48, 56, 64, 96, 128, 256),
-    [int]  $LogoSize = 256,  # capslang.png, drawn inside the settings window
-    [int]  $PngFrom  = 96    # frames >= this size are stored PNG-compressed
+    [int]  $LogoSize = 256,  # <Name>.png, drawn inside the settings window
+    [int]  $PngFrom  = 96,   # frames >= this size are stored PNG-compressed
+    [string]$Svg     = "lilhelpers.svg",  # source artwork (relative to this folder)
+    [string]$OutDir  = "",              # where <Name>.ico/.png land; default: this folder
+    [string]$Name    = "",              # base name of the outputs; default: SVG's base name
+    [switch]$KeepPngs                   # also save every rendered frame as <Name>_<size>.png
 )
 
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 Add-Type -AssemblyName System.Drawing
 
-$svgPath = Join-Path $PSScriptRoot "capslang.svg"
-if (-not (Test-Path $svgPath)) { throw "capslang.svg not found" }
+$svgPath = Join-Path $PSScriptRoot $Svg
+if (-not (Test-Path $svgPath)) { throw "$Svg not found" }
+if (-not $Name)   { $Name = [System.IO.Path]::GetFileNameWithoutExtension($Svg) }
+if (-not $OutDir) { $OutDir = $PSScriptRoot } else { $OutDir = Join-Path $PSScriptRoot $OutDir }
+New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 
 function Find-Browser {
     $candidates = @(
@@ -45,7 +55,9 @@ function Find-Browser {
 
 # Renders the SVG into a size x size PNG on a transparent background.
 function Render-Png([string]$browser, [string]$work, [int]$size, [string]$outFile) {
-    $svg  = Get-Content $svgPath -Raw
+    # UTF8 explicitly: a BOM-less SVG with non-ASCII ids (Illustrator exports
+    # gradient ids in the UI language) would otherwise be read as ANSI.
+    $svg  = Get-Content $svgPath -Raw -Encoding UTF8
     $page = Join-Path $work "page_$size.html"
     $html = "<html><head><meta charset='utf-8'><style>html,body{margin:0;padding:0;" +
             "background:transparent}svg{display:block;width:${size}px;height:${size}px}" +
@@ -126,7 +138,7 @@ function Write-Ico([hashtable]$frames, [string]$outFile) {
 $browser = Find-Browser
 Write-Host "rasterizing with $(Split-Path $browser -Leaf)"
 
-$work = Join-Path ([System.IO.Path]::GetTempPath()) ("capslang_icon_" + [guid]::NewGuid().ToString("N"))
+$work = Join-Path ([System.IO.Path]::GetTempPath()) ("${Name}_icon_" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 
 try {
@@ -134,18 +146,19 @@ try {
     foreach ($s in ($Sizes | Sort-Object -Unique)) {
         $png = Join-Path $work "icon_$s.png"
         Render-Png $browser $work $s $png
+        if ($KeepPngs) { Copy-Item $png (Join-Path $OutDir "${Name}_$s.png") -Force }
         $frames[$s] = if ($s -ge $PngFrom) { [System.IO.File]::ReadAllBytes($png) }
                       else { ConvertTo-IcoDib $png }
         Write-Host ("  {0,3}px -> {1,7} bytes" -f $s, $frames[$s].Length)
     }
 
-    Write-Ico $frames (Join-Path $PSScriptRoot "capslang.ico")
+    Write-Ico $frames (Join-Path $OutDir "$Name.ico")
 
     $logo = Join-Path $work "logo.png"
     Render-Png $browser $work $LogoSize $logo
-    Copy-Item $logo (Join-Path $PSScriptRoot "capslang.png") -Force
+    Copy-Item $logo (Join-Path $OutDir "$Name.png") -Force
 
-    Write-Host "OK: capslang.ico ($($frames.Count) frames) + capslang.png (${LogoSize}px)"
+    Write-Host "OK: $OutDir\$Name.ico ($($frames.Count) frames) + $Name.png (${LogoSize}px)"
 } finally {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 }
