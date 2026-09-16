@@ -83,18 +83,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "signature does not verify with the committed public key" }
           "signed: $((Get-Item lilhelpers.exe.sig).Length) bytes"
 
-      # CAPS-11: the program was called capslang up to v1.6.0, and that updater
-      # downloads <tag>/capslang.exe + .sig by that exact name (GitHub redirects
-      # a renamed repository, but not a renamed asset). Ship the same signed
-      # bytes under the old name too, so those installs can still reach us; the
-      # binary renames itself to lilhelpers.exe on first start. Drop this step
-      # once no capslang installs are left.
-      - name: Legacy asset for capslang <= 1.6.0 updaters
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          Copy-Item lilhelpers.exe capslang.exe
-          Copy-Item lilhelpers.exe.sig capslang.exe.sig
-
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -105,4 +93,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$env:GITHUB_REF_NAME" lilhelpers.exe lilhelpers.exe.sig capslang.exe capslang.exe.sig --generate-notes
+        run: gh release create "$env:GITHUB_REF_NAME" lilhelpers.exe lilhelpers.exe.sig --generate-notes

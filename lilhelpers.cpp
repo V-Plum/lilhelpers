@@ -1,6 +1,6 @@
 // Little Helpers (lilhelpers) — дрібні зручності для Windows 11 в одному треї:
 // розкладка по CapsLock, пошук курсора трусінням, день/ніч, темна тема вікна,
-// автооновлення. Виріс із capslang (CAPS-11: перейменування у v2.0.0).
+// автооновлення.
 //
 // Механізм розкладки: low-level клавіатурний хук, який ковтає CapsLock (повертає 1) і
 // віддає роботу головному потоку. RegisterHotKey тут НЕ підходить, хоч і
@@ -136,14 +136,6 @@ const wchar_t* kAppName  = L"Little Helpers";   // заголовки вікна
 const wchar_t* kWndClass = L"lilhelpers";
 const wchar_t* kTaskName = L"lilhelpers";
 const wchar_t* kRegPath  = L"Software\\lilhelpers";
-// CAPS-11: сліди capslang (≤1.6.0), які v1.7.0 підхоплює при першому старті —
-// налаштування переносяться, задача автозапуску перестворюється, файл
-// capslang.exe замінюється на lilhelpers.exe (див. MigrateLegacy* нижче).
-const wchar_t* kLegacyTaskName = L"capslang";
-const wchar_t* kLegacyRegPath  = L"Software\\capslang";
-const wchar_t* kLegacyExeName  = L"capslang.exe";
-const wchar_t* kLegacyWndClass = L"capslang";
-const wchar_t* kExeName        = L"lilhelpers.exe";
 const wchar_t* kRegMode  = L"Mode";
 const wchar_t* kRegPassthrough = L"PassthroughRemote";
 const wchar_t* kRegLayoutSwitch = L"LayoutSwitch";   // CAPS-9: перемикання розкладок увімкнено (1)
@@ -437,9 +429,8 @@ HBRUSH g_brDkBorder = nullptr, g_brDkThumb = nullptr, g_brDkAccent = nullptr;
 // lilhelpers.exe.old, новий на його місце, запуск нового з --after-update <pid>
 // (чекає виходу старого, бо м'ютекс одного екземпляра), старий виходить. .old
 // лишається для «Повернути попередню версію».
-// CAPS-11: ім'я ассету зашите (не береться з власного імені файла), щоб
-// перейменована вручну копія не шукала неіснуючий ассет. Реліз переходу з
-// capslang додатково несе ассет capslang.exe для апдейтера ≤1.6.0 (release.yml).
+// Ім'я ассету зашите (а не береться з власного імені файла), щоб перейменована
+// вручну копія програми не шукала в релізі неіснуючий ассет.
 // X||Y публічного ключа (одним літералом — CI звіряє його з lilhelpers_signing_pub.pem)
 const char*    kUpdatePubKeyHex = "86a4bec4e053f5a79786c1f5493c1faebd1f1909b4606616eaf93afc39cd100f821fd2724675adb0721049e70df4cc6130bdc4424b75049b21f31c09e5a065c9";
 const wchar_t* kUpdApiUrl = L"https://api.github.com/repos/V-Plum/lilhelpers/releases/latest";
@@ -697,7 +688,7 @@ void SwitchLayout()
 //
 // Вікна цих процесів вважаємо клієнтом віддаленої/віртуальної машини. У них
 // Caps треба ПРОПУСТИТИ, щоб розкладку перемкнула гостьова ОС (де теж стоїть
-// capslang), а не перехоплювати його на хості. Список фіксований (v1).
+// ця програма), а не перехоплювати його на хості. Список фіксований (v1).
 bool IsRemoteWindow(HWND w)
 {
     if (!w) return false;
@@ -2362,125 +2353,17 @@ void TrayBalloon(const wchar_t* title, const wchar_t* text)
     Shell_NotifyIconW(NIM_MODIFY, &n);
 }
 
-// --after-update <pid> / --after-rename <pid>: зачекати, поки попередній
-// екземпляр вийде (м'ютекс одного екземпляра; після перейменування — ще й файл).
-void CleanupLegacyFiles();
+// --after-update <pid>: зачекати, поки попередній екземпляр вийде (м'ютекс).
 void WaitForPreviousInstance()
 {
-    const wchar_t* cl = GetCommandLineW();
-    const wchar_t* p = wcsstr(cl, L"--after-update ");
-    const bool renamed = !p && (p = wcsstr(cl, L"--after-rename ")) != nullptr;
+    const wchar_t* p = wcsstr(GetCommandLineW(), L"--after-update ");
     if (!p) return;
     const DWORD pid = (DWORD)wcstoul(p + 15, nullptr, 10);
-    if (pid) {
-        if (HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, pid)) {
-            WaitForSingleObject(h, 15000);
-            CloseHandle(h);
-        }
+    if (!pid) return;
+    if (HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, pid)) {
+        WaitForSingleObject(h, 15000);
+        CloseHandle(h);
     }
-    if (renamed) CleanupLegacyFiles();
-}
-
-// ---------- CAPS-11: перехід із capslang (≤1.6.0) ----------
-//
-// Апдейтер 1.6.0 кладе цю версію на місце capslang.exe і запускає її під старим
-// ім'ям. Три сліди старої назви переносяться окремо, кожен — лише якщо він є:
-//  1. файл: запущені як capslang.exe → копіюємо себе в lilhelpers.exe поруч і
-//     перезапускаємось із нього з --after-rename <pid>; новий процес дочікується
-//     нашого виходу і прибирає capslang.exe та capslang.exe.old. Відкат на 1.6.0
-//     після цього навмисно неможливий: стара версія під новим ім'ям файла жила б
-//     із чужою гілкою реєстру й без задачі автозапуску;
-//  2. реєстр: HKCU\Software\capslang → \lilhelpers (усі значення, старе видаляється)
-//     — до першого читання налаштувань;
-//  3. задача автозапуску «capslang» → «lilhelpers» з новим шляхом exe.
-// Плюс ввічливість: якщо capslang ≤1.6.0 ще працює поруч (запустили нову версію
-// вручну), просимо його вийти — два перехоплювачі Caps Lock одночасно не потрібні.
-
-void LegacySibling(wchar_t* out, const wchar_t* name)   // <тека exe>\<name>
-{
-    ExePath(out);
-    PathRemoveFileSpecW(out);
-    PathAppendW(out, name);
-}
-
-// true = запущено як capslang.exe і вже стартував lilhelpers.exe — цей процес має вийти.
-bool SelfRenameIfLegacyName()
-{
-    wchar_t exe[MAX_PATH] = {};
-    ExePath(exe);
-    if (lstrcmpiW(PathFindFileNameW(exe), kLegacyExeName) != 0) return false;
-
-    wchar_t nw[MAX_PATH] = {};
-    LegacySibling(nw, kExeName);
-    if (!CopyFileW(exe, nw, FALSE)) return false;   // зайнятий чи не пише — лишаємось під старим ім'ям
-
-    wchar_t cmd[MAX_PATH + 64] = {};
-    swprintf(cmd, MAX_PATH + 64, L"\"%s\" --after-rename %lu", nw, (unsigned long)GetCurrentProcessId());
-    STARTUPINFOW si = { sizeof(si) };
-    PROCESS_INFORMATION pi = {};
-    if (!CreateProcessW(nw, cmd, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
-        DeleteFileW(nw);
-        return false;
-    }
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return true;
-}
-
-void CleanupLegacyFiles()
-{
-    wchar_t old[MAX_PATH] = {}, bak[MAX_PATH + 8] = {};
-    LegacySibling(old, kLegacyExeName);
-    swprintf(bak, MAX_PATH + 8, L"%s.old", old);
-    for (int i = 0; i < 20; ++i) {   // образ exe звільняється щойно процес вийшов; страховка на 4 с
-        DeleteFileW(bak);
-        if (DeleteFileW(old) || GetLastError() == ERROR_FILE_NOT_FOUND) break;
-        Sleep(200);
-    }
-}
-
-void MigrateLegacyRegistry()
-{
-    HKEY k = nullptr;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRegPath, 0, KEY_READ, &k) == ERROR_SUCCESS) {
-        RegCloseKey(k);
-        return;   // нова гілка вже є — переносити нічого
-    }
-    HKEY oldKey = nullptr;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, kLegacyRegPath, 0, KEY_READ, &oldKey) != ERROR_SUCCESS) return;
-    HKEY newKey = nullptr;
-    bool copied = false;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegPath, 0, nullptr, 0, KEY_WRITE, nullptr,
-                        &newKey, nullptr) == ERROR_SUCCESS) {
-        copied = SHCopyKeyW(oldKey, nullptr, newKey, 0) == ERROR_SUCCESS;
-        RegCloseKey(newKey);
-    }
-    RegCloseKey(oldKey);
-    if (copied) RegDeleteTreeW(HKEY_CURRENT_USER, kLegacyRegPath);
-}
-
-void MigrateLegacyTask()   // після CoInitializeEx
-{
-    ITaskService* svc;
-    ITaskFolder* root;
-    if (!OpenTaskRoot(&svc, &root)) return;
-    IRegisteredTask* task = nullptr;
-    BSTR name = SysAllocString(kLegacyTaskName);
-    const bool had = SUCCEEDED(root->GetTask(name, &task)) && task;
-    if (task) task->Release();
-    if (had) root->DeleteTask(name, 0);
-    SysFreeString(name);
-    root->Release();
-    svc->Release();
-    if (had) SetAutostart(true);   // той самий стан «увімкнено», але вже новий шлях
-}
-
-void RetireLegacyInstance()
-{
-    HWND old = FindWindowW(kLegacyWndClass, nullptr);
-    if (!old) return;
-    PostMessageW(old, WM_COMMAND, IDM_EXIT, 0);   // «Вихід» із його трей-меню
-    for (int i = 0; i < 15 && IsWindow(old); ++i) Sleep(200);
 }
 
 // ---------- CAPS-2: вкладки ----------
@@ -3486,8 +3369,7 @@ HFONT CreateUIFont(int percent, int weight)
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 {
-    WaitForPreviousInstance();   // CAPS-10/11: після оновлення чи перейменування — дочекатись попередника
-    if (SelfRenameIfLegacyName()) return 0;   // CAPS-11: ми capslang.exe → вже стартував lilhelpers.exe
+    WaitForPreviousInstance();   // CAPS-10: після оновлення — дочекатись виходу старого
     CreateMutexW(nullptr, TRUE, L"lilhelpers_single_instance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         // Другий запуск — показуємо вікно першого екземпляра
@@ -3495,8 +3377,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
             PostMessageW(prev, WMAPP_SHOWSETTINGS, 0, 0);
         return 0;
     }
-    RetireLegacyInstance();    // CAPS-11: capslang ≤1.6.0 ще працює поруч — попросити вийти
-    MigrateLegacyRegistry();   // CAPS-11: до першого читання налаштувань
     // CAPS-12: мова — до будь-якого тексту (перша ж — опис задачі автозапуску нижче)
     g_langPref = (LangPref)RegLoadInt(kRegLang, 0, 0, 2);
     g_lang     = ResolveLang(g_langPref);
@@ -3504,7 +3384,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     g_taskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    MigrateLegacyTask();       // CAPS-11: задача автозапуску під новим ім'ям і шляхом
 
     INITCOMMONCONTROLSEX icc = { sizeof(icc),
                                  ICC_STANDARD_CLASSES | ICC_TAB_CLASSES | ICC_BAR_CLASSES |
