@@ -67,6 +67,7 @@
 #include <d2d1svg.h>
 #include <wincodec.h>
 #include <string>
+#include <float.h>
 
 namespace {
 
@@ -363,6 +364,7 @@ X(PeekFmtItems,       L"елементів: %d%s",               L"items: %d%s")
 X(PeekFmtThree,       L"%s · %s · %s",           L"%s · %s · %s")                                    \
 X(PeekReformatted,    L"відформатовано",              L"reformatted")                                \
 X(PeekSvgAsCode,      L"SVG з ефектами, яких ми не малюємо — показано розмітку",  L"SVG uses effects we do not draw — markup shown") \
+X(PeekFmtStl,         L"%.0f × %.0f × %.0f · трикутників: %u · %s",   L"%.0f × %.0f × %.0f · triangles: %u · %s") \
 X(PeekLblType,        L"Тип",                           L"Type")                                        \
 X(PeekLblSize,        L"Розмір",                        L"Size")                                        \
 X(PeekLblItems,       L"Елементів",                     L"Items")                                       \
@@ -3907,6 +3909,193 @@ bool PeekLoadSvg(const wchar_t* path)
     return true;
 }
 
+
+// ---- STL ----
+//
+// Формат простий настільки, що власний рендер дешевший за будь-яку залежність:
+// z-буфер і плоске затінення, десь двісті рядків і нуль нових DLL.
+//
+// ⚠ Двійковий чи текстовий визначаємо РОЗМІРОМ файлу, а не словом "solid" на
+// початку: купа експортерів пишуть "solid" і в двійковий файл, тож перевірка за
+// текстом дає хибний результат на цілком типових моделях.
+//
+// Нормалі з файлу свідомо ІГНОРУЄМО й рахуємо з вершин: у реальних STL вони
+// часто нульові або дивляться не туди. З тієї ж причини освітлення двостороннє —
+// намотка трикутників теж буває неузгодженою, а показати дірку в моделі там,
+// де її немає, гірше, ніж не відсікти задню грань.
+
+struct StlTri { float v[9]; };
+constexpr size_t kStlMaxTris = 1500000;   // ~54 МБ у пам'яті; більше — покажемо картку
+
+bool StlParse(const std::vector<BYTE>& raw, std::vector<StlTri>& tris)
+{
+    tris.clear();
+    if (raw.size() >= 84) {
+        UINT32 n = 0;
+        memcpy(&n, raw.data() + 80, 4);
+        if (n > 0 && n <= kStlMaxTris && raw.size() == 84 + (size_t)n * 50) {
+            tris.resize(n);
+            for (UINT32 i = 0; i < n; ++i)
+                memcpy(tris[i].v, raw.data() + 84 + (size_t)i * 50 + 12, 36);   // нормаль пропускаємо
+            return true;
+        }
+    }
+    // текстовий: збираємо всі "vertex x y z" по три
+    const char* p = (const char*)raw.data();
+    const char* end = p + raw.size();
+    float buf[9];
+    int got = 0;
+    while (p < end) {
+        const char* v = (const char*)memchr(p, 'v', (size_t)(end - p));
+        if (!v) break;
+        if ((size_t)(end - v) < 7 || memcmp(v, "vertex", 6) != 0) { p = v + 1; continue; }
+        const char* q = v + 6;
+        int comp = 0;
+        while (comp < 3 && q < end) {
+            char* next = nullptr;
+            const double d = strtod(q, &next);
+            if (next == q) break;
+            buf[got * 3 + comp] = (float)d;
+            q = next;
+            ++comp;
+        }
+        p = q;
+        if (comp != 3) continue;
+        if (++got == 3) {
+            StlTri t;
+            memcpy(t.v, buf, sizeof(buf));
+            tris.push_back(t);
+            got = 0;
+            if (tris.size() > kStlMaxTris) return false;
+        }
+    }
+    return !tris.empty();
+}
+
+// Ортографічна проєкція у фіксованому ізометричному ракурсі (STL — Z вгору),
+// растеризація крайовими функціями з z-буфером.
+Gdiplus::Bitmap* StlRender(const std::vector<StlTri>& tris, int side, float dims[3])
+{
+    float mn[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, mx[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+    for (const StlTri& t : tris)
+        for (int k = 0; k < 3; ++k)
+            for (int c = 0; c < 3; ++c) {
+                const float val = t.v[k * 3 + c];
+                if (val < mn[c]) mn[c] = val;
+                if (val > mx[c]) mx[c] = val;
+            }
+    for (int c = 0; c < 3; ++c) dims[c] = mx[c] - mn[c];
+    const float ctr[3] = { (mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, (mn[2] + mx[2]) / 2 };
+
+    // Rz(-35°) -> Rx(-65°): звичний «погляд згори збоку», як у слайсерах
+    const float az = -35.0f * 3.14159265f / 180.0f, el = -65.0f * 3.14159265f / 180.0f;
+    const float ca = cosf(az), sa = sinf(az), ce = cosf(el), se = sinf(el);
+    auto view = [&](const float* s, float* d) {
+        const float x = s[0] - ctr[0], y = s[1] - ctr[1], z = s[2] - ctr[2];
+        const float x1 = x * ca - y * sa, y1 = x * sa + y * ca;
+        d[0] = x1;
+        d[1] = y1 * ce - z * se;
+        d[2] = y1 * se + z * ce;
+    };
+
+    float vmn[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, vmx[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+    for (const StlTri& t : tris)
+        for (int k = 0; k < 3; ++k) {
+            float p[3];
+            view(t.v + k * 3, p);
+            for (int c = 0; c < 3; ++c) { if (p[c] < vmn[c]) vmn[c] = p[c]; if (p[c] > vmx[c]) vmx[c] = p[c]; }
+        }
+    const float spanX = vmx[0] - vmn[0], spanY = vmx[1] - vmn[1];
+    const float span = (spanX > spanY ? spanX : spanY);
+    if (!(span > 0)) return nullptr;
+    const float scale = side * 0.86f / span;
+    const float offX = side / 2.0f - (vmn[0] + vmx[0]) / 2 * scale;
+    const float offY = side / 2.0f + (vmn[1] + vmx[1]) / 2 * scale;   // Y екрана вниз
+
+    std::vector<float> zbuf((size_t)side * side, -FLT_MAX);
+    std::vector<DWORD> pix((size_t)side * side, 0);
+    const float lx = 0.35f, ly = -0.45f, lz = 0.82f;                 // джерело світла у view-просторі
+
+    for (const StlTri& t : tris) {
+        float p[3][3], sx[3], sy[3], sz[3];
+        for (int k = 0; k < 3; ++k) {
+            view(t.v + k * 3, p[k]);
+            sx[k] = p[k][0] * scale + offX;
+            sy[k] = offY - p[k][1] * scale;
+            sz[k] = p[k][2];
+        }
+        const float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sy[1] - sy[0]) * (sx[2] - sx[0]);
+        if (area == 0) continue;
+
+        float ux = p[1][0] - p[0][0], uy = p[1][1] - p[0][1], uz = p[1][2] - p[0][2];
+        float wx = p[2][0] - p[0][0], wy = p[2][1] - p[0][1], wz = p[2][2] - p[0][2];
+        float nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+        const float nl = sqrtf(nx * nx + ny * ny + nz * nz);
+        if (nl <= 0) continue;
+        nx /= nl; ny /= nl; nz /= nl;
+        if (nz < 0) { nx = -nx; ny = -ny; nz = -nz; }                // двостороннє світло
+        float diff = nx * lx + ny * ly + nz * lz;
+        if (diff < 0) diff = -diff;
+        const float shade = 0.28f + 0.72f * diff;
+        const int r = (int)(122 * shade + 0.5f), g = (int)(152 * shade + 0.5f), b = (int)(188 * shade + 0.5f);
+        const DWORD color = 0xFF000000u | ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
+
+        int x0 = (int)floorf(sx[0] < sx[1] ? (sx[0] < sx[2] ? sx[0] : sx[2]) : (sx[1] < sx[2] ? sx[1] : sx[2]));
+        int x1 = (int)ceilf (sx[0] > sx[1] ? (sx[0] > sx[2] ? sx[0] : sx[2]) : (sx[1] > sx[2] ? sx[1] : sx[2]));
+        int y0 = (int)floorf(sy[0] < sy[1] ? (sy[0] < sy[2] ? sy[0] : sy[2]) : (sy[1] < sy[2] ? sy[1] : sy[2]));
+        int y1 = (int)ceilf (sy[0] > sy[1] ? (sy[0] > sy[2] ? sy[0] : sy[2]) : (sy[1] > sy[2] ? sy[1] : sy[2]));
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > side - 1) x1 = side - 1;
+        if (y1 > side - 1) y1 = side - 1;
+
+        const float inv = 1.0f / area;
+        for (int y = y0; y <= y1; ++y) {
+            for (int x = x0; x <= x1; ++x) {
+                const float px = x + 0.5f, py = y + 0.5f;
+                const float w0 = ((sx[1] - sx[0]) * (py - sy[0]) - (sy[1] - sy[0]) * (px - sx[0])) * inv;
+                const float w1 = ((sx[2] - sx[1]) * (py - sy[1]) - (sy[2] - sy[1]) * (px - sx[1])) * inv;
+                const float w2 = ((sx[0] - sx[2]) * (py - sy[2]) - (sy[0] - sy[2]) * (px - sx[2])) * inv;
+                if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+                const float z = sz[0] * w1 + sz[1] * w2 + sz[2] * w0;
+                const size_t idx = (size_t)y * side + x;
+                if (z <= zbuf[idx]) continue;
+                zbuf[idx] = z;
+                pix[idx] = color;
+            }
+        }
+    }
+
+    Gdiplus::Bitmap* bmp = new Gdiplus::Bitmap(side, side, PixelFormat32bppPARGB);
+    if (!bmp || bmp->GetLastStatus() != Gdiplus::Ok) { delete bmp; return nullptr; }
+    Gdiplus::BitmapData bd = {};
+    Gdiplus::Rect lock(0, 0, side, side);
+    if (bmp->LockBits(&lock, Gdiplus::ImageLockModeWrite, PixelFormat32bppPARGB, &bd) != Gdiplus::Ok) {
+        delete bmp;
+        return nullptr;
+    }
+    for (int y = 0; y < side; ++y)
+        memcpy((BYTE*)bd.Scan0 + (size_t)y * bd.Stride, &pix[(size_t)y * side], (size_t)side * 4);
+    bmp->UnlockBits(&bd);
+    return bmp;
+}
+
+bool PeekLoadStl(const wchar_t* path, float dims[3], unsigned& triCount)
+{
+    std::vector<BYTE> raw;
+    bool trunc = false;
+    if (!ReadFileHead(path, 64u * 1024 * 1024, raw, trunc) || trunc || raw.size() < 84) return false;
+    std::vector<StlTri> tris;
+    if (!StlParse(raw, tris) || tris.empty()) return false;
+    triCount = (unsigned)tris.size();
+    Gdiplus::Bitmap* bmp = StlRender(tris, 720, dims);
+    if (!bmp) return false;
+    g_peekImg = bmp;
+    g_peekInfo.imgW = (int)bmp->GetWidth();
+    g_peekInfo.imgH = (int)bmp->GetHeight();
+    return true;
+}
+
 // ---- завантаження елемента ----
 
 void PeekReset()
@@ -3993,6 +4182,15 @@ void PeekLoad(const wchar_t* path)
         swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, I.size);
         g_peekKind = PeekKind::Card;
         return;
+    }
+    if (lstrcmpiW(ext, L".stl") == 0) {
+        float dims[3] = {};
+        unsigned tri = 0;
+        if (PeekLoadStl(path, dims, tri)) {
+            swprintf(I.subtitle, 320, S(Str::PeekFmtStl), dims[0], dims[1], dims[2], tri, I.size);
+            g_peekKind = PeekKind::Image;
+            return;
+        }
     }
     g_peekSvgAsCode = false;
     if (lstrcmpiW(ext, L".svg") == 0) {
