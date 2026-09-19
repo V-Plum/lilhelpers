@@ -350,14 +350,14 @@ X(PeekHint,           L"Пробіл або Esc закриває. Стрілки
                       L"Space or Esc closes it. Arrow keys in Explorer move between files; "            \
                       L"the preview follows.")                                                          \
 X(PeekSecTypes,       L"Що показується",                L"What is shown")                               \
-X(PeekTypesImages,    L"Зображення: JPEG, PNG, GIF, BMP, TIFF, ICO — з поворотом за EXIF.",             \
-                      L"Images: JPEG, PNG, GIF, BMP, TIFF, ICO — rotated by EXIF.")                     \
-X(PeekTypesText,      L"Текст і код: txt, md, json, xml, yaml, csv, ini, log, скрипти й вихідний код "  \
-                      L"— до 1 МБ; кодування UTF-8, UTF-16 або системне ANSI.",                         \
-                      L"Text and code: txt, md, json, xml, yaml, csv, ini, log, scripts and source "    \
-                      L"— up to 1 MB; UTF-8, UTF-16 or the system ANSI page.")                          \
-X(PeekTypesOther,     L"Решта файлів і папки — картка: значок, тип, розмір, дати.",                     \
-                      L"Everything else — a card: icon, type, size, dates.")                            \
+X(PeekTypesImages,    L"Зображення: JPEG, PNG, GIF (анімовані програються), BMP, TIFF, ICO, SVG.",   \
+                      L"Images: JPEG, PNG, GIF (animated ones play), BMP, TIFF, ICO, SVG.")          \
+X(PeekTypesText,      L"Текст і код до 1 МБ — JSON форматується. Документи Word (docx) — текстом.",  \
+                      L"Text and code up to 1 MB — JSON is reformatted. Word docs (docx) as text.")  \
+X(PeekTypesMedia,     L"Відео — перший кадр, роздільність і тривалість. Моделі STL — з габаритами.", \
+                      L"Video — a frame, resolution and duration. STL models — with dimensions.")    \
+X(PeekTypesOther,     L"Решта файлів, папки, ярлики та STEP — картка з відомостями про файл.",       \
+                      L"Other files, folders, shortcuts and STEP — a card of file details.")         \
 X(PeekSecKeeps,       L"Що лишається за Провідником",   L"What stays with Explorer")                    \
 X(PeekKeeps,          L"Ctrl + пробіл і Shift + пробіл, пошук набором літер, пробіл у полях адреси, "   \
                       L"пошуку й перейменування, а також у діалогах відкриття та збереження файлів.",   \
@@ -5975,10 +5975,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     hint(addP, Str::PeekHint, 2);
     y += 6;
     sec(addP, Str::PeekSecTypes);
-    text(addP, Str::PeekTypesImages, 1, 0, 6);
-    text(addP, Str::PeekTypesText,   2, 0, 6);
-    text(addP, Str::PeekTypesOther,  1, 0, 12);
-    y += 6;
+    text(addP, Str::PeekTypesImages, 2, 0, 4);
+    text(addP, Str::PeekTypesText,   2, 0, 4);
+    text(addP, Str::PeekTypesMedia,  2, 0, 4);
+    text(addP, Str::PeekTypesOther,  2, 0, 10);
     sec(addP, Str::PeekSecKeeps);
     text(addP, Str::PeekKeeps, 3, 0, 8);
 
