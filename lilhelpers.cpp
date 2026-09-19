@@ -355,6 +355,8 @@ X(PeekKeeps,          L"Ctrl + пробіл і Shift + пробіл, пошук 
 X(PeekFmtImage,       L"%d × %d · %s",                  L"%d × %d · %s")                                \
 X(PeekFmtTwo,         L"%s · %s",                       L"%s · %s")                                     \
 X(PeekFmtItems,       L"елементів: %d%s",               L"items: %d%s")                                 \
+X(PeekFmtThree,       L"%s · %s · %s",           L"%s · %s · %s")                                    \
+X(PeekReformatted,    L"відформатовано",              L"reformatted")                                \
 X(PeekLblType,        L"Тип",                           L"Type")                                        \
 X(PeekLblSize,        L"Розмір",                        L"Size")                                        \
 X(PeekLblItems,       L"Елементів",                     L"Items")                                       \
@@ -3098,6 +3100,7 @@ HFONT    g_peekFont = nullptr, g_peekFontBold = nullptr, g_peekFontMono = nullpt
 bool     g_peekCloseHot = false;
 bool     g_peekTracking = false;
 bool     g_peekDark     = false;
+bool     g_peekJsonFormatted = false;   // показуємо не байт-у-байт, і про це варто сказати
 HWND     g_peekEnableCb = nullptr;
 
 int PeekPx(int v) { return MulDiv(v, (int)GetDpiForSystem(), 96); }
@@ -3367,6 +3370,76 @@ void NormalizeNewlines(const std::vector<wchar_t>& in, std::vector<wchar_t>& out
     out.push_back(0);
 }
 
+// Стиснений JSON — суцільна каша (власник приніс 14 КБ в один рядок). Розставляємо
+// відступи. Це НАВМИСНО не парсер: валідність не перевіряємо, вміст рядків не чіпаємо,
+// лише переносимо поза рядковими літералами. Тому файл із синтаксичною помилкою не
+// «зникає» — просто повертаємо false і показуємо його як є.
+bool JsonWs(wchar_t c) { return c == L' ' || c == L'\t' || c == L'\n' || c == L'\r'; }
+
+bool JsonPretty(const std::vector<wchar_t>& in, std::vector<wchar_t>& out)
+{
+    size_t first = 0;
+    while (first < in.size() && JsonWs(in[first])) ++first;
+    if (first >= in.size() || (in[first] != L'{' && in[first] != L'[')) return false;
+
+    out.clear();
+    out.reserve(in.size() + in.size() / 2);
+    int depth = 0;
+    bool inStr = false, esc = false;
+    auto newline = [&](int d) {
+        out.push_back(L'\n');
+        for (int i = 0; i < d && i < 64; ++i) { out.push_back(L' '); out.push_back(L' '); }
+    };
+    for (size_t i = first; i < in.size(); ++i) {
+        const wchar_t c = in[i];
+        if (inStr) {                       // всередині рядка не чіпаємо НІЧОГО
+            out.push_back(c);
+            if (esc)             esc = false;
+            else if (c == L'\\') esc = true;
+            else if (c == L'"')  inStr = false;
+            continue;
+        }
+        switch (c) {
+        case L'"':
+            inStr = true;
+            out.push_back(c);
+            break;
+        case L'{': case L'[': {
+            size_t j = i + 1;              // порожній контейнер лишаємо в один рядок
+            while (j < in.size() && JsonWs(in[j])) ++j;
+            out.push_back(c);
+            if (j < in.size() && (in[j] == L'}' || in[j] == L']')) { out.push_back(in[j]); i = j; break; }
+            newline(++depth);
+            break;
+        }
+        case L'}': case L']':
+            if (--depth < 0) return false;   // дужки розбалансовані — це не JSON
+            newline(depth);
+            out.push_back(c);
+            break;
+        case L',':
+            out.push_back(c);
+            newline(depth);
+            break;
+        case L':':
+            out.push_back(c);
+            out.push_back(L' ');
+            break;
+        default:
+            if (!JsonWs(c)) out.push_back(c);   // власні пробіли автора відкидаємо
+            break;
+        }
+        if (out.size() > 8u * 1024 * 1024) return false;
+    }
+    return depth == 0 && !inStr;
+}
+
+bool IsJsonExt(const wchar_t* ext)
+{
+    static const wchar_t* const k[] = { L".json", L".geojson", L".jsonl", L".webmanifest" };
+    return ExtIn(ext, k, sizeof(k) / sizeof(*k));
+}
+
 bool PeekLoadText(const wchar_t* path, const wchar_t* ext)
 {
     std::vector<BYTE> raw;
@@ -3377,6 +3450,16 @@ bool PeekLoadText(const wchar_t* path, const wchar_t* ext)
         text.assign(S(Str::PeekEmpty), S(Str::PeekEmpty) + lstrlenW(S(Str::PeekEmpty)));
     } else if (!DecodeText(raw.data(), raw.size(), text, true, trunc)) {
         return false;   // бінарник із текстовим розширенням — краще картка
+    }
+    // Переформатовуємо ДО примітки про обрізання: обрізаний JSON не збалансований,
+    // JsonPretty його чесно відхилить, і покажемо як є.
+    g_peekJsonFormatted = false;
+    if (IsJsonExt(ext)) {
+        std::vector<wchar_t> pretty;
+        if (JsonPretty(text, pretty)) {
+            text.swap(pretty);
+            g_peekJsonFormatted = true;
+        }
     }
     if (trunc) {
         const wchar_t* note = S(Str::PeekTruncated);
@@ -3590,7 +3673,10 @@ void PeekLoad(const wchar_t* path)
     }
     // Відоме текстове розширення — текст; невідоме — лише якщо вміст на це схожий.
     if ((IsTextExt(ext) || (!IsImageExt(ext) && SniffText(path))) && PeekLoadText(path, ext)) {
-        swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, I.size);
+        if (g_peekJsonFormatted)
+            swprintf(I.subtitle, 320, S(Str::PeekFmtThree), I.type, I.size, S(Str::PeekReformatted));
+        else
+            swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, I.size);
         g_peekKind = PeekKind::Text;
         return;
     }
