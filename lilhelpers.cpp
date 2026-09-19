@@ -3098,6 +3098,8 @@ struct PeekInfo {
     wchar_t schema[200];
     wchar_t created2[64];   // дата з шапки STEP, а не з файлової системи
     unsigned entities;
+    int     docW, docH;     // ⚠ SVG: розмір ДОКУМЕНТА для підпису. imgW/imgH — це
+                            // розмір БІТМАПА, і саме ним малює PeekPaint.
     bool    isDir;
     int     items;       // для папки: скільки всередині (-1 = не рахували)
     bool    itemsMore;   // лічильник упёрся в стелю
@@ -3265,7 +3267,9 @@ bool ExtIn(const wchar_t* ext, const wchar_t* const* list, size_t n)
 bool IsImageExt(const wchar_t* ext)
 {
     static const wchar_t* const k[] = { L".jpg", L".jpeg", L".jpe", L".jfif", L".png", L".gif",
-                                        L".bmp", L".dib", L".tif", L".tiff", L".ico", L".emf", L".wmf" };
+                                        L".bmp", L".dib", L".tif", L".tiff", L".ico", L".emf", L".wmf",
+                                        // через WIC, якщо в системі є декодер:
+                                        L".webp", L".heic", L".heif", L".avif", L".jxr", L".jpe" };
     return ExtIn(ext, k, sizeof(k) / sizeof(*k));
 }
 
@@ -3538,6 +3542,71 @@ bool PeekReadShortcut(const wchar_t* path, const wchar_t* ext, wchar_t* out, siz
 
 // ---- зображення ----
 
+// ---- фабрики WIC і Direct2D ----
+// Спільні для двох споживачів: декодера зображень (webp/heic через WIC) і
+// рендера SVG (Direct2D). Створюються ліниво, на першому ж такому файлі.
+const GUID kCLSID_WICImagingFactory       = { 0xcacaf262, 0x9370, 0x4615, { 0xa1, 0x3b, 0x9f, 0x55, 0x39, 0xda, 0x4c, 0x0a } };
+const GUID kIID_IWICImagingFactory        = { 0xec5ec8a9, 0xc395, 0x4314, { 0x9c, 0x77, 0x54, 0xd7, 0xa9, 0x35, 0xff, 0x70 } };
+const GUID kWICPixelFormat32bppPBGRA      = { 0x6fddc324, 0x4e03, 0x4bfe, { 0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x10 } };
+const GUID kIID_ID2D1Factory1             = { 0xbb12d362, 0xdaee, 0x4b9a, { 0xaa, 0x1d, 0x14, 0xba, 0x40, 0x1c, 0xfa, 0x1f } };
+const GUID kIID_ID2D1DeviceContext5       = { 0x7836d248, 0x68cc, 0x4df6, { 0xb9, 0xe8, 0xde, 0x99, 0x1b, 0xf6, 0x2e, 0xb7 } };
+
+ID2D1Factory1*      g_d2d = nullptr;   // створюються ліниво, на першому ж SVG
+IWICImagingFactory* g_wic = nullptr;
+
+bool SvgEnsureFactories()
+{
+    if (!g_wic && FAILED(CoCreateInstance(kCLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                          kIID_IWICImagingFactory, (void**)&g_wic)))
+        return false;
+    if (!g_d2d && FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, kIID_ID2D1Factory1,
+                                           nullptr, (void**)&g_d2d)))
+        return false;
+    return g_wic && g_d2d;
+}
+
+// GDI+ не знає webp, heic і avif, а WIC знає — якщо в системі є відповідний
+// декодер (webp у Windows 11 є в коробці). Це ДЕКОДЕР зображення, а не обробник
+// прев'ю: без інтерфейсу користувача й скриптів, із вузьким контрактом. Запобіжник
+// [2026-09-20] про чужий COM стосується саме обробників — межу проведено тут.
+Gdiplus::Bitmap* ImageDecodeWic(IStream* stream)
+{
+    if (!SvgEnsureFactories() || !stream) return nullptr;
+    LARGE_INTEGER zero = {};
+    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+
+    IWICBitmapDecoder* dec = nullptr;
+    IWICBitmapFrameDecode* frame = nullptr;
+    IWICFormatConverter* conv = nullptr;
+    Gdiplus::Bitmap* bmp = nullptr;
+
+    if (SUCCEEDED(g_wic->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnDemand, &dec)) && dec &&
+        SUCCEEDED(dec->GetFrame(0, &frame)) && frame &&
+        SUCCEEDED(g_wic->CreateFormatConverter(&conv)) && conv &&
+        SUCCEEDED(conv->Initialize(frame, kWICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,
+                                   nullptr, 0.0, WICBitmapPaletteTypeCustom))) {
+        UINT w = 0, h = 0;
+        conv->GetSize(&w, &h);
+        if (w && h && w < 30000 && h < 30000) {
+            bmp = new Gdiplus::Bitmap((INT)w, (INT)h, PixelFormat32bppPARGB);
+            Gdiplus::BitmapData bd = {};
+            Gdiplus::Rect lock(0, 0, (INT)w, (INT)h);
+            bool ok = false;
+            if (bmp->GetLastStatus() == Gdiplus::Ok &&
+                bmp->LockBits(&lock, Gdiplus::ImageLockModeWrite, PixelFormat32bppPARGB, &bd) == Gdiplus::Ok) {
+                ok = bd.Stride > 0 &&
+                     SUCCEEDED(conv->CopyPixels(nullptr, (UINT)bd.Stride, (UINT)bd.Stride * h, (BYTE*)bd.Scan0));
+                bmp->UnlockBits(&bd);
+            }
+            if (!ok) { delete bmp; bmp = nullptr; }
+        }
+    }
+    if (conv) conv->Release();
+    if (frame) frame->Release();
+    if (dec) dec->Release();
+    return bmp;
+}
+
 bool PeekLoadImage(const wchar_t* path)
 {
     std::vector<BYTE> raw;
@@ -3550,6 +3619,7 @@ bool PeekLoadImage(const wchar_t* path)
         delete bmp;
         bmp = nullptr;
     }
+    if (!bmp) bmp = ImageDecodeWic(g_peekImgStream);   // webp/heic/avif — те, чого GDI+ не знає
     if (!bmp) {
         g_peekImgStream->Release();
         g_peekImgStream = nullptr;
@@ -3619,25 +3689,6 @@ bool PeekLoadImage(const wchar_t* path)
 //     Перекладаємо прості правила «.клас { властивість: значення }» в атрибути.
 //  2. <use href="#id"> з SVG 2 D2D не бачить, а старий xlink:href — бачить.
 
-const GUID kCLSID_WICImagingFactory       = { 0xcacaf262, 0x9370, 0x4615, { 0xa1, 0x3b, 0x9f, 0x55, 0x39, 0xda, 0x4c, 0x0a } };
-const GUID kIID_IWICImagingFactory        = { 0xec5ec8a9, 0xc395, 0x4314, { 0x9c, 0x77, 0x54, 0xd7, 0xa9, 0x35, 0xff, 0x70 } };
-const GUID kWICPixelFormat32bppPBGRA      = { 0x6fddc324, 0x4e03, 0x4bfe, { 0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x10 } };
-const GUID kIID_ID2D1Factory1             = { 0xbb12d362, 0xdaee, 0x4b9a, { 0xaa, 0x1d, 0x14, 0xba, 0x40, 0x1c, 0xfa, 0x1f } };
-const GUID kIID_ID2D1DeviceContext5       = { 0x7836d248, 0x68cc, 0x4df6, { 0xb9, 0xe8, 0xde, 0x99, 0x1b, 0xf6, 0x2e, 0xb7 } };
-
-ID2D1Factory1*      g_d2d = nullptr;   // створюються ліниво, на першому ж SVG
-IWICImagingFactory* g_wic = nullptr;
-
-bool SvgEnsureFactories()
-{
-    if (!g_wic && FAILED(CoCreateInstance(kCLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-                                          kIID_IWICImagingFactory, (void**)&g_wic)))
-        return false;
-    if (!g_d2d && FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, kIID_ID2D1Factory1,
-                                           nullptr, (void**)&g_d2d)))
-        return false;
-    return g_wic && g_d2d;
-}
 
 // Елементи, які D2D мовчки пропускає. Побачили хоч один — не малюємо нічого.
 bool IsSvgBeyondD2D(const std::wstring& s)
@@ -3809,6 +3860,55 @@ void SvgFixUseHref(std::wstring& s)
     s.insert(tag + 4, L" xmlns:xlink=\"http://www.w3.org/1999/xlink\"");
 }
 
+// ⚠ Direct2D шанує width/height КОРЕНЯ і малює документ саме в тому розмірі,
+// ігноруючи наш viewport. Через це іконка 24×24 виходила крапкою, а креслення з
+// «724mm» — взагалі порожнім. Коли є viewBox, ці атрибути прибираємо: тоді
+// документ масштабується під те полотно, яке ми йому дали.
+void SvgStripRootSize(std::wstring& s)
+{
+    const size_t tag = s.find(L"<svg");
+    if (tag == std::wstring::npos) return;
+    size_t close = s.find(L'>', tag);
+    if (close == std::wstring::npos) return;
+    if (s.find(L"viewBox", tag) > close) return;        // без viewBox це єдиний розмір — не чіпаємо
+
+    for (const wchar_t* attr : { L" width=\"", L" height=\"" }) {
+        const size_t a = s.find(attr, tag);
+        if (a == std::wstring::npos || a > close) continue;
+        const size_t q = s.find(L'"', a + wcslen(attr));
+        if (q == std::wstring::npos || q > close) continue;
+        s.erase(a, q - a + 1);
+        close = s.find(L'>', tag);
+    }
+}
+
+// Креслення для лазера приходять із штрихом у частках міліметра: при viewBox 724
+// і stroke-width 0.15 лінія на екрані тонша за піксель і просто зникає. Для
+// ПЕРЕГЛЯДУ це безглуздо, тож такі штрихи піднімаємо до помітних. Товщі не чіпаємо.
+void SvgMinStroke(std::wstring& s, double scale)
+{
+    if (!(scale > 0)) return;
+    const double wantPx = 1.2;
+    size_t i = 0;
+    while ((i = s.find(L"stroke-width=\"", i)) != std::wstring::npos) {
+        const size_t vs = i + 14;
+        const size_t ve = s.find(L'"', vs);
+        if (ve == std::wstring::npos) break;
+        wchar_t* endp = nullptr;
+        const std::wstring val = s.substr(vs, ve - vs);
+        const double w = wcstod(val.c_str(), &endp);
+        const bool bare = endp && *endp == L'\0';        // «0.15mm» пропускаємо
+        if (bare && w > 0 && w * scale < wantPx) {
+            wchar_t buf[32];
+            swprintf(buf, 32, L"%.4f", wantPx / scale);
+            s.replace(vs, ve - vs, buf);
+            i = vs + wcslen(buf);
+        } else {
+            i = ve + 1;
+        }
+    }
+}
+
 // Природний розмір документа: viewBox, інакше width/height.
 void SvgNaturalSize(const std::wstring& s, double& w, double& h)
 {
@@ -3862,6 +3962,7 @@ bool PeekLoadSvg(const wchar_t* path)
 
     double docW = 0, docH = 0;
     SvgNaturalSize(s, docW, docH);
+    SvgStripRootSize(s);   // ПІСЛЯ читання розміру — далі він уже не потрібен у файлі
     if (docW <= 0 || docH <= 0) { docW = 512; docH = 512; }
     // Вектор можна малювати в будь-якій роздільності; беремо природний розмір,
     // але не дрібніше 256 і не більше 1400 по довгій стороні.
@@ -3871,6 +3972,7 @@ bool PeekLoadSvg(const wchar_t* path)
     if (longSide > 1400) scale = 1400.0 / longSide;
     const int w = (int)(docW * scale + 0.5), h = (int)(docH * scale + 0.5);
     if (w < 1 || h < 1 || !SvgEnsureFactories()) return false;
+    SvgMinStroke(s, scale);
 
     const int need = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0, nullptr, nullptr);
     if (need <= 0) return false;
@@ -3921,8 +4023,10 @@ bool PeekLoadSvg(const wchar_t* path)
     if (!ok) return false;
 
     g_peekImg = bmp;
-    g_peekInfo.imgW = (int)(docW + 0.5);   // у підписі — розмір документа, не рендера
-    g_peekInfo.imgH = (int)(docH + 0.5);
+    g_peekInfo.imgW = w;                    // розмір бітмапа — ним малює PeekPaint
+    g_peekInfo.imgH = h;
+    g_peekInfo.docW = (int)(docW + 0.5);    // а в підписі показуємо розмір документа
+    g_peekInfo.docH = (int)(docH + 0.5);
     return true;
 }
 
@@ -4150,6 +4254,23 @@ void FormatDuration(LONGLONG hundredNs, wchar_t* buf, int n)
     else       swprintf(buf, n, L"%d:%02d", m, s);
 }
 
+// ⚠ Найпідступніше місце в усьому відео. MF_MT_DEFAULT_STRIDE дорівнює w*4 і
+// БРЕШЕ, коли декодер вирівнює кадр: на екранному записі 1918x1050 буфер виявився
+// 8 110 080 байт, тобто 1920 x 1056 — вирівняно і ширину, і висоту. Кадр через це
+// «їхав» по діагоналі. IMF2DBuffer, який знав би справжній крок, на цих буферах
+// ВІДСУТНІЙ (перевірено пробою на двох файлах), тож виводимо крок із довжини:
+// шукаємо найменший крок >= w*4, на який довжина ділиться націло й дає не менше
+// h рядків. Не вдалося — лишаємо те, що сказав DEFAULT_STRIDE.
+UINT DeriveVideoStride(DWORD bufLen, UINT32 w, UINT32 h, UINT fallback)
+{
+    if (!w || !h || !bufLen) return fallback;
+    const UINT minStride = w * 4;
+    for (UINT s = minStride; s <= minStride + 4096; s += 4)
+        if ((bufLen % s) == 0 && (bufLen / s) >= h)
+            return s;
+    return fallback;
+}
+
 bool PeekLoadVideo(const wchar_t* path, wchar_t* durOut, int durCch)
 {
     durOut[0] = 0;
@@ -4208,12 +4329,40 @@ bool PeekLoadVideo(const wchar_t* path, wchar_t* durOut, int durCch)
                 if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
             }
 
+            // ⚠ Крок рядка — найпідступніше місце в усьому цьому. MF_MT_DEFAULT_STRIDE
+            // бреше, коли декодер вирівнює рядок (кадр 1918 px лежить у буфері по 1920), і
+            // кадр виходить зсунутим по діагоналі. Справжній крок знає IMF2DBuffer, АЛЕ
+            // ConvertToContiguousBuffer віддає копію, яка цього інтерфейсу вже не має —
+            // тому питаємо ОРИГІНАЛЬНИЙ буфер семпла. Якщо й там ні, виводимо крок із
+            // довжини буфера: вона враховує вирівнювання, а DEFAULT_STRIDE — ні.
+            IMF2DBuffer* buf2d = nullptr;
+            if (sample) {
+                IMFMediaBuffer* orig = nullptr;
+                if (SUCCEEDED(sample->GetBufferByIndex(0, &orig)) && orig) {
+                    if (FAILED(orig->QueryInterface(IID_IMF2DBuffer, (void**)&buf2d))) buf2d = nullptr;
+                    orig->Release();
+                }
+            }
             if (sample && w && h && SUCCEEDED(sample->ConvertToContiguousBuffer(&buffer)) && buffer) {
                 BYTE* data = nullptr;
                 DWORD maxLen = 0, curLen = 0;
-                if (SUCCEEDED(buffer->Lock(&data, &maxLen, &curLen)) && data) {
+                bool locked2d = false;
+                if (buf2d) {
+                    LONG pitch = 0;
+                    if (SUCCEEDED(buf2d->Lock2D(&data, &pitch)) && data) {
+                        locked2d = true;
+                        stride = (INT32)pitch;
+                        curLen = (DWORD)((pitch < 0 ? -pitch : pitch) * (LONG)h);
+                    }
+                }
+                if ((locked2d && data) || (SUCCEEDED(buffer->Lock(&data, &maxLen, &curLen)) && data)) {
                     const bool bottomUp = stride < 0;
-                    const int absStride = bottomUp ? -stride : stride;
+                    int absStride = bottomUp ? -stride : stride;
+                    if (!locked2d)
+                        absStride = (int)DeriveVideoStride(curLen, w, h, (UINT)absStride);
+                    // Рядків у буфері може бути БІЛЬШЕ за h (вирівняна висота). Для
+                    // перевернутого кадру перший рядок зображення — останній у буфері.
+                    const UINT rowsInBuf = absStride ? (curLen / (UINT)absStride) : h;
                     if ((DWORD)absStride * h <= curLen) {
                         Gdiplus::Bitmap* bmp = new Gdiplus::Bitmap((INT)w, (INT)h, PixelFormat32bppPARGB);
                         Gdiplus::BitmapData bd = {};
@@ -4221,7 +4370,7 @@ bool PeekLoadVideo(const wchar_t* path, wchar_t* durOut, int durCch)
                         if (bmp->GetLastStatus() == Gdiplus::Ok &&
                             bmp->LockBits(&lock, Gdiplus::ImageLockModeWrite, PixelFormat32bppPARGB, &bd) == Gdiplus::Ok) {
                             for (UINT32 y = 0; y < h; ++y) {
-                                const BYTE* src = bottomUp ? data + (size_t)(h - 1 - y) * absStride
+                                const BYTE* src = bottomUp ? data + (size_t)(rowsInBuf - 1 - y) * absStride
                                                            : data + (size_t)y * absStride;
                                 DWORD* dst = (DWORD*)((BYTE*)bd.Scan0 + (size_t)y * bd.Stride);
                                 for (UINT32 x = 0; x < w; ++x) {
@@ -4238,8 +4387,10 @@ bool PeekLoadVideo(const wchar_t* path, wchar_t* durOut, int durCch)
                             delete bmp;
                         }
                     }
-                    buffer->Unlock();
+                    if (locked2d) buf2d->Unlock2D();
+                    else           buffer->Unlock();
                 }
+                if (buf2d) buf2d->Release();
             }
         }
     }
@@ -4595,7 +4746,7 @@ void PeekLoad(const wchar_t* path)
     g_peekSvgAsCode = false;
     if (lstrcmpiW(ext, L".svg") == 0) {
         if (PeekLoadSvg(path)) {
-            swprintf(I.subtitle, 320, S(Str::PeekFmtImage), I.imgW, I.imgH, I.size);
+            swprintf(I.subtitle, 320, S(Str::PeekFmtImage), I.docW, I.docH, I.size);
             g_peekKind = PeekKind::Image;
             return;
         }
