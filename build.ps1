@@ -20,7 +20,8 @@ $LIBS = @(
     "advapi32.lib",  # реєстр: mingw лінкує його сам, MSVC вимагає явно
     "wininet.lib", "version.lib",  # CAPS-7: геолокація за IP, версія з VERSIONINFO
     "uxtheme.lib", "dwmapi.lib",   # CAPS-8: темна тема вікна
-    "bcrypt.lib"                   # CAPS-10: SHA-256 + ECDSA-перевірка оновлень
+    "bcrypt.lib",                  # CAPS-10: SHA-256 + ECDSA-перевірка оновлень
+    "d2d1.lib", "windowscodecs.lib"   # CAPS-16: рендер SVG
 )
 
 function Find-VcVars {
@@ -89,7 +90,7 @@ function Build-Mingw {
     & $gxx lilhelpers.cpp lilhelpers_res.o -o lilhelpers.exe `
         -municode -mwindows -O2 -s -static -fno-exceptions -fno-rtti `
         -lshell32 -lgdi32 -lgdiplus -lshlwapi -lole32 -loleaut32 -lcomctl32 -ltaskschd -luuid -ladvapi32 `
-        -lwininet -lversion -luxtheme -ldwmapi -lbcrypt
+        -lwininet -lversion -luxtheme -ldwmapi -lbcrypt -ld2d1 -lwindowscodecs -luuid
     if ($LASTEXITCODE -ne 0) { throw "compile failed" }
 
     Remove-Item lilhelpers_res.o -ErrorAction SilentlyContinue

@@ -62,6 +62,11 @@
 #include <shlobj.h>
 #include <servprov.h>
 #include <windowsx.h>
+// CAPS-16: рендер SVG — системний Direct2D (ніякого чужого коду в процесі).
+#include <d2d1_3.h>
+#include <d2d1svg.h>
+#include <wincodec.h>
+#include <string>
 
 namespace {
 
@@ -357,6 +362,7 @@ X(PeekFmtTwo,         L"%s · %s",                       L"%s · %s")           
 X(PeekFmtItems,       L"елементів: %d%s",               L"items: %d%s")                                 \
 X(PeekFmtThree,       L"%s · %s · %s",           L"%s · %s · %s")                                    \
 X(PeekReformatted,    L"відформатовано",              L"reformatted")                                \
+X(PeekSvgAsCode,      L"SVG з ефектами, яких ми не малюємо — показано розмітку",  L"SVG uses effects we do not draw — markup shown") \
 X(PeekLblType,        L"Тип",                           L"Type")                                        \
 X(PeekLblSize,        L"Розмір",                        L"Size")                                        \
 X(PeekLblItems,       L"Елементів",                     L"Items")                                       \
@@ -3101,6 +3107,7 @@ bool     g_peekCloseHot = false;
 bool     g_peekTracking = false;
 bool     g_peekDark     = false;
 bool     g_peekJsonFormatted = false;   // показуємо не байт-у-байт, і про це варто сказати
+bool     g_peekSvgAsCode     = false;   // SVG не намалювали — скажемо чому, а не промовчимо
 HWND     g_peekEnableCb = nullptr;
 
 int PeekPx(int v) { return MulDiv(v, (int)GetDpiForSystem(), 96); }
@@ -3576,6 +3583,330 @@ bool PeekLoadImage(const wchar_t* path)
     return true;
 }
 
+
+// ---- SVG ----
+//
+// Малюємо системним Direct2D: це сама Windows, а не зареєстрований кимось обробник,
+// тож запобіжник про чужий COM в елевейтованому процесі не порушено.
+//
+// Пробою (scratchpad\svgprobe.cpp) з'ясовано межі D2D: шляхи, градієнти, clipPath,
+// обведення й прозорість груп він тягне, а <text>, <mask>, <filter>, <pattern> —
+// МОВЧКИ ігнорує. Мовчки — найгірше: користувач побачив би картинку й не знав, що
+// вона неправильна. Тому такі файли ми не малюємо взагалі й показуємо розмітку.
+//
+// Два місця, де реальні файли ламають D2D, виправляє препас:
+//  1. Illustrator задає заливки CSS-класами в <style>. D2D їх не застосовує, і весь
+//     малюнок виходить ЧОРНОЮ ПЛЯМОЮ — саме так виглядала наша власна іконка.
+//     Перекладаємо прості правила «.клас { властивість: значення }» в атрибути.
+//  2. <use href="#id"> з SVG 2 D2D не бачить, а старий xlink:href — бачить.
+
+const GUID kCLSID_WICImagingFactory       = { 0xcacaf262, 0x9370, 0x4615, { 0xa1, 0x3b, 0x9f, 0x55, 0x39, 0xda, 0x4c, 0x0a } };
+const GUID kIID_IWICImagingFactory        = { 0xec5ec8a9, 0xc395, 0x4314, { 0x9c, 0x77, 0x54, 0xd7, 0xa9, 0x35, 0xff, 0x70 } };
+const GUID kWICPixelFormat32bppPBGRA      = { 0x6fddc324, 0x4e03, 0x4bfe, { 0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x10 } };
+const GUID kIID_ID2D1Factory1             = { 0xbb12d362, 0xdaee, 0x4b9a, { 0xaa, 0x1d, 0x14, 0xba, 0x40, 0x1c, 0xfa, 0x1f } };
+const GUID kIID_ID2D1DeviceContext5       = { 0x7836d248, 0x68cc, 0x4df6, { 0xb9, 0xe8, 0xde, 0x99, 0x1b, 0xf6, 0x2e, 0xb7 } };
+
+ID2D1Factory1*      g_d2d = nullptr;   // створюються ліниво, на першому ж SVG
+IWICImagingFactory* g_wic = nullptr;
+
+bool SvgEnsureFactories()
+{
+    if (!g_wic && FAILED(CoCreateInstance(kCLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                          kIID_IWICImagingFactory, (void**)&g_wic)))
+        return false;
+    if (!g_d2d && FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, kIID_ID2D1Factory1,
+                                           nullptr, (void**)&g_d2d)))
+        return false;
+    return g_wic && g_d2d;
+}
+
+// Елементи, які D2D мовчки пропускає. Побачили хоч один — не малюємо нічого.
+bool IsSvgBeyondD2D(const std::wstring& s)
+{
+    static const wchar_t* const k[] = {
+        L"<text", L"<tspan", L"<mask", L"<filter", L"<pattern",
+        L"<foreignObject", L"<switch", L"<marker", L"<animate", L"<image"
+    };
+    for (const wchar_t* t : k)
+        if (s.find(t) != std::wstring::npos) return true;
+    return false;
+}
+
+struct SvgDecl { std::wstring prop, value; };
+struct SvgRule { std::wstring name; std::vector<SvgDecl> decls; };
+
+void SvgTrim(std::wstring& s)
+{
+    size_t a = 0, b = s.size();
+    while (a < b && (s[a] == L' ' || s[a] == L'\t' || s[a] == L'\r' || s[a] == L'\n')) ++a;
+    while (b > a && (s[b - 1] == L' ' || s[b - 1] == L'\t' || s[b - 1] == L'\r' || s[b - 1] == L'\n')) --b;
+    s = s.substr(a, b - a);
+}
+
+// Свідомо вузький «CSS»: лише «.клас { властивість: значення; }», зокрема через кому.
+// Складніші селектори ігноруємо — краще недомалювати, ніж домалювати навмання.
+void SvgParseRules(const std::wstring& css, std::vector<SvgRule>& out)
+{
+    size_t i = 0;
+    while (i < css.size()) {
+        const size_t open = css.find(L'{', i);
+        if (open == std::wstring::npos) break;
+        const size_t close = css.find(L'}', open);
+        if (close == std::wstring::npos) break;
+        std::wstring sel = css.substr(i, open - i);
+        std::wstring body = css.substr(open + 1, close - open - 1);
+        i = close + 1;
+
+        std::vector<SvgDecl> decls;
+        size_t d = 0;
+        while (d <= body.size()) {
+            const size_t semi = body.find(L';', d);
+            std::wstring one = body.substr(d, (semi == std::wstring::npos ? body.size() : semi) - d);
+            d = (semi == std::wstring::npos) ? body.size() + 1 : semi + 1;
+            const size_t colon = one.find(L':');
+            if (colon == std::wstring::npos) continue;
+            SvgDecl dd;
+            dd.prop = one.substr(0, colon);
+            dd.value = one.substr(colon + 1);
+            SvgTrim(dd.prop);
+            SvgTrim(dd.value);
+            // лапки в значенні зіпсували б атрибут
+            if (!dd.prop.empty() && !dd.value.empty() && dd.value.find(L'"') == std::wstring::npos)
+                decls.push_back(dd);
+        }
+        if (decls.empty()) continue;
+
+        size_t p = 0;                                  // селектори через кому
+        while (p <= sel.size()) {
+            const size_t comma = sel.find(L',', p);
+            std::wstring one = sel.substr(p, (comma == std::wstring::npos ? sel.size() : comma) - p);
+            p = (comma == std::wstring::npos) ? sel.size() + 1 : comma + 1;
+            SvgTrim(one);
+            if (one.size() < 2 || one[0] != L'.') continue;      // лише простий клас
+            const std::wstring name = one.substr(1);
+            if (name.find_first_of(L" \t.#:[>+~*") != std::wstring::npos) continue;
+            SvgRule r;
+            r.name = name;
+            r.decls = decls;
+            out.push_back(r);
+        }
+    }
+}
+
+// Вирізає всі <style>…</style>, повертаючи їхній вміст.
+void SvgTakeStyles(std::wstring& s, std::wstring& css)
+{
+    for (;;) {
+        const size_t a = s.find(L"<style");
+        if (a == std::wstring::npos) break;
+        const size_t open = s.find(L'>', a);
+        if (open == std::wstring::npos) break;
+        const size_t b = s.find(L"</style", open);
+        if (b == std::wstring::npos) break;
+        const size_t end = s.find(L'>', b);
+        if (end == std::wstring::npos) break;
+        css += s.substr(open + 1, b - open - 1);
+        css += L'\n';
+        s.erase(a, end - a + 1);
+    }
+}
+
+void SvgApplyRules(std::wstring& s, const std::vector<SvgRule>& rules)
+{
+    std::wstring out;
+    out.reserve(s.size() + s.size() / 4);
+    size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] != L'<') { out.push_back(s[i++]); continue; }
+        const size_t close = s.find(L'>', i);
+        if (close == std::wstring::npos) { out.append(s, i, std::wstring::npos); break; }
+        std::wstring tag = s.substr(i, close - i + 1);
+        i = close + 1;
+
+        const size_t cp = tag.find(L" class=\"");
+        if (cp != std::wstring::npos) {
+            const size_t vs = cp + 8;
+            const size_t ve = tag.find(L'"', vs);
+            if (ve != std::wstring::npos) {
+                const std::wstring names = tag.substr(vs, ve - vs);
+                std::wstring add;
+                size_t a = 0;
+                while (a < names.size()) {
+                    while (a < names.size() && names[a] == L' ') ++a;
+                    size_t b = a;
+                    while (b < names.size() && names[b] != L' ') ++b;
+                    if (b > a) {
+                        const std::wstring cls = names.substr(a, b - a);
+                        for (const SvgRule& r : rules) {
+                            if (r.name != cls) continue;
+                            for (const SvgDecl& d : r.decls) {
+                                // атрибут, заданий прямо на елементі, має перевагу
+                                if (tag.find(L' ' + d.prop + L'=') != std::wstring::npos) continue;
+                                if (add.find(L' ' + d.prop + L'=') != std::wstring::npos) continue;
+                                add += L' ' + d.prop + L"=\"" + d.value + L'"';
+                            }
+                        }
+                    }
+                    a = b;
+                }
+                if (!add.empty()) {
+                    const bool self = tag.size() >= 2 && tag[tag.size() - 2] == L'/';
+                    tag = tag.substr(0, tag.size() - (self ? 2 : 1)) + add + (self ? L"/>" : L">");
+                }
+            }
+        }
+        out += tag;
+    }
+    s.swap(out);
+}
+
+// <use href> → <use xlink:href>; за потреби оголошуємо сам простір імен,
+// інакше документ стане невалідним і D2D відмовиться його читати взагалі.
+void SvgFixUseHref(std::wstring& s)
+{
+    bool changed = false;
+    size_t i = 0;
+    while ((i = s.find(L"<use", i)) != std::wstring::npos) {
+        const size_t close = s.find(L'>', i);
+        if (close == std::wstring::npos) break;
+        const size_t h = s.find(L" href=", i);
+        if (h != std::wstring::npos && h < close) {
+            s.insert(h + 1, L"xlink:");
+            changed = true;
+            i = close + 6;
+        } else {
+            i = close + 1;
+        }
+    }
+    if (!changed) return;
+    const size_t tag = s.find(L"<svg");
+    if (tag == std::wstring::npos) return;
+    const size_t close = s.find(L'>', tag);
+    if (close == std::wstring::npos) return;
+    // Оголошення шукаємо САМЕ в кореневому <svg>. Якщо воно стоїть на вкладеному
+    // елементі, на решту документа воно не поширюється, і доданий нами xlink:href
+    // зробить документ невалідним — тоді D2D відмовиться від нього цілком.
+    if (s.find(L"xmlns:xlink", tag) < close) return;
+    s.insert(tag + 4, L" xmlns:xlink=\"http://www.w3.org/1999/xlink\"");
+}
+
+// Природний розмір документа: viewBox, інакше width/height.
+void SvgNaturalSize(const std::wstring& s, double& w, double& h)
+{
+    w = h = 0;
+    const size_t tag = s.find(L"<svg");
+    const size_t close = (tag == std::wstring::npos) ? std::wstring::npos : s.find(L'>', tag);
+    if (close == std::wstring::npos) return;
+    const std::wstring head = s.substr(tag, close - tag);
+
+    const size_t vb = head.find(L"viewBox=\"");
+    if (vb != std::wstring::npos) {
+        double a = 0, b = 0;
+        if (swscanf(head.c_str() + vb + 9, L"%lf %lf %lf %lf", &a, &b, &w, &h) == 4 && w > 0 && h > 0)
+            return;
+        w = h = 0;
+    }
+    const size_t wp = head.find(L" width=\"");
+    const size_t hp = head.find(L" height=\"");
+    if (wp != std::wstring::npos && hp != std::wstring::npos) {
+        w = wcstod(head.c_str() + wp + 8, nullptr);   // «100%» дасть 100 — не біда, далі перевірка
+        h = wcstod(head.c_str() + hp + 9, nullptr);
+    }
+}
+
+bool PeekLoadSvg(const wchar_t* path)
+{
+    std::vector<BYTE> raw;
+    bool trunc = false;
+    if (!ReadFileHead(path, 8u * 1024 * 1024, raw, trunc) || trunc || raw.empty()) return false;
+    std::vector<wchar_t> wide;
+    if (!DecodeText(raw.data(), raw.size(), wide, true, false) || wide.empty()) return false;
+    std::wstring s(wide.begin(), wide.end());
+    if (s.find(L"<svg") == std::wstring::npos) return false;
+    if (IsSvgBeyondD2D(s)) return false;          // покажемо розмітку, і чесно скажемо чому
+
+    std::wstring css;
+    SvgTakeStyles(s, css);
+    if (!css.empty()) {
+        std::vector<SvgRule> rules;
+        SvgParseRules(css, rules);
+        if (!rules.empty()) SvgApplyRules(s, rules);
+    }
+    SvgFixUseHref(s);
+    {   // оголошення кодування стало б брехнею після переведення в UTF-8
+        const size_t d = s.find(L"<?xml");
+        if (d != std::wstring::npos) {
+            const size_t e = s.find(L"?>", d);
+            if (e != std::wstring::npos) s.erase(d, e - d + 2);
+        }
+    }
+
+    double docW = 0, docH = 0;
+    SvgNaturalSize(s, docW, docH);
+    if (docW <= 0 || docH <= 0) { docW = 512; docH = 512; }
+    // Вектор можна малювати в будь-якій роздільності; беремо природний розмір,
+    // але не дрібніше 256 і не більше 1400 по довгій стороні.
+    double scale = 1.0;
+    const double longSide = (docW > docH) ? docW : docH;
+    if (longSide < 256)  scale = 256.0 / longSide;
+    if (longSide > 1400) scale = 1400.0 / longSide;
+    const int w = (int)(docW * scale + 0.5), h = (int)(docH * scale + 0.5);
+    if (w < 1 || h < 1 || !SvgEnsureFactories()) return false;
+
+    const int need = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0, nullptr, nullptr);
+    if (need <= 0) return false;
+    std::vector<char> u8((size_t)need);
+    WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), u8.data(), need, nullptr, nullptr);
+
+    IStream* stream = SHCreateMemStream((const BYTE*)u8.data(), (UINT)u8.size());
+    if (!stream) return false;
+
+    IWICBitmap* wicBmp = nullptr;
+    ID2D1RenderTarget* rt = nullptr;
+    ID2D1DeviceContext5* dc = nullptr;
+    ID2D1SvgDocument* doc = nullptr;
+    Gdiplus::Bitmap* bmp = nullptr;
+    bool ok = false;
+
+    if (SUCCEEDED(g_wic->CreateBitmap((UINT)w, (UINT)h, kWICPixelFormat32bppPBGRA,
+                                      WICBitmapCacheOnLoad, &wicBmp)) && wicBmp) {
+        D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+        if (SUCCEEDED(g_d2d->CreateWicBitmapRenderTarget(wicBmp, props, &rt)) && rt &&
+            SUCCEEDED(rt->QueryInterface(kIID_ID2D1DeviceContext5, (void**)&dc)) && dc &&
+            SUCCEEDED(dc->CreateSvgDocument(stream, D2D1::SizeF((float)w, (float)h), &doc)) && doc) {
+            rt->BeginDraw();
+            rt->Clear(D2D1::ColorF(0, 0.0f));
+            dc->DrawSvgDocument(doc);
+            if (SUCCEEDED(rt->EndDraw())) {
+                bmp = new Gdiplus::Bitmap(w, h, PixelFormat32bppPARGB);
+                Gdiplus::BitmapData bd = {};
+                Gdiplus::Rect lock(0, 0, w, h);
+                if (bmp->GetLastStatus() == Gdiplus::Ok &&
+                    bmp->LockBits(&lock, Gdiplus::ImageLockModeWrite, PixelFormat32bppPARGB, &bd) == Gdiplus::Ok) {
+                    if (bd.Stride > 0 &&
+                        SUCCEEDED(wicBmp->CopyPixels(nullptr, (UINT)bd.Stride, (UINT)bd.Stride * h, (BYTE*)bd.Scan0)))
+                        ok = true;
+                    bmp->UnlockBits(&bd);
+                }
+                if (!ok) { delete bmp; bmp = nullptr; }
+            }
+        }
+    }
+    if (doc) doc->Release();
+    if (dc) dc->Release();
+    if (rt) rt->Release();
+    if (wicBmp) wicBmp->Release();
+    stream->Release();
+    if (!ok) return false;
+
+    g_peekImg = bmp;
+    g_peekInfo.imgW = (int)(docW + 0.5);   // у підписі — розмір документа, не рендера
+    g_peekInfo.imgH = (int)(docH + 0.5);
+    return true;
+}
+
 // ---- завантаження елемента ----
 
 void PeekReset()
@@ -3663,6 +3994,15 @@ void PeekLoad(const wchar_t* path)
         g_peekKind = PeekKind::Card;
         return;
     }
+    g_peekSvgAsCode = false;
+    if (lstrcmpiW(ext, L".svg") == 0) {
+        if (PeekLoadSvg(path)) {
+            swprintf(I.subtitle, 320, S(Str::PeekFmtImage), I.imgW, I.imgH, I.size);
+            g_peekKind = PeekKind::Image;
+            return;
+        }
+        g_peekSvgAsCode = true;   // не змогли намалювати чесно — далі покажемо розмітку
+    }
     if (IsImageExt(ext) && PeekLoadImage(path)) {
         if (g_peekFrames > 1)
             swprintf(I.subtitle, 320, S(Str::PeekFmtImageAnim), I.imgW, I.imgH, g_peekFrames, I.size);
@@ -3673,7 +4013,9 @@ void PeekLoad(const wchar_t* path)
     }
     // Відоме текстове розширення — текст; невідоме — лише якщо вміст на це схожий.
     if ((IsTextExt(ext) || (!IsImageExt(ext) && SniffText(path))) && PeekLoadText(path, ext)) {
-        if (g_peekJsonFormatted)
+        if (g_peekSvgAsCode)
+            swprintf(I.subtitle, 320, S(Str::PeekFmtThree), I.type, I.size, S(Str::PeekSvgAsCode));
+        else if (g_peekJsonFormatted)
             swprintf(I.subtitle, 320, S(Str::PeekFmtThree), I.type, I.size, S(Str::PeekReformatted));
         else
             swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, I.size);
@@ -5137,6 +5479,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     StopHookThread();
     if (g_winEvent) UnhookWinEvent(g_winEvent);
     delete g_logo;
+    if (g_d2d) g_d2d->Release();   // CAPS-16
+    if (g_wic) g_wic->Release();
     Gdiplus::GdiplusShutdown(g_gdiplusToken);
     CoUninitialize();
     return 0;
