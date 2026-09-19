@@ -328,6 +328,8 @@ X(UpdErrWrite,        L"Не вдалося записати нову версі
 X(UpdErrLaunch,       L"Не вдалося запустити нову версію — повернуто стару.",                          \
                       L"Could not start the new version — the old one was restored.")                  \
 /* вкладка «Перегляд» (CAPS-16) */                                                                    \
+X(PeekExperimental,   L"⚠ Експериментальна функція: ще в розробці, стабільна робота не гарантована.", \
+                      L"⚠ Experimental: still in development, stable operation is not guaranteed.")  \
 X(PeekEnable,         L"Швидкий перегляд файлу по пробілу в Провіднику та на робочому столі",           \
                       L"Quick file preview with Space in Explorer and on the desktop")                  \
 X(PeekHint,           L"Пробіл або Esc закриває. Стрілки в Провіднику гортають файли — перегляд "       \
@@ -4772,6 +4774,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 
     // ---- вкладка «Перегляд» (CAPS-16) ----
     y = PY;
+    // Помітка «експериментальна» — найперша на сторінці й звичайним кольором, а не
+    // сірим, як підказки: її треба прочитати ДО того, як вирішувати щодо чекбокса.
+    text(addP, Str::PeekExperimental, 2, 0, 14);
     g_peekEnableCb = check(addP, Str::PeekEnable, IDC_PEEK_ENABLE, g_peekOn, 2);
     hint(addP, Str::PeekHint, 2);
     y += 6;
