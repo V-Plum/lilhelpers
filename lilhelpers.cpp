@@ -139,6 +139,7 @@ constexpr UINT TIMER_MAG_HOLD   = 1;
 constexpr UINT TIMER_MAG_FRAME  = 2;   // кадр оверлейної анімації
 constexpr UINT TIMER_THEME      = 3;   // CAPS-7: перевірка теми раз на хвилину
 constexpr UINT TIMER_UPDATE     = 4;   // CAPS-10: хвилина після старту, далі кожні 30 хв
+constexpr UINT TIMER_TRAY       = 5;   // CAPS-17: повтор додавання іконки, поки панель не готова
 
 const wchar_t* kAppName  = L"Little Helpers";   // заголовки вікна/повідомлень, трей
 const wchar_t* kWndClass = L"lilhelpers";
@@ -2480,6 +2481,41 @@ void RollbackUpdate()
     }
 }
 
+// ---------- CAPS-17: іконка трею, яка переживає і гонку при вході, і рестарт Explorer ----------
+//
+// ДВІ незалежні причини, чому іконка зникала назавжди, і потрібні обидва лікування.
+//
+// 1. Explorer працює зі ЗВИЧАЙНИМИ правами, а ми — з адмінськими (requireAdministrator,
+//    див. шапку файлу). UIPI за замовчуванням не пускає повідомлення знизу вгору, тож
+//    широкомовне TaskbarCreated до нас НЕ ДОХОДИТЬ — обробник нижче був мертвим кодом.
+//    Виміряно 20.09.2026: PostMessage(TaskbarCreated) до нашого вікна з medium IL віддає
+//    ERROR_ACCESS_DENIED, а до неелевейтованого вікна Провідника проходить.
+//    Лікує ChangeWindowMessageFilterEx — дозвіл саме на це одне повідомлення.
+//
+// 2. Автозапуск — задача на вхід у систему, і Explorer стартує тієї ж секунди (виміряно:
+//    обидва 19:04:03). Якщо ми покликали NIM_ADD до появи панелі задач, виклик просто
+//    не вдається. Раніше його результат ніхто не перевіряв. Фільтр з пункту 1 тут не
+//    рятує: якщо Explorer розіслав TaskbarCreated ще до створення нашого вікна, ловити
+//    вже нічого — тому додавання повторюється за таймером, поки не вдасться.
+int g_trayTries = 0;
+constexpr int kTrayMaxTries = 150;   // 5 хв по 2 с: із запасом на найповільніший вхід
+
+void TrayEnsure(HWND hwnd)
+{
+    // NIM_ADD не вдається ще й тоді, коли іконка ВЖЕ стоїть (TaskbarCreated могло
+    // прийти, а наша іконка вціліти). Відрізняємо це через NIM_MODIFY: якщо він
+    // проходить — іконка на місці, і повторювати нема чого.
+    if (Shell_NotifyIconW(NIM_ADD, &g_nid) || Shell_NotifyIconW(NIM_MODIFY, &g_nid)) {
+        KillTimer(hwnd, TIMER_TRAY);
+        g_trayTries = 0;
+        return;
+    }
+    if (++g_trayTries == 1)
+        SetTimer(hwnd, TIMER_TRAY, 2000, nullptr);
+    else if (g_trayTries >= kTrayMaxTries)
+        KillTimer(hwnd, TIMER_TRAY);   // панелі немає аж 5 хв — це вже не гонка
+}
+
 void TrayBalloon(const wchar_t* title, const wchar_t* text)
 {
     NOTIFYICONDATAW n = g_nid;
@@ -4145,8 +4181,10 @@ void ShowTrayMenu(HWND hwnd)
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == g_taskbarCreatedMsg && g_taskbarCreatedMsg) {
-        // Explorer перезапустився — повертаємо іконку в трей
-        Shell_NotifyIconW(NIM_ADD, &g_nid);
+        // Explorer перезапустився — повертаємо іконку в трей. Через TrayEnsure, бо
+        // одразу після рестарту панель може ще не приймати іконок (CAPS-17).
+        g_trayTries = 0;
+        TrayEnsure(hwnd);
         return 0;
     }
 
@@ -4173,6 +4211,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == TIMER_MAG_HOLD)       MagnifyBeginShrink();
         else if (wp == TIMER_MAG_FRAME) OverlayFrameTick();
         else if (wp == TIMER_THEME)     ThemeTick();
+        else if (wp == TIMER_TRAY)      TrayEnsure(hwnd);   // CAPS-17
         else if (wp == TIMER_UPDATE) {  // CAPS-10: хвилина після старту, далі кожні 30 хв
             SetTimer(hwnd, TIMER_UPDATE, 30 * 60 * 1000, nullptr);
             if (g_updDaily && NowUnix() - g_updLast > 86400) StartUpdate(false, false);
@@ -4951,7 +4990,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
                                     GetSystemMetrics(SM_CXSMICON),
                                     GetSystemMetrics(SM_CYSMICON), 0);
     lstrcpyW(g_nid.szTip, L"Little Helpers");
-    Shell_NotifyIconW(NIM_ADD, &g_nid);
+    // CAPS-17: спершу дозвіл на broadcast (інакше втрачену іконку вже нічим не повернути),
+    // і лише потім перша спроба — щоб не проґавити TaskbarCreated у проміжку.
+    ChangeWindowMessageFilterEx(hwnd, g_taskbarCreatedMsg, MSGFLT_ALLOW, nullptr);
+    TrayEnsure(hwnd);
 
     g_mainWnd = hwnd;
     ApplyWindowTheme(true);   // CAPS-8: тема вікна до першого показу
