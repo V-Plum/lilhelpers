@@ -357,6 +357,10 @@ X(PeekFmtItems,       L"елементів: %d%s",               L"items: %d%s")
 X(PeekLblType,        L"Тип",                           L"Type")                                        \
 X(PeekLblSize,        L"Розмір",                        L"Size")                                        \
 X(PeekLblItems,       L"Елементів",                     L"Items")                                       \
+X(PeekLblTarget,      L"Веде до",                                                                    \
+                      L"Points to")                                                                  \
+X(PeekFmtImageAnim,   L"%d × %d · кадрів: %d · %s",                                                  \
+                      L"%d × %d · frames: %d · %s")                                                  \
 X(PeekLblModified,    L"Дата зміни",                    L"Modified")                                    \
 X(PeekLblCreated,     L"Створено",                      L"Created")                                     \
 X(PeekLblWhere,       L"Розташування",                  L"Location")                                    \
@@ -3004,12 +3008,19 @@ const GUID kIID_IServiceProvider = { 0x6d5140c1, 0x7436, 0x11ce, { 0x80, 0x34, 0
 const GUID kSID_STopLevelBrowser = { 0x4c96be40, 0x915c, 0x11cf, { 0x99, 0xd3, 0x00, 0xaa, 0x00, 0x4a, 0xe8, 0x37 } };
 const GUID kIID_IShellBrowser    = { 0x000214e2, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
 const GUID kIID_IDataObject      = { 0x0000010e, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+const GUID kCLSID_ShellLink      = { 0x00021401, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+const GUID kIID_IShellLinkW      = { 0x000214f9, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+const GUID kIID_IPersistFile     = { 0x0000010b, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+// GDI+ оголошує ці GUID-и через DEFINE_GUID без INITGUID — власна копія надійніша за lib
+const GUID kFrameDimensionTime   = { 0x6aedbd6d, 0x3fb5, 0x418a, { 0x83, 0xa6, 0x7f, 0x45, 0x22, 0x9d, 0xc8, 0x72 } };
 const GUID kIID_IImageList       = { 0x46eb5926, 0x582e, 0x4017, { 0x9f, 0xdf, 0xe8, 0x99, 0x8d, 0xaa, 0x09, 0x50 } };
 
 constexpr int    kPeekHead    = 48;               // смуга з назвою файлу, лог. px
 constexpr int    kPeekMinW    = 400, kPeekMinH = 260;
 constexpr size_t kPeekTextMax = 1024 * 1024;      // текст показуємо до 1 МБ
 constexpr UINT   TIMER_PEEK_FOLLOW = 1;           // на вікні перегляду: стежити за виділенням
+constexpr UINT   TIMER_PEEK_ANIM   = 2;           // наступний кадр анімованого GIF
+constexpr size_t kPeekImageMax = 64u * 1024 * 1024;   // більший файл не тягнемо в пам'ять
 
 HFONT CreateUIFont(int percent, int weight);      // визначення нижче, після WndProc
 
@@ -3023,6 +3034,7 @@ struct PeekInfo {
     wchar_t modified[64];
     wchar_t created[64];
     wchar_t subtitle[320];
+    wchar_t target[1024];   // куди веде ярлик (.lnk/.url)
     bool    isDir;
     int     items;       // для папки: скільки всередині (-1 = не рахували)
     bool    itemsMore;   // лічильник упёрся в стелю
@@ -3038,6 +3050,13 @@ PeekKind g_peekKind = PeekKind::None;
 PeekInfo g_peekInfo = {};
 Gdiplus::Bitmap* g_peekImg    = nullptr;   // оригінал (уже повернутий за EXIF)
 Gdiplus::Bitmap* g_peekScaled = nullptr;   // під поточний розмір вікна
+// Зображення декодується з КОПІЇ файлу в пам'яті, а не з файлу: так перегляд не
+// тримає файл відкритим (його можна перейменувати чи видалити) і, головне,
+// лишаються всі кадри — Clone() схлопнув би анімований GIF в один.
+IStream* g_peekImgStream = nullptr;
+int   g_peekFrames = 1;        // кадрів у зображенні (1 = не анімоване)
+int   g_peekFrame  = 0;        // який кадр показано
+std::vector<UINT> g_peekDelays;   // затримка кадру, мс
 HICON    g_peekIconBig = nullptr, g_peekIconSmall = nullptr;
 HFONT    g_peekFont = nullptr, g_peekFontBold = nullptr, g_peekFontMono = nullptr;
 bool     g_peekCloseHot = false;
@@ -3337,25 +3356,85 @@ bool PeekLoadText(const wchar_t* path, const wchar_t* ext)
     return true;
 }
 
+// ---- ярлики ----
+//
+// Ярлик — не текст і не картинка, а вказівник. Показувати його нутрощі (власник
+// побачив саме це на ярлику гри Steam) — марно: цікаво, КУДИ він веде.
+
+// .url — ini-подібний; .lnk — двійковий, читається оболонкою. Resolve НЕ кличемо:
+// він ходить у мережу й може надовго зависнути на недоступному диску.
+bool PeekReadShortcut(const wchar_t* path, const wchar_t* ext, wchar_t* out, size_t cch)
+{
+    out[0] = 0;
+    if (lstrcmpiW(ext, L".url") == 0) {
+        GetPrivateProfileStringW(L"InternetShortcut", L"URL", L"", out, (DWORD)cch, path);
+        return out[0] != 0;
+    }
+    if (lstrcmpiW(ext, L".lnk") != 0) return false;
+
+    IShellLinkW* sl = nullptr;
+    if (FAILED(CoCreateInstance(kCLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                kIID_IShellLinkW, (void**)&sl)) || !sl)
+        return false;
+    IPersistFile* pf = nullptr;
+    if (SUCCEEDED(sl->QueryInterface(kIID_IPersistFile, (void**)&pf)) && pf) {
+        if (SUCCEEDED(pf->Load(path, STGM_READ))) {
+            wchar_t p[MAX_PATH] = {}, args[512] = {};
+            sl->GetPath(p, MAX_PATH, nullptr, SLGP_RAWPATH);
+            sl->GetArguments(args, 512);
+            if (p[0] && args[0]) swprintf(out, cch, L"%s %s", p, args);
+            else if (p[0])       lstrcpynW(out, p, (int)cch);
+        }
+        pf->Release();
+    }
+    sl->Release();
+    return out[0] != 0;
+}
+
 // ---- зображення ----
 
 bool PeekLoadImage(const wchar_t* path)
 {
-    // FromFile тримає файл відкритим, поки живе Image, — перейменувати чи видалити
-    // файл, що на перегляді, було б не можна. Тому клонуємо в незалежний бітмап
-    // (це ж і форсує декодування) і одразу відпускаємо оригінал.
-    Gdiplus::Bitmap* src = Gdiplus::Bitmap::FromFile(path, FALSE);
-    if (!src) return false;
-    Gdiplus::Bitmap* bmp = nullptr;
-    if (src->GetLastStatus() == Gdiplus::Ok && src->GetWidth() > 0 && src->GetHeight() > 0) {
-        bmp = src->Clone(0, 0, (INT)src->GetWidth(), (INT)src->GetHeight(), PixelFormat32bppPARGB);
-        if (bmp && bmp->GetLastStatus() != Gdiplus::Ok) { delete bmp; bmp = nullptr; }
+    std::vector<BYTE> raw;
+    bool trunc = false;
+    if (!ReadFileHead(path, kPeekImageMax, raw, trunc) || trunc || raw.empty()) return false;
+    g_peekImgStream = SHCreateMemStream(raw.data(), (UINT)raw.size());
+    if (!g_peekImgStream) return false;
+    Gdiplus::Bitmap* bmp = Gdiplus::Bitmap::FromStream(g_peekImgStream, FALSE);
+    if (bmp && (bmp->GetLastStatus() != Gdiplus::Ok || !bmp->GetWidth() || !bmp->GetHeight())) {
+        delete bmp;
+        bmp = nullptr;
     }
-    delete src;
-    if (!bmp) return false;
+    if (!bmp) {
+        g_peekImgStream->Release();
+        g_peekImgStream = nullptr;
+        return false;
+    }
+
+    // Анімація (GIF): кадри лежать у вимірі «час», затримки — окремим масивом по
+    // сотих секунди. Нульову затримку браузери давно трактують як 100 мс — робимо так само.
+    if (bmp->GetFrameDimensionsCount() > 0) {
+        const UINT n = bmp->GetFrameCount(&kFrameDimensionTime);
+        if (n > 1) {
+            g_peekFrames = (int)n;
+            g_peekDelays.assign(n, 100);
+            const UINT dsz = bmp->GetPropertyItemSize(PropertyTagFrameDelay);
+            if (dsz) {
+                Gdiplus::PropertyItem* pi = (Gdiplus::PropertyItem*)malloc(dsz);
+                if (pi && bmp->GetPropertyItem(PropertyTagFrameDelay, dsz, pi) == Gdiplus::Ok && pi->value) {
+                    const UINT have = pi->length / sizeof(LONG);
+                    const LONG* d = (const LONG*)pi->value;
+                    for (UINT i = 0; i < n && i < have; ++i)
+                        g_peekDelays[i] = (d[i] > 1) ? (UINT)d[i] * 10 : 100;
+                }
+                free(pi);
+            }
+        }
+    }
 
     // Фото з телефона: орієнтація лежить в EXIF, самі пікселі — як зняв сенсор.
-    const UINT sz = bmp->GetPropertyItemSize(PropertyTagOrientation);
+    // Для багатокадрових це не робимо: RotateFlip схлопнув би їх в один кадр.
+    const UINT sz = (g_peekFrames > 1) ? 0 : bmp->GetPropertyItemSize(PropertyTagOrientation);
     if (sz) {
         Gdiplus::PropertyItem* pi = (Gdiplus::PropertyItem*)malloc(sz);
         if (pi && bmp->GetPropertyItem(PropertyTagOrientation, sz, pi) == Gdiplus::Ok &&
@@ -3382,8 +3461,13 @@ bool PeekLoadImage(const wchar_t* path)
 
 void PeekReset()
 {
+    if (g_peekWnd) KillTimer(g_peekWnd, TIMER_PEEK_ANIM);
     delete g_peekScaled; g_peekScaled = nullptr;
     delete g_peekImg;    g_peekImg = nullptr;
+    if (g_peekImgStream) { g_peekImgStream->Release(); g_peekImgStream = nullptr; }
+    g_peekFrames = 1;
+    g_peekFrame  = 0;
+    g_peekDelays.clear();
     if (g_peekIconBig)   { DestroyIcon(g_peekIconBig);   g_peekIconBig = nullptr; }
     if (g_peekIconSmall) { DestroyIcon(g_peekIconSmall); g_peekIconSmall = nullptr; }
     g_peekKind = PeekKind::None;
@@ -3454,8 +3538,17 @@ void PeekLoad(const wchar_t* path)
     }
 
     const wchar_t* ext = PathFindExtensionW(path);
+    // Ярлик — перевіряємо ПЕРШИМ: .url ini-подібний, тобто інакше пройшов би як текст.
+    if (PeekReadShortcut(path, ext, I.target, 1024)) {
+        swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, I.size);
+        g_peekKind = PeekKind::Card;
+        return;
+    }
     if (IsImageExt(ext) && PeekLoadImage(path)) {
-        swprintf(I.subtitle, 320, S(Str::PeekFmtImage), I.imgW, I.imgH, I.size);
+        if (g_peekFrames > 1)
+            swprintf(I.subtitle, 320, S(Str::PeekFmtImageAnim), I.imgW, I.imgH, g_peekFrames, I.size);
+        else
+            swprintf(I.subtitle, 320, S(Str::PeekFmtImage), I.imgW, I.imgH, I.size);
         g_peekKind = PeekKind::Image;
         return;
     }
@@ -3594,6 +3687,7 @@ void PeekToggle(HWND view)
     PeekShow();
     g_peekShown = true;
     SetTimer(g_peekWnd, TIMER_PEEK_FOLLOW, 150, nullptr);
+    if (g_peekFrames > 1) SetTimer(g_peekWnd, TIMER_PEEK_ANIM, g_peekDelays[0], nullptr);
 }
 
 // Раз на 150 мс: Провідник ще той самий і в фокусі? виділення те саме?
@@ -3612,6 +3706,8 @@ void PeekFollowTick()
     if (lstrcmpiW(path, g_peekPath) != 0) {
         PeekLoad(path);
         PeekShow();
+        KillTimer(g_peekWnd, TIMER_PEEK_ANIM);
+        if (g_peekFrames > 1) SetTimer(g_peekWnd, TIMER_PEEK_ANIM, g_peekDelays[0], nullptr);
     }
 }
 
@@ -3731,6 +3827,7 @@ void PeekPaint(HDC dc, const RECT& rc)
         row(Str::PeekLblType, g_peekInfo.type);
         if (g_peekInfo.isDir) row(Str::PeekLblItems, items);
         else                  row(Str::PeekLblSize,  g_peekInfo.size);
+        row(Str::PeekLblTarget, g_peekInfo.target);
         row(Str::PeekLblModified, g_peekInfo.modified);
         row(Str::PeekLblCreated,  g_peekInfo.created);
         row(Str::PeekLblWhere,    g_peekInfo.folder);
@@ -3852,6 +3949,15 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_TIMER:
         if (wp == TIMER_PEEK_FOLLOW) PeekFollowTick();
+        else if (wp == TIMER_PEEK_ANIM && g_peekImg && g_peekFrames > 1) {
+            // Кадри мають РІЗНУ тривалість, тож таймер переставляється щокадру.
+            g_peekFrame = (g_peekFrame + 1) % g_peekFrames;
+            g_peekImg->SelectActiveFrame(&kFrameDimensionTime, (UINT)g_peekFrame);
+            delete g_peekScaled;               // кеш був від попереднього кадру
+            g_peekScaled = nullptr;
+            SetTimer(hwnd, TIMER_PEEK_ANIM, g_peekDelays[g_peekFrame], nullptr);
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
         return 0;
 
     case WM_CTLCOLORSTATIC:   // EDIT лише для читання шле саме це
