@@ -74,6 +74,13 @@
 #include <mfreadwrite.h>
 // CAPS-16: docx — читаємо пакет системним OPC, а не власним розпакувальником zip.
 #include <msopc.h>
+// CAPS-16: PDF — вбудований Windows.Data.Pdf (WinRT). Заголовка windows.data.pdf.h
+// у MinGW немає, тому потрібні інтерфейси оголошено нижче вручну.
+#include <roapi.h>
+#include <winstring.h>
+#include <inspectable.h>
+#include <asyncinfo.h>
+#include <shcore.h>
 
 namespace {
 
@@ -350,12 +357,12 @@ X(PeekHint,           L"Пробіл або Esc закриває. Стрілки
                       L"Space or Esc closes it. Arrow keys in Explorer move between files; "            \
                       L"the preview follows.")                                                          \
 X(PeekSecTypes,       L"Що показується",                L"What is shown")                               \
-X(PeekTypesImages,    L"Зображення: JPEG, PNG, GIF (анімовані програються), BMP, TIFF, ICO, SVG.",   \
-                      L"Images: JPEG, PNG, GIF (animated ones play), BMP, TIFF, ICO, SVG.")          \
+X(PeekTypesImages,    L"Зображення: JPEG, PNG, GIF (анімовані програються), BMP, TIFF, ICO, WebP, SVG.", \
+                      L"Images: JPEG, PNG, GIF (animated ones play), BMP, TIFF, ICO, WebP, SVG.")    \
 X(PeekTypesText,      L"Текст і код до 1 МБ — JSON форматується. Документи Word (docx) — текстом.",  \
                       L"Text and code up to 1 MB — JSON is reformatted. Word docs (docx) as text.")  \
-X(PeekTypesMedia,     L"Відео — перший кадр, роздільність і тривалість. Моделі STL — з габаритами.", \
-                      L"Video — a frame, resolution and duration. STL models — with dimensions.")    \
+X(PeekTypesMedia,     L"PDF — перша сторінка. Відео — кадр і тривалість. STL — модель із габаритами.", \
+                      L"PDF — first page. Video — a frame and duration. STL — model with sizes.")    \
 X(PeekTypesOther,     L"Решта файлів, папки, ярлики та STEP — картка з відомостями про файл.",       \
                       L"Other files, folders, shortcuts and STEP — a card of file details.")         \
 X(PeekSecKeeps,       L"Що лишається за Провідником",   L"What stays with Explorer")                    \
@@ -373,6 +380,7 @@ X(PeekSvgAsCode,      L"SVG з ефектами, яких ми не малюєм
 X(PeekFmtStl,         L"%.0f × %.0f × %.0f · трикутників: %u · %s",   L"%.0f × %.0f × %.0f · triangles: %u · %s") \
 X(PeekFmtVideo,       L"%d × %d · %s · %s",                      L"%d × %d · %s · %s")               \
 X(PeekDocxText,       L"лише текст",                  L"text only")                                  \
+X(PeekFmtPdf,         L"%d × %d · сторінок: %u · %s",              L"%d × %d · pages: %u · %s")      \
 X(PeekLblType,        L"Тип",                           L"Type")                                        \
 X(PeekLblSize,        L"Розмір",                        L"Size")                                        \
 X(PeekLblItems,       L"Елементів",                     L"Items")                                       \
@@ -4628,6 +4636,185 @@ bool PeekLoadStep(const wchar_t* path, PeekInfo& I)
     return true;
 }
 
+
+// ---- PDF ----
+//
+// Малює САМА Windows: Windows.Data.Pdf — вбудований компонент, а не обробник,
+// зареєстрований кимось для розширення, тож запобіжник [2026-09-20] цілий.
+//
+// Заголовка windows.data.pdf.h у MinGW немає (і Windows SDK на машині збірки теж),
+// тому інтерфейси оголошено тут вручну. IID IPdfDocumentStatics НЕ вгадано: його
+// отримано від самої фабрики через IInspectable::GetIids() у пробі, а порядок
+// методів перевірено живими викликами на справжньому PDF.
+//
+// ⚠ Робимо все на ОКРЕМОМУ потоці з апартаментом MTA. Причина не в швидкості:
+// у STA (а UI-потік саме такий) асинхронна операція WinRT не завершується, поки
+// потік не прокачує чергу повідомлень, — перевірено, без прокачування LoadFrom-
+// StreamAsync стабільно віддає E_FAIL. Прокачувати чергу всередині обробника
+// повідомлення означало б реентрантність UI, а це гірше за окремий потік.
+
+struct LhAsyncOp : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE put_Completed(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Completed(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetResults(void** result) = 0;
+};
+struct LhAsyncAct : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE put_Completed(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Completed(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetResults() = 0;
+};
+struct LhPdfPage;
+struct LhPdfDocStatics : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE LoadFromFileAsync(void*, LhAsyncOp**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE LoadFromFileWithPasswordAsync(void*, HSTRING, LhAsyncOp**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE LoadFromStreamAsync(void*, LhAsyncOp**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE LoadFromStreamWithPasswordAsync(void*, HSTRING, LhAsyncOp**) = 0;
+};
+struct LhPdfDoc : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE GetPage(UINT32, LhPdfPage**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_PageCount(UINT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsPasswordProtected(boolean*) = 0;
+};
+struct LhPdfSize { FLOAT W, H; };
+struct LhPdfPage : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE RenderToStreamAsync(void*, LhAsyncAct**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE RenderWithOptionsToStreamAsync(void*, void*, LhAsyncAct**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE PreparePageAsync(LhAsyncAct**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Index(UINT32*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Size(LhPdfSize*) = 0;
+};
+
+const GUID kIID_IAsyncInfoLh          = { 0x00000036, 0x0000, 0x0000, { 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+const GUID kIID_IPdfDocumentStatics   = { 0x433A0B5F, 0xC007, 0x4788, { 0x90, 0xF2, 0x08, 0x14, 0x3D, 0x92, 0x25, 0x99 } };
+const GUID kIID_IRandomAccessStreamLh = { 0x905A0FE1, 0xBC53, 0x11DF, { 0x8C, 0x49, 0x00, 0x1E, 0x4F, 0xC6, 0x86, 0xDA } };
+
+template <class T> HRESULT PdfAwait(T* op, int ms)
+{
+    IAsyncInfo* info = nullptr;
+    if (FAILED(op->QueryInterface(kIID_IAsyncInfoLh, (void**)&info)) || !info) return E_NOINTERFACE;
+    HRESULT hr = E_FAIL;
+    for (int i = 0; i < ms / 5; ++i) {
+        AsyncStatus st = Started;
+        if (FAILED(info->get_Status(&st))) break;
+        if (st == Completed) { hr = S_OK; break; }
+        if (st == Error)    { info->get_ErrorCode(&hr); if (SUCCEEDED(hr)) hr = E_FAIL; break; }
+        if (st == Canceled) { hr = E_ABORT; break; }
+        Sleep(5);
+    }
+    info->Release();
+    return hr;
+}
+
+// Завдання живе на купі й належить обом сторонам: якщо UI не дочекався, потік
+// доробить і звільнить його сам — інакше він писав би в чужий стек.
+struct PdfJob {
+    wchar_t path[MAX_PATH];
+    std::vector<BYTE> png;
+    UINT32 pages;
+    bool ok;
+    volatile LONG refs;
+};
+
+void PdfJobRelease(PdfJob* j)
+{
+    if (InterlockedDecrement(&j->refs) == 0) delete j;
+}
+
+DWORD WINAPI PdfWorker(LPVOID param)
+{
+    PdfJob* job = (PdfJob*)param;
+    const HRESULT hrRo = RoInitialize(RO_INIT_MULTITHREADED);
+
+    HSTRING clsDoc = nullptr, clsMem = nullptr;
+    WindowsCreateString(L"Windows.Data.Pdf.PdfDocument", 28, &clsDoc);
+    WindowsCreateString(L"Windows.Storage.Streams.InMemoryRandomAccessStream", 50, &clsMem);
+
+    LhPdfDocStatics* statics = nullptr;
+    IStream* file = nullptr;
+    void* inRas = nullptr;
+    LhAsyncOp* op = nullptr;
+    LhPdfDoc* doc = nullptr;
+    LhPdfPage* page = nullptr;
+    IInspectable* memInsp = nullptr;
+    void* outRas = nullptr;
+    LhAsyncAct* act = nullptr;
+    IStream* outStm = nullptr;
+
+    if (SUCCEEDED(RoGetActivationFactory(clsDoc, kIID_IPdfDocumentStatics, (void**)&statics)) && statics &&
+        SUCCEEDED(SHCreateStreamOnFileEx(job->path, STGM_READ | STGM_SHARE_DENY_WRITE, 0, FALSE, nullptr, &file)) && file &&
+        SUCCEEDED(CreateRandomAccessStreamOverStream(file, BSOS_DEFAULT, kIID_IRandomAccessStreamLh, &inRas)) && inRas &&
+        SUCCEEDED(statics->LoadFromStreamAsync(inRas, &op)) && op &&
+        SUCCEEDED(PdfAwait(op, 20000)) &&
+        SUCCEEDED(op->GetResults((void**)&doc)) && doc &&
+        SUCCEEDED(doc->GetPage(0, &page)) && page &&
+        SUCCEEDED(RoActivateInstance(clsMem, &memInsp)) && memInsp &&
+        SUCCEEDED(memInsp->QueryInterface(kIID_IRandomAccessStreamLh, &outRas)) && outRas &&
+        SUCCEEDED(page->RenderToStreamAsync(outRas, &act)) && act &&
+        SUCCEEDED(PdfAwait(act, 20000)) &&
+        SUCCEEDED(CreateStreamOverRandomAccessStream((IUnknown*)outRas, IID_IStream, (void**)&outStm)) && outStm) {
+        doc->get_PageCount(&job->pages);
+        LARGE_INTEGER zero = {};
+        outStm->Seek(zero, STREAM_SEEK_SET, nullptr);
+        BYTE buf[65536];
+        ULONG got = 0;
+        while (SUCCEEDED(outStm->Read(buf, sizeof(buf), &got)) && got) {
+            job->png.insert(job->png.end(), buf, buf + got);
+            if (job->png.size() > 96u * 1024 * 1024) break;
+        }
+        job->ok = !job->png.empty();
+    }
+
+    if (outStm) outStm->Release();
+    if (act) act->Release();
+    if (outRas) ((IUnknown*)outRas)->Release();
+    if (memInsp) memInsp->Release();
+    if (page) page->Release();
+    if (doc) doc->Release();
+    if (op) op->Release();
+    if (inRas) ((IUnknown*)inRas)->Release();
+    if (file) file->Release();
+    if (statics) statics->Release();
+    WindowsDeleteString(clsMem);
+    WindowsDeleteString(clsDoc);
+    if (SUCCEEDED(hrRo)) RoUninitialize();
+    PdfJobRelease(job);
+    return 0;
+}
+
+bool PeekLoadPdf(const wchar_t* path, UINT32& pagesOut)
+{
+    PdfJob* job = new PdfJob();
+    lstrcpynW(job->path, path, MAX_PATH);
+    job->pages = 0;
+    job->ok = false;
+    job->refs = 2;
+
+    HANDLE th = CreateThread(nullptr, 0, PdfWorker, job, 0, nullptr);
+    if (!th) { job->refs = 1; PdfJobRelease(job); return false; }
+    const DWORD waited = WaitForSingleObject(th, 25000);
+    CloseHandle(th);
+    if (waited != WAIT_OBJECT_0 || !job->ok) { PdfJobRelease(job); return false; }
+
+    // Рендер приходить як PNG — далі звичайний шлях зображення.
+    g_peekImgStream = SHCreateMemStream(job->png.data(), (UINT)job->png.size());
+    Gdiplus::Bitmap* bmp = g_peekImgStream ? Gdiplus::Bitmap::FromStream(g_peekImgStream, FALSE) : nullptr;
+    if (bmp && (bmp->GetLastStatus() != Gdiplus::Ok || !bmp->GetWidth() || !bmp->GetHeight())) {
+        delete bmp;
+        bmp = nullptr;
+    }
+    if (!bmp) {
+        if (g_peekImgStream) { g_peekImgStream->Release(); g_peekImgStream = nullptr; }
+        PdfJobRelease(job);
+        return false;
+    }
+    g_peekImg = bmp;
+    g_peekInfo.imgW = (int)bmp->GetWidth();
+    g_peekInfo.imgH = (int)bmp->GetHeight();
+    pagesOut = job->pages;
+    PdfJobRelease(job);
+    return true;
+}
+
 // ---- завантаження елемента ----
 
 void PeekReset()
@@ -4714,6 +4901,14 @@ void PeekLoad(const wchar_t* path)
         swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, I.size);
         g_peekKind = PeekKind::Card;
         return;
+    }
+    if (lstrcmpiW(ext, L".pdf") == 0) {
+        UINT32 pages = 0;
+        if (PeekLoadPdf(path, pages)) {
+            swprintf(I.subtitle, 320, S(Str::PeekFmtPdf), I.imgW, I.imgH, pages, I.size);
+            g_peekKind = PeekKind::Image;
+            return;
+        }
     }
     if (IsStepExt(ext) && PeekLoadStep(path, I)) {
         swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, I.size);
