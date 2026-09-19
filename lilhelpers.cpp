@@ -72,6 +72,8 @@
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
+// CAPS-16: docx — читаємо пакет системним OPC, а не власним розпакувальником zip.
+#include <msopc.h>
 
 namespace {
 
@@ -370,6 +372,7 @@ X(PeekReformatted,    L"відформатовано",              L"reformatte
 X(PeekSvgAsCode,      L"SVG з ефектами, яких ми не малюємо — показано розмітку",  L"SVG uses effects we do not draw — markup shown") \
 X(PeekFmtStl,         L"%.0f × %.0f × %.0f · трикутників: %u · %s",   L"%.0f × %.0f × %.0f · triangles: %u · %s") \
 X(PeekFmtVideo,       L"%d × %d · %s · %s",                      L"%d × %d · %s · %s")               \
+X(PeekDocxText,       L"лише текст",                  L"text only")                                  \
 X(PeekLblType,        L"Тип",                           L"Type")                                        \
 X(PeekLblSize,        L"Розмір",                        L"Size")                                        \
 X(PeekLblItems,       L"Елементів",                     L"Items")                                       \
@@ -377,6 +380,10 @@ X(PeekLblTarget,      L"Веде до",                                         
                       L"Points to")                                                                  \
 X(PeekFmtImageAnim,   L"%d × %d · кадрів: %d · %s",                                                  \
                       L"%d × %d · frames: %d · %s")                                                  \
+X(PeekLblAuthor,      L"Автор",                    L"Author")                                        \
+X(PeekLblOrg,         L"Організація",              L"Organisation")                                  \
+X(PeekLblSchema,      L"Схема",                    L"Schema")                                        \
+X(PeekLblEntities,    L"Сутностей",                L"Entities")                                      \
 X(PeekLblModified,    L"Дата зміни",                    L"Modified")                                    \
 X(PeekLblCreated,     L"Створено",                      L"Created")                                     \
 X(PeekLblWhere,       L"Розташування",                  L"Location")                                    \
@@ -3086,6 +3093,11 @@ struct PeekInfo {
     wchar_t created[64];
     wchar_t subtitle[320];
     wchar_t target[1024];   // куди веде ярлик (.lnk/.url)
+    wchar_t author[160];    // STEP: із шапки файлу
+    wchar_t org[160];
+    wchar_t schema[200];
+    wchar_t created2[64];   // дата з шапки STEP, а не з файлової системи
+    unsigned entities;
     bool    isDir;
     int     items;       // для папки: скільки всередині (-1 = не рахували)
     bool    itemsMore;   // лічильник упёрся в стелю
@@ -4239,6 +4251,232 @@ bool PeekLoadVideo(const wchar_t* path, wchar_t* durOut, int durCch)
     return ok;
 }
 
+
+// ---- docx ----
+//
+// docx — це zip з OOXML. Свій розпакувальник (inflate) писати не довелось: у Windows
+// є готовий Packaging API (msopc) для тих самих пакетів, і це знову СИСТЕМНИЙ код,
+// а не сторонній обробник, зареєстрований для розширення.
+//
+// Показуємо ТЕКСТ, а не верстку: відтворити оформлення Word без його ж рушія
+// неможливо, а текст відповідає на питання «що це за документ». Підпис про це каже.
+
+const GUID kCLSID_OpcFactory = { 0x6b2d6ba0, 0x9f3e, 0x4f27, { 0x92, 0x0b, 0x31, 0x3c, 0xc4, 0x26, 0xa3, 0x9e } };
+const GUID kIID_IOpcFactory  = { 0x6d0b4446, 0xcd73, 0x4ab3, { 0x94, 0xf4, 0x8c, 0xcd, 0xf6, 0x11, 0x61, 0x54 } };
+
+bool OpcReadPart(const wchar_t* path, const wchar_t* partUri, std::vector<BYTE>& out)
+{
+    out.clear();
+    IOpcFactory* factory = nullptr;
+    if (FAILED(CoCreateInstance(kCLSID_OpcFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                kIID_IOpcFactory, (void**)&factory)) || !factory)
+        return false;
+
+    IStream* file = nullptr;
+    IOpcPackage* pkg = nullptr;
+    IOpcPartSet* parts = nullptr;
+    IOpcPartUri* uri = nullptr;
+    IOpcPart* part = nullptr;
+    IStream* content = nullptr;
+
+    if (SUCCEEDED(factory->CreateStreamOnFile(path, OPC_STREAM_IO_READ, nullptr, 0, &file)) && file &&
+        SUCCEEDED(factory->ReadPackageFromStream(file, OPC_READ_DEFAULT, &pkg)) && pkg &&
+        SUCCEEDED(pkg->GetPartSet(&parts)) && parts &&
+        SUCCEEDED(factory->CreatePartUri(partUri, &uri)) && uri &&
+        SUCCEEDED(parts->GetPart(uri, &part)) && part &&
+        SUCCEEDED(part->GetContentStream(&content)) && content) {
+        BYTE buf[16384];
+        for (;;) {
+            ULONG got = 0;
+            if (FAILED(content->Read(buf, sizeof(buf), &got)) || got == 0) break;
+            out.insert(out.end(), buf, buf + got);
+            if (out.size() > 32u * 1024 * 1024) break;   // документ явно не для швидкого перегляду
+        }
+    }
+    if (content) content->Release();
+    if (part) part->Release();
+    if (uri) uri->Release();
+    if (parts) parts->Release();
+    if (pkg) pkg->Release();
+    if (file) file->Release();
+    factory->Release();
+    return !out.empty();
+}
+
+void XmlUnescape(std::wstring& s)
+{
+    static const struct { const wchar_t* ent; wchar_t ch; } kEnt[] = {
+        { L"&lt;", L'<' }, { L"&gt;", L'>' }, { L"&quot;", L'"' },
+        { L"&apos;", L'\'' }, { L"&amp;", L'&' }   // амперсанд — ОСТАННІМ, інакше «&amp;lt;» зіпсується
+    };
+    for (const auto& e : kEnt) {
+        const size_t n = wcslen(e.ent);
+        size_t i = 0;
+        while ((i = s.find(e.ent, i)) != std::wstring::npos) s.replace(i, n, 1, e.ch);
+    }
+    size_t i = 0;                                   // числові посилання
+    while ((i = s.find(L"&#", i)) != std::wstring::npos) {
+        const size_t semi = s.find(L';', i);
+        if (semi == std::wstring::npos || semi - i > 10) { i += 2; continue; }
+        const bool hex = (s[i + 2] == L'x' || s[i + 2] == L'X');
+        const long code = wcstol(s.c_str() + i + (hex ? 3 : 2), nullptr, hex ? 16 : 10);
+        if (code > 0 && code < 0x10000) s.replace(i, semi - i + 1, 1, (wchar_t)code);
+        else i = semi + 1;
+    }
+}
+
+// WordprocessingML → текст: беремо вміст <w:t>, абзац закриваємо переносом.
+void DocxExtractText(const std::wstring& xml, std::wstring& out)
+{
+    out.clear();
+    out.reserve(xml.size() / 8);
+    size_t i = 0;
+    while (i < xml.size()) {
+        const size_t lt = xml.find(L'<', i);
+        if (lt == std::wstring::npos) break;
+        const size_t gt = xml.find(L'>', lt);
+        if (gt == std::wstring::npos) break;
+        const std::wstring tag = xml.substr(lt, gt - lt + 1);
+        i = gt + 1;
+
+        if (tag.compare(0, 5, L"<w:t>") == 0 || tag.compare(0, 5, L"<w:t ") == 0) {
+            const size_t close = xml.find(L"</w:t>", i);
+            if (close == std::wstring::npos) break;
+            out += xml.substr(i, close - i);
+            i = close + 6;
+        } else if (tag.compare(0, 7, L"<w:tab/") == 0 || tag.compare(0, 7, L"<w:tab ") == 0) {
+            out += L'\t';
+        } else if (tag.compare(0, 6, L"<w:br/") == 0 || tag.compare(0, 6, L"<w:br ") == 0) {
+            out += L'\n';
+        } else if (tag.compare(0, 6, L"</w:p>") == 0) {
+            out += L'\n';
+        }
+    }
+    XmlUnescape(out);
+}
+
+bool IsDocxExt(const wchar_t* ext)
+{
+    static const wchar_t* const k[] = { L".docx", L".docm" };
+    return ExtIn(ext, k, sizeof(k) / sizeof(*k));
+}
+
+bool PeekLoadDocx(const wchar_t* path)
+{
+    std::vector<BYTE> raw;
+    if (!OpcReadPart(path, L"/word/document.xml", raw)) return false;
+    std::vector<wchar_t> wide;
+    if (!DecodeText(raw.data(), raw.size(), wide, true, false) || wide.empty()) return false;
+    std::wstring xml(wide.begin(), wide.end());
+    std::wstring text;
+    DocxExtractText(xml, text);
+    if (text.empty()) return false;
+
+    std::vector<wchar_t> in(text.begin(), text.end()), crlf;
+    NormalizeNewlines(in, crlf);
+    SendMessageW(g_peekEdit, WM_SETFONT, (WPARAM)g_peekFont, FALSE);
+    SendMessageW(g_peekEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(PeekPx(6), PeekPx(12)));
+    SetWindowTextW(g_peekEdit, crlf.data());
+    return true;
+}
+
+
+// ---- STEP ----
+//
+// Намалювати STEP ми НЕ можемо і не вдаємо, що можемо: це B-rep з NURBS-поверхнями
+// й топологією, для якого потрібен рушій штибу OpenCASCADE — десятки мегабайтів,
+// тобто рівно те, чого цей застосунок уникає. Але шапка STEP — звичайний текст,
+// і з неї виходить корисна картка: хто, чим і коли зробив, за якою схемою.
+
+void StepUnquote(const char* s, size_t n, wchar_t* out, int cch)
+{
+    out[0] = 0;
+    if (!n) return;
+    std::string v(s, n);
+    // у STEP апостроф усередині рядка подвоюється
+    size_t i = 0;
+    while ((i = v.find("''", i)) != std::string::npos) { v.erase(i, 1); ++i; }
+    MultiByteToWideChar(CP_UTF8, 0, v.c_str(), (int)v.size(), out, cch - 1);
+    out[(v.size() < (size_t)cch - 1) ? v.size() : (size_t)cch - 1] = 0;
+}
+
+// Витягує i-й рядок у лапках із дужок виклику, напр. FILE_NAME('a','b',('c'),...)
+bool StepArg(const std::string& call, int index, wchar_t* out, int cch)
+{
+    out[0] = 0;
+    int depth = 0, argIdx = 0;
+    size_t i = call.find('(');
+    if (i == std::string::npos) return false;
+    ++i;
+    depth = 1;
+    size_t argStart = i;
+    for (; i < call.size() && depth > 0; ++i) {
+        const char c = call[i];
+        if (c == '\'') {                                  // пропустити рядок цілком
+            ++i;
+            while (i < call.size()) {
+                if (call[i] == '\'' && (i + 1 >= call.size() || call[i + 1] != '\'')) break;
+                if (call[i] == '\'' ) ++i;
+                ++i;
+            }
+            continue;
+        }
+        if (c == '(') ++depth;
+        else if (c == ')') --depth;
+        else if (c == ',' && depth == 1) {
+            if (argIdx == index) break;
+            ++argIdx;
+            argStart = i + 1;
+        }
+    }
+    if (argIdx != index) return false;
+    std::string arg = call.substr(argStart, i - argStart);
+    const size_t q1 = arg.find('\'');
+    if (q1 == std::string::npos) return false;
+    const size_t q2 = arg.rfind('\'');
+    if (q2 <= q1) return false;
+    StepUnquote(arg.c_str() + q1 + 1, q2 - q1 - 1, out, cch);
+    return out[0] != 0;
+}
+
+bool IsStepExt(const wchar_t* ext)
+{
+    static const wchar_t* const k[] = { L".step", L".stp" };
+    return ExtIn(ext, k, sizeof(k) / sizeof(*k));
+}
+
+bool PeekLoadStep(const wchar_t* path, PeekInfo& I)
+{
+    std::vector<BYTE> raw;
+    bool trunc = false;
+    if (!ReadFileHead(path, 64u * 1024 * 1024, raw, trunc) || raw.size() < 32) return false;
+    const std::string head((const char*)raw.data(), raw.size() < 8192 ? raw.size() : 8192);
+    if (head.find("ISO-10303-21") == std::string::npos) return false;
+
+    auto call = [&](const char* name) -> std::string {
+        const size_t a = head.find(name);
+        if (a == std::string::npos) return std::string();
+        const size_t b = head.find(';', a);
+        return head.substr(a, (b == std::string::npos ? head.size() : b) - a);
+    };
+
+    const std::string fn = call("FILE_NAME");
+    if (!fn.empty()) {
+        StepArg(fn, 1, I.created2, 64);      // мітка часу ISO: «T» посередині читати незручно
+        for (wchar_t* t = I.created2; *t; ++t)
+            if (*t == L'T') { *t = L' '; break; }
+        StepArg(fn, 2, I.author, 160);       // автор (перший у списку)
+        StepArg(fn, 3, I.org, 160);          // організація
+    }
+    const std::string fs = call("FILE_SCHEMA");
+    if (!fs.empty()) StepArg(fs, 0, I.schema, 200);
+
+    I.entities = 0;                          // рядки виду «#123=» — приблизна складність
+    for (size_t i = 0; i + 1 < raw.size(); ++i)
+        if (raw[i] == '#' && (i == 0 || raw[i - 1] == '\n' || raw[i - 1] == '\r')) ++I.entities;
+    return true;
+}
+
 // ---- завантаження елемента ----
 
 void PeekReset()
@@ -4326,6 +4564,16 @@ void PeekLoad(const wchar_t* path)
         g_peekKind = PeekKind::Card;
         return;
     }
+    if (IsStepExt(ext) && PeekLoadStep(path, I)) {
+        swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, I.size);
+        g_peekKind = PeekKind::Card;
+        return;
+    }
+    if (IsDocxExt(ext) && PeekLoadDocx(path)) {
+        swprintf(I.subtitle, 320, S(Str::PeekFmtThree), I.type, I.size, S(Str::PeekDocxText));
+        g_peekKind = PeekKind::Text;
+        return;
+    }
     if (IsVideoExt(ext)) {
         wchar_t dur[32] = {};
         if (PeekLoadVideo(path, dur, 32)) {
@@ -4377,6 +4625,22 @@ void PeekLoad(const wchar_t* path)
 }
 
 // ---- вікно перегляду: геометрія, тема, малювання ----
+
+// Скільки рядків намалює картка. Потрібно й для малювання, і ЩОБ РОЗМІР ВІКНА
+// збігався з вмістом: у STEP рядків удвічі більше, ніж у звичайного файлу.
+int PeekCardRows()
+{
+    int n = 2;                                     // тип + розмір/елементи
+    if (g_peekInfo.target[0])   ++n;
+    if (g_peekInfo.author[0])   ++n;
+    if (g_peekInfo.org[0])      ++n;
+    if (g_peekInfo.schema[0])   ++n;
+    if (g_peekInfo.entities)    ++n;
+    if (g_peekInfo.modified[0]) ++n;
+    if (g_peekInfo.created[0])  ++n;
+    if (g_peekInfo.folder[0])   ++n;
+    return n;
+}
 
 RECT PeekCloseRect(const RECT& rc)
 {
@@ -4450,8 +4714,9 @@ void PeekShow()
         w = (int)(g_peekInfo.imgW * scale + 0.5);
         h = (int)(g_peekInfo.imgH * scale + 0.5) + head;
     } else if (g_peekKind == PeekKind::Card) {
-        w = PeekPx(560);
-        h = head + PeekPx(232);
+        const int rows = PeekCardRows() * PeekPx(24);
+        w = PeekPx(580);
+        h = head + PeekPx(56) + (rows > PeekPx(96) ? rows : PeekPx(96));
     }
     if (w < PeekPx(kPeekMinW)) w = PeekPx(kPeekMinW);
     if (h < PeekPx(kPeekMinH)) h = PeekPx(kPeekMinH);
@@ -4638,12 +4903,18 @@ void PeekPaint(HDC dc, const RECT& rc)
         wchar_t items[64] = {};
         if (g_peekInfo.isDir && g_peekInfo.items >= 0)
             swprintf(items, 64, L"%d%s", g_peekInfo.items, g_peekInfo.itemsMore ? L"+" : L"");
+        wchar_t ents[32] = {};
+        if (g_peekInfo.entities) swprintf(ents, 32, L"%u", g_peekInfo.entities);
         row(Str::PeekLblType, g_peekInfo.type);
         if (g_peekInfo.isDir) row(Str::PeekLblItems, items);
         else                  row(Str::PeekLblSize,  g_peekInfo.size);
-        row(Str::PeekLblTarget, g_peekInfo.target);
+        row(Str::PeekLblTarget,   g_peekInfo.target);
+        row(Str::PeekLblAuthor,   g_peekInfo.author);
+        row(Str::PeekLblOrg,      g_peekInfo.org);
+        row(Str::PeekLblSchema,   g_peekInfo.schema);
+        row(Str::PeekLblEntities, ents);
         row(Str::PeekLblModified, g_peekInfo.modified);
-        row(Str::PeekLblCreated,  g_peekInfo.created);
+        row(Str::PeekLblCreated,  g_peekInfo.created2[0] ? g_peekInfo.created2 : g_peekInfo.created);
         row(Str::PeekLblWhere,    g_peekInfo.folder);
     }
     SelectObject(dc, old);
