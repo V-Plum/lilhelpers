@@ -1,6 +1,6 @@
 // Little Helpers (lilhelpers) — дрібні зручності для Windows 11 в одному треї:
 // розкладка по CapsLock, пошук курсора трусінням, день/ніч, темна тема вікна,
-// автооновлення.
+// перегляд файлу по пробілу, автооновлення.
 //
 // Механізм розкладки: low-level клавіатурний хук, який ковтає CapsLock (повертає 1) і
 // віддає роботу головному потоку. RegisterHotKey тут НЕ підходить, хоч і
@@ -57,6 +57,11 @@
 // CAPS-10: автооновлення — SHA-256 і перевірка ECDSA-підпису вбудованим BCrypt.
 #include <bcrypt.h>
 #include <vector>
+// CAPS-16: перегляд по пробілу — виділення Провідника (IShellWindows → IShellView → CF_HDROP), значки.
+#include <exdisp.h>
+#include <shlobj.h>
+#include <servprov.h>
+#include <windowsx.h>
 
 namespace {
 
@@ -67,6 +72,7 @@ constexpr UINT WMAPP_SHAKE        = WM_APP + 4;   // від мишачого х�
 constexpr UINT WMAPP_MAGDONE      = WM_APP + 5;   // потік анімації: зменшення завершено
 constexpr UINT WMAPP_THEMELOC     = WM_APP + 6;   // потік геолокації: lp = LocResult* (heap)
 constexpr UINT WMAPP_UPDATE       = WM_APP + 7;   // потік оновлення: lp = UpdResult* (heap)
+constexpr UINT WMAPP_PEEK         = WM_APP + 8;   // CAPS-16: від хука — пробіл/Esc у списку файлів; lp = SHELLDLL_DefView
 constexpr UINT HKW_INSTALL        = WM_APP + 20;  // до вікна потоку хука
 constexpr UINT HKW_UNINSTALL      = WM_APP + 21;
 constexpr UINT HKW_MOUSE_ON       = WM_APP + 22;
@@ -123,6 +129,8 @@ constexpr int  IDC_UPD_ROLLBACK  = 164;
 constexpr int  IDC_LANG_SYSTEM   = 170;   // порядок = LangPref
 constexpr int  IDC_LANG_UK       = 171;
 constexpr int  IDC_LANG_EN       = 172;
+// CAPS-16: вкладка «Перегляд»
+constexpr int  IDC_PEEK_ENABLE   = 180;
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -144,6 +152,7 @@ const wchar_t* kRegLang         = L"Language";       // CAPS-12: 0 систем�
 const wchar_t* kRegUpdDaily     = L"UpdateCheckDaily";  // CAPS-10
 const wchar_t* kRegUpdLast      = L"UpdateLastCheck";   // unix (DWORD)
 const wchar_t* kRegUpdNotified  = L"UpdateNotifiedTag"; // REG_SZ: про яку версію вже казали
+const wchar_t* kRegPeek         = L"Peek";              // CAPS-16: перегляд по пробілу увімкнено (1)
 
 // ---------- CAPS-12: локалізація ----------
 //
@@ -163,6 +172,7 @@ X(Empty,              L"", L"")                                                 
 X(TabLayout,          L"Розкладка",                    L"Layout")                                      \
 X(TabCursor,          L"Курсор",                       L"Cursor")                                      \
 X(TabTheme,           L"День/ніч",                     L"Day/night")                                   \
+X(TabPeek,            L"Перегляд",                     L"Preview")                                    \
 X(TabSettings,        L"Налаштування",                 L"Settings")                                    \
 /* вкладка «Розкладка» */                                                                              \
 X(LayEnable,          L"Перемикати розкладку клавіатури клавішею Caps Lock",                           \
@@ -317,6 +327,39 @@ X(UpdErrWrite,        L"Не вдалося записати нову версі
                       L"Could not write the new version.")                                             \
 X(UpdErrLaunch,       L"Не вдалося запустити нову версію — повернуто стару.",                          \
                       L"Could not start the new version — the old one was restored.")                  \
+/* вкладка «Перегляд» (CAPS-16) */                                                                    \
+X(PeekEnable,         L"Швидкий перегляд файлу по пробілу в Провіднику та на робочому столі",           \
+                      L"Quick file preview with Space in Explorer and on the desktop")                  \
+X(PeekHint,           L"Пробіл або Esc закриває. Стрілки в Провіднику гортають файли — перегляд "       \
+                      L"стежить за виділенням.",                                                        \
+                      L"Space or Esc closes it. Arrow keys in Explorer move between files; "            \
+                      L"the preview follows.")                                                          \
+X(PeekSecTypes,       L"Що показується",                L"What is shown")                               \
+X(PeekTypesImages,    L"Зображення: JPEG, PNG, GIF, BMP, TIFF, ICO — з поворотом за EXIF.",             \
+                      L"Images: JPEG, PNG, GIF, BMP, TIFF, ICO — rotated by EXIF.")                     \
+X(PeekTypesText,      L"Текст і код: txt, md, json, xml, yaml, csv, ini, log, скрипти й вихідний код "  \
+                      L"— до 1 МБ; кодування UTF-8, UTF-16 або системне ANSI.",                         \
+                      L"Text and code: txt, md, json, xml, yaml, csv, ini, log, scripts and source "    \
+                      L"— up to 1 MB; UTF-8, UTF-16 or the system ANSI page.")                          \
+X(PeekTypesOther,     L"Решта файлів і папки — картка: значок, тип, розмір, дати.",                     \
+                      L"Everything else — a card: icon, type, size, dates.")                            \
+X(PeekSecKeeps,       L"Що лишається за Провідником",   L"What stays with Explorer")                    \
+X(PeekKeeps,          L"Ctrl + пробіл і Shift + пробіл, пошук набором літер, пробіл у полях адреси, "   \
+                      L"пошуку й перейменування, а також у діалогах відкриття та збереження файлів.",   \
+                      L"Ctrl + Space and Shift + Space, type-to-search, Space in the address, search "  \
+                      L"and rename boxes, and the Open/Save file dialogs.")                             \
+/* вікно перегляду */                                                                                  \
+X(PeekFmtImage,       L"%d × %d · %s",                  L"%d × %d · %s")                                \
+X(PeekFmtTwo,         L"%s · %s",                       L"%s · %s")                                     \
+X(PeekFmtItems,       L"елементів: %d%s",               L"items: %d%s")                                 \
+X(PeekLblType,        L"Тип",                           L"Type")                                        \
+X(PeekLblSize,        L"Розмір",                        L"Size")                                        \
+X(PeekLblItems,       L"Елементів",                     L"Items")                                       \
+X(PeekLblModified,    L"Дата зміни",                    L"Modified")                                    \
+X(PeekLblCreated,     L"Створено",                      L"Created")                                     \
+X(PeekLblWhere,       L"Розташування",                  L"Location")                                    \
+X(PeekEmpty,          L"(порожній файл)",               L"(empty file)")                                \
+X(PeekTruncated,      L"… показано перший 1 МБ файлу",  L"… first 1 MB shown")                          \
 /* повідомлення й меню */                                                                              \
 X(MsgHookFailed,      L"Не вдалося перехопити клавішу CapsLock.",                                      \
                       L"Could not intercept the Caps Lock key.")                                       \
@@ -328,8 +371,8 @@ X(MsgRollbackConfirm, L"Повернути попередню версію і п
                       L"Roll back to the previous version and restart Little Helpers?")                \
 X(MenuSettings,       L"Налаштування…",                 L"Settings…")                                  \
 X(MenuExit,           L"Вихід",                         L"Exit")                                       \
-X(TaskDesc,           L"Little Helpers — розкладка по Caps Lock, пошук курсора, день/ніч",             \
-                      L"Little Helpers — Caps Lock layout switching, cursor finder, day/night")
+X(TaskDesc,           L"Little Helpers — розкладка по Caps Lock, пошук курсора, день/ніч, перегляд по пробілу", \
+                      L"Little Helpers — Caps Lock layout switching, cursor finder, day/night, space-bar preview")
 
 #define LH_ENUM(name, uk, en) name,
 #define LH_UK(name, uk, en)   uk,
@@ -368,7 +411,8 @@ void RememberLoc(HWND h, Str id)
         g_locCtrls[g_locCtrlsN++] = { h, id };
 }
 
-const Str kTabTitles[4] = { Str::TabLayout, Str::TabCursor, Str::TabTheme, Str::TabSettings };
+constexpr int kTabCount = 5;
+const Str kTabTitles[kTabCount] = { Str::TabLayout, Str::TabCursor, Str::TabTheme, Str::TabPeek, Str::TabSettings };
 
 // Два способи перехопити клавішу. Основний тримає Caps Lock вимкненим, але це
 // клавіатурний хук, який деякі захисні програми не люблять; запасний працює
@@ -395,6 +439,7 @@ HWND  g_passthroughCheckbox = nullptr;
 bool  g_layoutOn = true;
 HWND  g_layoutCheckbox = nullptr;
 HWND  g_pageSettings[32] = {};  int g_pageSettingsN = 0;
+HWND  g_pagePeek[24]     = {};  int g_pagePeekN = 0;   // CAPS-16
 
 // ---------- CAPS-8: тема самого вікна ----------
 //
@@ -476,6 +521,15 @@ HHOOK  g_hook = nullptr;
 HHOOK  g_mouseHook = nullptr;
 HWND   g_mainWnd = nullptr;
 bool   g_capsDown = false;  // щоб автоповтор не перемикав розкладку нескінченно
+
+// CAPS-16: перегляд по пробілу — стан, який читає колбек хука
+volatile bool g_peekOn     = true;      // налаштування (чекбокс), збереж. у реєстрі
+volatile bool g_peekShown  = false;     // вікно перегляду відкрите (пише UI-потік)
+volatile HWND g_peekRoot   = nullptr;   // верхнє вікно Провідника/стола, з якого відкрито
+volatile bool g_kbHookCaps = false;     // хук обслуговує Caps Lock (розкладка в режимі «Основний»)
+UINT  g_peekSwallowedVk = 0;            // клавіша, чий keydown ми з'їли — з'їсти і keyup
+DWORD g_lastTypeTick    = 0;            // остання «друкована» клавіша: пошук набором у Провіднику
+constexpr ULONG_PTR kInjectMark = 0x4C48504B;   // 'LHPK': наш SendInput, хук пропускає як є
 
 // ---------- CAPS-7: день/ніч — автоматична світла/темна тема Windows ----------
 //
@@ -719,6 +773,78 @@ bool IsRemoteWindow(HWND w)
 
 bool RemotePassthroughActive() { return g_passthrough && g_inRemote; }
 
+// ---------- CAPS-16: пробіл у списку файлів (частина хука) ----------
+//
+// Виконується в колбеку хука — лише GetClassName / GetParent / GetGUIThreadInfo,
+// без COM і без нічого, що може заблокуватись (LowLevelHooksTimeout).
+
+// Список файлів, сфокусований УСЕРЕДИНІ цього вікна (Провідник або робочий стіл);
+// повертає його SHELLDLL_DefView. Адресний рядок, пошук, перейменування, дерево
+// тек і діалоги відкриття/збереження сюди не потрапляють — там пробіл не наш.
+// Фокус беремо в потока самого вікна, а не глобальний: вкладки Windows 11 живуть
+// в одному потоці, тож так видно саме активну вкладку потрібного вікна.
+HWND ShellListIn(HWND top)
+{
+    if (!top) return nullptr;
+    wchar_t cls[64] = {};
+    GetClassNameW(top, cls, 64);
+    if (lstrcmpW(cls, L"CabinetWClass") && lstrcmpW(cls, L"Progman") && lstrcmpW(cls, L"WorkerW"))
+        return nullptr;
+    GUITHREADINFO gti = { sizeof(gti) };
+    if (!GetGUIThreadInfo(GetWindowThreadProcessId(top, nullptr), &gti) || !gti.hwndFocus)
+        return nullptr;
+    GetClassNameW(gti.hwndFocus, cls, 64);
+    if (lstrcmpW(cls, L"DirectUIHWND") && lstrcmpW(cls, L"SysListView32"))
+        return nullptr;
+    for (HWND p = GetParent(gti.hwndFocus); p && p != top; p = GetParent(p)) {
+        GetClassNameW(p, cls, 64);
+        if (!lstrcmpW(cls, L"SHELLDLL_DefView")) return p;
+    }
+    return nullptr;
+}
+
+// Те саме для активного вікна — цим користується хук, вирішуючи, чи пробіл наш.
+HWND ShellListFocused() { return ShellListIn(GetForegroundWindow()); }
+
+// Клавіші, з яких Провідник складає пошук набором: пробіл одразу після них — його.
+bool IsTypeAheadKey(DWORD vk)
+{
+    return (vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z') ||
+           (vk >= VK_NUMPAD0 && vk <= VK_DIVIDE) || (vk >= VK_OEM_1 && vk <= VK_OEM_8);
+}
+
+LRESULT PeekKeyboardHook(int nCode, WPARAM wParam, LPARAM lParam)
+{
+    const KBDLLHOOKSTRUCT* k = (const KBDLLHOOKSTRUCT*)lParam;
+    const bool down = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
+    if (k->vkCode != VK_SPACE && k->vkCode != VK_ESCAPE) {
+        if (down && IsTypeAheadKey(k->vkCode)) g_lastTypeTick = GetTickCount();
+        return CallNextHookEx(g_hook, nCode, wParam, lParam);
+    }
+    // Наш власний пробіл, повернутий Провіднику, проходить наскрізь — і саме ТУТ,
+    // до перевірки автоповтору нижче: інакше ми з'їли б його як «та сама клавіша
+    // ще тримається», і Провідник не отримав би нічого взагалі.
+    if (k->dwExtraInfo == kInjectMark)
+        return CallNextHookEx(g_hook, nCode, wParam, lParam);
+    // Відпускання клавіші, чиє натискання ми з'їли, — теж наше: інакше Провідник
+    // побачив би keyup нізвідки.
+    if (!down) {
+        if (g_peekSwallowedVk == k->vkCode) { g_peekSwallowedVk = 0; return 1; }
+        return CallNextHookEx(g_hook, nCode, wParam, lParam);
+    }
+    if (g_peekSwallowedVk == k->vkCode) return 1;   // автоповтор, поки тримають
+    const bool ours = g_peekOn &&
+        (k->vkCode == VK_SPACE || g_peekShown) &&
+        !((GetAsyncKeyState(VK_CONTROL) | GetAsyncKeyState(VK_MENU) | GetAsyncKeyState(VK_SHIFT) |
+           GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000);
+    HWND view = ours ? ShellListFocused() : nullptr;
+    if (!view || (k->vkCode == VK_SPACE && !g_peekShown && GetTickCount() - g_lastTypeTick < 1000))
+        return CallNextHookEx(g_hook, nCode, wParam, lParam);
+    g_peekSwallowedVk = k->vkCode;
+    PostMessageW(g_mainWnd, WMAPP_PEEK, k->vkCode, (LPARAM)view);
+    return 1;
+}
+
 // ---------- перехоплення клавіші ----------
 //
 // Колбек свідомо мінімальний: усе, що складніше за PostMessage, ризикує не
@@ -731,6 +857,8 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 
     const KBDLLHOOKSTRUCT* k = (const KBDLLHOOKSTRUCT*)lParam;
     if (k->vkCode != VK_CAPITAL)
+        return PeekKeyboardHook(nCode, wParam, lParam);   // CAPS-16
+    if (!g_kbHookCaps)   // хук стоїть заради перегляду, Caps Lock — не наш
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
 
     // CAPS-1: у вікні віддаленої/віртуальної машини не перехоплюємо — Caps іде
@@ -974,7 +1102,8 @@ bool SetHotkey(bool want)
 
 void StopInterception()
 {
-    if (g_hookWnd)
+    g_kbHookCaps = false;
+    if (g_hookWnd && !g_peekOn)   // CAPS-16: хук може бути потрібен перегляду
         SendMessageW(g_hookWnd, HKW_UNINSTALL, 0, 0);  // на потоці хука
     SetHotkey(false);
     g_interceptionOn = false;
@@ -985,7 +1114,7 @@ bool StartInterception(Mode mode)
 {
     if (mode == Mode::Hook) {
         bool ok = g_hookWnd && SendMessageW(g_hookWnd, HKW_INSTALL, 0, 0) != 0;
-        if (ok) g_interceptionOn = true;
+        if (ok) { g_interceptionOn = true; g_kbHookCaps = true; }
         return ok;
     }
     // Hotkey: якщо ми зараз у remote-вікні з увімкненим пропуском — свідомо НЕ
@@ -1011,6 +1140,7 @@ void ApplyRemoteContext()
 }
 
 void ThemeTick();   // CAPS-7, визначення нижче
+void PeekOnForeground();   // CAPS-16, нижче
 
 // Зміна активного вікна: оновлюємо ознаку remote і підлаштовуємо перехоплення.
 // Викликається з WinEvent-колбека на головному потоці — тому RegisterHotKey
@@ -1020,6 +1150,7 @@ void OnForegroundChanged()
     g_inRemote = IsRemoteWindow(GetForegroundWindow());
     ApplyRemoteContext();
     if (g_thPending) ThemeTick();   // CAPS-7: повноекранна програма могла закритись
+    PeekOnForeground();             // CAPS-16: перегляд живе лише при тому ж Провіднику
 }
 
 void CALLBACK WinEventProc(HWINEVENTHOOK, DWORD event, HWND, LONG, LONG, DWORD, DWORD)
@@ -2377,6 +2508,7 @@ void WaitForPreviousInstance()
 // ---- CAPS-8: темний режим — власне малювання ----
 
 bool ThemeIsDark();        // CAPS-7, нижче
+void PeekApplyTheme();     // CAPS-16, нижче
 bool IsPageControl(HWND c); // нижче, у розділі вкладок
 
 bool ComputeDark()
@@ -2539,6 +2671,7 @@ void ApplyWindowTheme(bool force)
     EnumChildWindows(g_mainWnd, ThemeChildProc, 0);
     RedrawWindow(g_mainWnd, nullptr, nullptr,
                  RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME | RDW_UPDATENOW);
+    PeekApplyTheme();   // CAPS-16
 }
 
 LRESULT CALLBACK TabSubclassProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR)
@@ -2606,6 +2739,7 @@ bool IsPageControl(HWND c)
     for (int i = 0; i < g_pageThemeN; ++i)  if (g_pageTheme[i]  == c) return true;
     for (int i = 0; i < g_thAdvN; ++i)      if (g_thAdv[i]      == c) return true;
     for (int i = 0; i < g_pageSettingsN; ++i) if (g_pageSettings[i] == c) return true;
+    for (int i = 0; i < g_pagePeekN; ++i)     if (g_pagePeek[i]     == c) return true;
     return false;
 }
 
@@ -2625,7 +2759,8 @@ void SelectTab(int index)
     ShowGroup(g_advCtrls, g_advN, index == 1 && g_advVisible);
     ShowGroup(g_pageTheme, g_pageThemeN, index == 2);
     ShowGroup(g_thAdv, g_thAdvN, index == 2 && g_thAdvVisible);
-    ShowGroup(g_pageSettings, g_pageSettingsN, index == 3);
+    ShowGroup(g_pagePeek, g_pagePeekN, index == 3);          // CAPS-16
+    ShowGroup(g_pageSettings, g_pageSettingsN, index == 4);
 }
 
 // CAPS-12: обидві кнопки «Детально» несуть ще й стрілку стану, тож їхній підпис
@@ -2833,6 +2968,963 @@ void CommitAdvanced()
     RegSaveInt(kRegCursorShrink,   g_cur.shrinkMs);
 }
 
+// ---------- CAPS-16: швидкий перегляд файлу по пробілу ----------
+//
+// Пробіл на виділеному файлі в Провіднику чи на робочому столі відкриває вікно
+// перегляду (як Quick Look у macOS чи Peek у PowerToys); ще раз пробіл або Esc
+// закриває. Вікно НЕ забирає фокус (WS_EX_NOACTIVATE): Провідник лишається
+// активним, стрілки гортають файли як завжди, а перегляд стежить за виділенням
+// і підхоплює новий файл. Це головна відмінність від Peek, який робить власне
+// гортання; тут виділення Провідника і те, що на екрані, — одне й те саме.
+//
+// Хук ковтає пробіл ЛИШЕ коли фокус у самому списку файлів (DirectUIHWND або
+// SysListView32 усередині SHELLDLL_DefView у вікні CabinetWClass / Progman /
+// WorkerW). У полі перейменування, пошуку чи адресному рядку пробіл іде як є.
+// Якщо виділення порожнє, пробіл повертається Провіднику (SendInput з міткою,
+// яку хук пропускає) — його рідна поведінка не губиться. Ctrl/Shift/Alt/Win +
+// пробіл не чіпаємо; літера, натиснута менш ніж секунду тому, — це пошук
+// набором у Провіднику, і пробіл тоді теж його.
+//
+// Рендерери власні: зображення через GDI+ (уже в збірці заради логотипа), текст
+// у полі EDIT, для решти — картка з відомостями. Системні обробники прев'ю
+// (IPreviewHandler) сюди свідомо НЕ вантажаться: процес елевейтований
+// (requireAdministrator), і чужий COM-код у ньому — дірка. Значки й назви типів
+// беруться з SHGFI_USEFILEATTRIBUTES, тобто з реєстру за розширенням, без
+// виклику обробників конкретного файлу — з тієї ж причини. Це етап 2 через
+// окремий непривілейований процес (decisions 2026-09-20).
+
+// GUID-и оболонки — свої копії з тієї ж причини, що й у Location API вище:
+// у MSVC вони в uuid.lib, у MinGW — у libuuid, і набір не завжди повний.
+const GUID kCLSID_ShellWindows   = { 0x9ba05972, 0xf6a8, 0x11cf, { 0xa4, 0x42, 0x00, 0xa0, 0xc9, 0x0a, 0x8f, 0x39 } };
+const GUID kIID_IShellWindows    = { 0x85cb6900, 0x4d95, 0x11cf, { 0x96, 0x0c, 0x00, 0x80, 0xc7, 0xf4, 0xee, 0x85 } };
+const GUID kIID_IWebBrowserApp   = { 0x0002df05, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+const GUID kIID_IServiceProvider = { 0x6d5140c1, 0x7436, 0x11ce, { 0x80, 0x34, 0x00, 0xaa, 0x00, 0x60, 0x09, 0xfa } };
+const GUID kSID_STopLevelBrowser = { 0x4c96be40, 0x915c, 0x11cf, { 0x99, 0xd3, 0x00, 0xaa, 0x00, 0x4a, 0xe8, 0x37 } };
+const GUID kIID_IShellBrowser    = { 0x000214e2, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+const GUID kIID_IDataObject      = { 0x0000010e, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+const GUID kIID_IImageList       = { 0x46eb5926, 0x582e, 0x4017, { 0x9f, 0xdf, 0xe8, 0x99, 0x8d, 0xaa, 0x09, 0x50 } };
+
+constexpr int    kPeekHead    = 48;               // смуга з назвою файлу, лог. px
+constexpr int    kPeekMinW    = 400, kPeekMinH = 260;
+constexpr size_t kPeekTextMax = 1024 * 1024;      // текст показуємо до 1 МБ
+constexpr UINT   TIMER_PEEK_FOLLOW = 1;           // на вікні перегляду: стежити за виділенням
+
+HFONT CreateUIFont(int percent, int weight);      // визначення нижче, після WndProc
+
+enum class PeekKind { None, Image, Text, Card };
+
+struct PeekInfo {
+    wchar_t name[MAX_PATH];
+    wchar_t folder[MAX_PATH];
+    wchar_t type[128];
+    wchar_t size[64];
+    wchar_t modified[64];
+    wchar_t created[64];
+    wchar_t subtitle[320];
+    bool    isDir;
+    int     items;       // для папки: скільки всередині (-1 = не рахували)
+    bool    itemsMore;   // лічильник упёрся в стелю
+    int     imgW, imgH;
+};
+
+HWND     g_peekWnd  = nullptr;
+HWND     g_peekEdit = nullptr;
+HWND     g_peekView = nullptr;      // SHELLDLL_DefView, за яким стежимо
+IShellView* g_peekSv = nullptr;     // його ж вигляд (проксі в explorer.exe) — щоб не шукати щотика
+wchar_t  g_peekPath[MAX_PATH] = {};
+PeekKind g_peekKind = PeekKind::None;
+PeekInfo g_peekInfo = {};
+Gdiplus::Bitmap* g_peekImg    = nullptr;   // оригінал (уже повернутий за EXIF)
+Gdiplus::Bitmap* g_peekScaled = nullptr;   // під поточний розмір вікна
+HICON    g_peekIconBig = nullptr, g_peekIconSmall = nullptr;
+HFONT    g_peekFont = nullptr, g_peekFontBold = nullptr, g_peekFontMono = nullptr;
+bool     g_peekCloseHot = false;
+bool     g_peekTracking = false;
+bool     g_peekDark     = false;
+HWND     g_peekEnableCb = nullptr;
+
+int PeekPx(int v) { return MulDiv(v, (int)GetDpiForSystem(), 96); }
+
+// Наш власний пробіл, повернутий Провіднику: хук упізнає його за міткою.
+void ReinjectSpace()
+{
+    INPUT in[2] = {};
+    for (INPUT& i : in) {
+        i.type = INPUT_KEYBOARD;
+        i.ki.wVk = VK_SPACE;
+        i.ki.wScan = (WORD)MapVirtualKeyW(VK_SPACE, MAPVK_VK_TO_VSC);
+        i.ki.dwExtraInfo = kInjectMark;
+    }
+    in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(2, in, sizeof(INPUT));
+}
+
+// ---- виділення Провідника через IShellWindows ----
+//
+// Усе це — проксі до об'єктів у explorer.exe, тож працюють лише інтерфейси з
+// міжпроцесним маршалінгом: IShellBrowser, IShellView, IDataObject. IFolderView2
+// (з його зручним GetSelection) проксі-стаба НЕ має — QueryInterface через
+// проксі мовчки повертає E_NOINTERFACE (перевірено 20.09.2026). Тому виділення
+// читаємо як CF_HDROP із IDataObject вигляду — так само роблять drag-and-drop
+// і буфер обміну, і це працює для будь-якого файлового елемента.
+
+// Перший виділений елемент вигляду як шлях у файловій системі. Не-файлові
+// елементи («Цей ПК», бібліотеки) CF_HDROP не мають — тоді показувати нічого.
+bool PeekReadSelection(IShellView* sv, wchar_t* out, size_t cch)
+{
+    out[0] = 0;
+    IDataObject* dobj = nullptr;
+    if (FAILED(sv->GetItemObject(SVGIO_SELECTION, kIID_IDataObject, (void**)&dobj)) || !dobj) return false;
+    FORMATETC fe = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+    STGMEDIUM sm = {};
+    if (SUCCEEDED(dobj->GetData(&fe, &sm)) && sm.hGlobal) {
+        if (HDROP drop = (HDROP)GlobalLock(sm.hGlobal)) {
+            DragQueryFileW(drop, 0, out, (UINT)cch);
+            GlobalUnlock(sm.hGlobal);
+        }
+        ReleaseStgMedium(&sm);
+    }
+    dobj->Release();
+    return out[0] != 0;
+}
+
+// Вигляд, чиє вікно — саме цей SHELLDLL_DefView. У Windows 11 вкладки одного
+// вікна Провідника — окремі записи IShellWindows з тим самим HWND, тож збіг
+// верхнього вікна недостатній: звіряємо вікно активного вигляду. Повертає
+// вигляд з утриманим посиланням.
+IShellView* PeekFindShellView(HWND view)
+{
+    IShellWindows* sw = nullptr;
+    if (FAILED(CoCreateInstance(kCLSID_ShellWindows, nullptr, CLSCTX_ALL,
+                                kIID_IShellWindows, (void**)&sw)) || !sw)
+        return nullptr;
+
+    const HWND root = GetAncestor(view, GA_ROOT);
+    wchar_t cls[32] = {};
+    GetClassNameW(root, cls, 32);
+    const bool desktop = lstrcmpW(cls, L"CabinetWClass") != 0;
+
+    IShellView* found = nullptr;
+    auto probe = [&](IDispatch* disp) {
+        IServiceProvider* sp = nullptr;
+        if (FAILED(disp->QueryInterface(kIID_IServiceProvider, (void**)&sp)) || !sp) return;
+        IShellBrowser* sb = nullptr;
+        if (SUCCEEDED(sp->QueryService(kSID_STopLevelBrowser, kIID_IShellBrowser, (void**)&sb)) && sb) {
+            IShellView* sv = nullptr;
+            if (SUCCEEDED(sb->QueryActiveShellView(&sv)) && sv) {
+                HWND svWnd = nullptr;
+                sv->GetWindow(&svWnd);
+                if (svWnd == view) found = sv;   // посилання переходить до того, хто шукав
+                else               sv->Release();
+            }
+            sb->Release();
+        }
+        sp->Release();
+    };
+
+    if (desktop) {
+        VARIANT loc, empty;   // для SWC_DESKTOP обидва аргументи ігноруються
+        VariantInit(&loc);
+        VariantInit(&empty);
+        long hw = 0;
+        IDispatch* disp = nullptr;
+        if (SUCCEEDED(sw->FindWindowSW(&loc, &empty, SWC_DESKTOP, &hw, SWFO_NEEDDISPATCH, &disp)) && disp) {
+            probe(disp);
+            disp->Release();
+        }
+    } else {
+        long n = 0;
+        sw->get_Count(&n);
+        for (long i = 0; i < n && !found; ++i) {
+            VARIANT v;
+            VariantInit(&v);
+            v.vt = VT_I4;
+            v.lVal = i;
+            IDispatch* disp = nullptr;
+            if (FAILED(sw->Item(v, &disp)) || !disp) continue;
+            IWebBrowserApp* wb = nullptr;
+            if (SUCCEEDED(disp->QueryInterface(kIID_IWebBrowserApp, (void**)&wb)) && wb) {
+                SHANDLE_PTR h = 0;
+                wb->get_HWND(&h);
+                if ((HWND)h == root) probe(disp);
+                wb->Release();
+            }
+            disp->Release();
+        }
+    }
+    sw->Release();
+    return found;
+}
+
+// ---- відомості про файл ----
+
+void FormatFileTime(const FILETIME& ft, wchar_t* buf, int n)
+{
+    buf[0] = 0;
+    SYSTEMTIME utc = {}, local = {};
+    if (!FileTimeToSystemTime(&ft, &utc) || !SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local)) return;
+    wchar_t d[48] = {}, t[32] = {};
+    GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_SHORTDATE, &local, nullptr, d, 48, nullptr);
+    GetTimeFormatEx(LOCALE_NAME_USER_DEFAULT, TIME_NOSECONDS, &local, nullptr, t, 32);
+    swprintf(buf, n, L"%s %s", d, t);
+}
+
+bool ExtIn(const wchar_t* ext, const wchar_t* const* list, size_t n)
+{
+    for (size_t i = 0; i < n; ++i)
+        if (lstrcmpiW(ext, list[i]) == 0) return true;
+    return false;
+}
+
+bool IsImageExt(const wchar_t* ext)
+{
+    static const wchar_t* const k[] = { L".jpg", L".jpeg", L".jpe", L".jfif", L".png", L".gif",
+                                        L".bmp", L".dib", L".tif", L".tiff", L".ico", L".emf", L".wmf" };
+    return ExtIn(ext, k, sizeof(k) / sizeof(*k));
+}
+
+bool IsTextExt(const wchar_t* ext)
+{
+    static const wchar_t* const k[] = {
+        L".txt", L".md", L".markdown", L".log", L".ini", L".cfg", L".conf", L".json", L".xml",
+        L".yaml", L".yml", L".csv", L".tsv", L".nfo", L".srt", L".vtt", L".diff", L".patch",
+        L".py", L".js", L".ts", L".jsx", L".tsx", L".c", L".cc", L".cpp", L".h", L".hpp", L".cs",
+        L".java", L".kt", L".go", L".rs", L".rb", L".php", L".lua", L".ps1", L".psm1", L".bat",
+        L".cmd", L".sh", L".sql", L".html", L".htm", L".css", L".scss", L".reg", L".toml",
+        L".gitignore", L".gitattributes", L".editorconfig", L".env", L".properties",
+        L".manifest", L".rc", L".svg", L".jsx" };
+    return ExtIn(ext, k, sizeof(k) / sizeof(*k));
+}
+
+// Проза читається пропорційним шрифтом, код — моноширинним.
+bool IsProseExt(const wchar_t* ext)
+{
+    static const wchar_t* const k[] = { L".txt", L".md", L".markdown", L".log", L".nfo", L".srt", L".vtt" };
+    return ExtIn(ext, k, sizeof(k) / sizeof(*k));
+}
+
+// ---- текст: читання й розкодування ----
+
+bool DecodeUtf8(const BYTE* b, size_t n, std::vector<wchar_t>& w, bool strict, bool truncated)
+{
+    // Обрізаний файл може закінчуватись серединою багатобайтового символу —
+    // це не привід вважати весь файл не-UTF-8.
+    if (truncated) {
+        size_t k = 0;
+        while (n > 0 && (b[n - 1] & 0xC0) == 0x80 && k++ < 3) --n;
+        if (n > 0 && b[n - 1] >= 0xC0) --n;
+    }
+    if (n == 0) { w.clear(); return true; }
+    const DWORD flags = strict ? MB_ERR_INVALID_CHARS : 0;
+    const int len = MultiByteToWideChar(CP_UTF8, flags, (LPCSTR)b, (int)n, nullptr, 0);
+    if (len <= 0) return false;
+    w.resize((size_t)len);
+    MultiByteToWideChar(CP_UTF8, flags, (LPCSTR)b, (int)n, w.data(), len);
+    return true;
+}
+
+void DecodeUtf16(const BYTE* b, size_t n, std::vector<wchar_t>& w, bool bigEndian)
+{
+    w.resize(n / 2);
+    for (size_t i = 0; i < n / 2; ++i)
+        w[i] = bigEndian ? (wchar_t)((b[2 * i] << 8) | b[2 * i + 1])
+                         : (wchar_t)(b[2 * i] | (b[2 * i + 1] << 8));
+}
+
+void DecodeAnsi(const BYTE* b, size_t n, std::vector<wchar_t>& w)
+{
+    const int len = n ? MultiByteToWideChar(CP_ACP, 0, (LPCSTR)b, (int)n, nullptr, 0) : 0;
+    w.resize((size_t)(len > 0 ? len : 0));
+    if (len > 0) MultiByteToWideChar(CP_ACP, 0, (LPCSTR)b, (int)n, w.data(), len);
+}
+
+// BOM → відповідне кодування; без BOM — сувора перевірка UTF-8, далі UTF-16LE
+// (видає себе NUL-ами в непарних байтах), і лише для відомих текстових
+// розширень — системне ANSI. NUL-и інакше означають бінарний файл.
+bool DecodeText(const BYTE* b, size_t n, std::vector<wchar_t>& w, bool allowAnsi, bool truncated)
+{
+    if (n >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF) return DecodeUtf8(b + 3, n - 3, w, false, truncated);
+    if (n >= 2 && b[0] == 0xFF && b[1] == 0xFE) { DecodeUtf16(b + 2, n - 2, w, false); return true; }
+    if (n >= 2 && b[0] == 0xFE && b[1] == 0xFF) { DecodeUtf16(b + 2, n - 2, w, true);  return true; }
+
+    const size_t probe = n < 2048 ? n : 2048;
+    size_t nul = 0, nulOdd = 0;
+    for (size_t i = 0; i < probe; ++i)
+        if (!b[i]) { ++nul; if (i & 1) ++nulOdd; }
+    if (nul) {
+        if (nulOdd * 10 >= probe * 3 && nulOdd * 10 >= nul * 9) { DecodeUtf16(b, n, w, false); return true; }
+        return false;
+    }
+    if (DecodeUtf8(b, n, w, true, truncated)) return true;
+    if (!allowAnsi) return false;
+    DecodeAnsi(b, n, w);
+    return true;
+}
+
+bool ReadFileHead(const wchar_t* path, size_t maxBytes, std::vector<BYTE>& out, bool& truncated)
+{
+    truncated = false;
+    HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER size = {};
+    GetFileSizeEx(h, &size);
+    size_t want = (size.QuadPart > (LONGLONG)maxBytes) ? maxBytes : (size_t)size.QuadPart;
+    truncated = size.QuadPart > (LONGLONG)maxBytes;
+    out.resize(want);
+    DWORD got = 0;
+    const bool ok = want == 0 || (ReadFile(h, out.data(), (DWORD)want, &got, nullptr) && got == want);
+    CloseHandle(h);
+    if (!ok) out.clear();
+    return ok;
+}
+
+// Файл без відомого розширення вважаємо текстом лише якщо його початок —
+// чистий UTF-8/UTF-16 без NUL-ів; ANSI сюди не пускаємо, щоб не показувати
+// бінарники як «текст» у кракозябрах.
+bool SniffText(const wchar_t* path)
+{
+    std::vector<BYTE> head;
+    bool trunc = false;
+    if (!ReadFileHead(path, 4096, head, trunc)) return false;
+    std::vector<wchar_t> w;
+    return DecodeText(head.data(), head.size(), w, false, trunc);
+}
+
+// EDIT розуміє лише CRLF: самотні LF та CR стають CRLF, NUL-и — пробілами.
+void NormalizeNewlines(const std::vector<wchar_t>& in, std::vector<wchar_t>& out)
+{
+    out.clear();
+    out.reserve(in.size() + in.size() / 16 + 2);
+    for (size_t i = 0; i < in.size(); ++i) {
+        const wchar_t c = in[i];
+        if (c == L'\r') {
+            out.push_back(L'\r'); out.push_back(L'\n');
+            if (i + 1 < in.size() && in[i + 1] == L'\n') ++i;
+        } else if (c == L'\n') {
+            out.push_back(L'\r'); out.push_back(L'\n');
+        } else {
+            out.push_back(c ? c : L' ');
+        }
+    }
+    out.push_back(0);
+}
+
+bool PeekLoadText(const wchar_t* path, const wchar_t* ext)
+{
+    std::vector<BYTE> raw;
+    bool trunc = false;
+    if (!ReadFileHead(path, kPeekTextMax, raw, trunc)) return false;
+    std::vector<wchar_t> text;
+    if (raw.empty()) {
+        text.assign(S(Str::PeekEmpty), S(Str::PeekEmpty) + lstrlenW(S(Str::PeekEmpty)));
+    } else if (!DecodeText(raw.data(), raw.size(), text, true, trunc)) {
+        return false;   // бінарник із текстовим розширенням — краще картка
+    }
+    if (trunc) {
+        const wchar_t* note = S(Str::PeekTruncated);
+        text.push_back(L'\n'); text.push_back(L'\n');
+        text.insert(text.end(), note, note + lstrlenW(note));
+    }
+    std::vector<wchar_t> crlf;
+    NormalizeNewlines(text, crlf);
+    SendMessageW(g_peekEdit, WM_SETFONT, (WPARAM)(IsProseExt(ext) ? g_peekFont : g_peekFontMono), FALSE);
+    // WM_SETFONT скидає поля EDIT до типових — повертаємо після кожної зміни шрифту
+    SendMessageW(g_peekEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(PeekPx(6), PeekPx(12)));
+    SetWindowTextW(g_peekEdit, crlf.data());
+    return true;
+}
+
+// ---- зображення ----
+
+bool PeekLoadImage(const wchar_t* path)
+{
+    // FromFile тримає файл відкритим, поки живе Image, — перейменувати чи видалити
+    // файл, що на перегляді, було б не можна. Тому клонуємо в незалежний бітмап
+    // (це ж і форсує декодування) і одразу відпускаємо оригінал.
+    Gdiplus::Bitmap* src = Gdiplus::Bitmap::FromFile(path, FALSE);
+    if (!src) return false;
+    Gdiplus::Bitmap* bmp = nullptr;
+    if (src->GetLastStatus() == Gdiplus::Ok && src->GetWidth() > 0 && src->GetHeight() > 0) {
+        bmp = src->Clone(0, 0, (INT)src->GetWidth(), (INT)src->GetHeight(), PixelFormat32bppPARGB);
+        if (bmp && bmp->GetLastStatus() != Gdiplus::Ok) { delete bmp; bmp = nullptr; }
+    }
+    delete src;
+    if (!bmp) return false;
+
+    // Фото з телефона: орієнтація лежить в EXIF, самі пікселі — як зняв сенсор.
+    const UINT sz = bmp->GetPropertyItemSize(PropertyTagOrientation);
+    if (sz) {
+        Gdiplus::PropertyItem* pi = (Gdiplus::PropertyItem*)malloc(sz);
+        if (pi && bmp->GetPropertyItem(PropertyTagOrientation, sz, pi) == Gdiplus::Ok &&
+            pi->type == PropertyTagTypeShort && pi->value) {
+            switch (*(const WORD*)pi->value) {
+            case 2: bmp->RotateFlip(Gdiplus::RotateNoneFlipX);  break;
+            case 3: bmp->RotateFlip(Gdiplus::Rotate180FlipNone); break;
+            case 4: bmp->RotateFlip(Gdiplus::RotateNoneFlipY);  break;
+            case 5: bmp->RotateFlip(Gdiplus::Rotate90FlipX);    break;
+            case 6: bmp->RotateFlip(Gdiplus::Rotate90FlipNone); break;
+            case 7: bmp->RotateFlip(Gdiplus::Rotate270FlipX);   break;
+            case 8: bmp->RotateFlip(Gdiplus::Rotate270FlipNone); break;
+            }
+        }
+        free(pi);
+    }
+    g_peekImg = bmp;
+    g_peekInfo.imgW = (int)bmp->GetWidth();
+    g_peekInfo.imgH = (int)bmp->GetHeight();
+    return true;
+}
+
+// ---- завантаження елемента ----
+
+void PeekReset()
+{
+    delete g_peekScaled; g_peekScaled = nullptr;
+    delete g_peekImg;    g_peekImg = nullptr;
+    if (g_peekIconBig)   { DestroyIcon(g_peekIconBig);   g_peekIconBig = nullptr; }
+    if (g_peekIconSmall) { DestroyIcon(g_peekIconSmall); g_peekIconSmall = nullptr; }
+    g_peekKind = PeekKind::None;
+    ZeroMemory(&g_peekInfo, sizeof(g_peekInfo));
+}
+
+HICON SysIconByIndex(int shil, int index)
+{
+    HIMAGELIST il = nullptr;
+    if (FAILED(SHGetImageList(shil, kIID_IImageList, (void**)&il)) || !il) return nullptr;
+    HICON ico = ImageList_GetIcon(il, index, ILD_TRANSPARENT);
+    ((IUnknown*)il)->Release();
+    return ico;
+}
+
+void PeekLoad(const wchar_t* path)
+{
+    PeekReset();
+    lstrcpynW(g_peekPath, path, MAX_PATH);
+    PeekInfo& I = g_peekInfo;
+
+    WIN32_FILE_ATTRIBUTE_DATA fa = {};
+    const bool haveAttr = GetFileAttributesExW(path, GetFileExInfoStandard, &fa) != FALSE;
+    I.isDir = haveAttr && (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
+    I.items = -1;
+    lstrcpynW(I.name, PathFindFileNameW(path), MAX_PATH);
+    lstrcpynW(I.folder, path, MAX_PATH);
+    PathRemoveFileSpecW(I.folder);
+    if (haveAttr) {
+        FormatFileTime(fa.ftLastWriteTime, I.modified, 64);
+        FormatFileTime(fa.ftCreationTime,  I.created,  64);
+        if (!I.isDir) {
+            const LONGLONG bytes = ((LONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+            StrFormatByteSizeW(bytes, I.size, 64);
+        }
+    }
+
+    // Тип і значки — за розширенням, без обробників конкретного файлу (див. шапку розділу)
+    SHFILEINFOW sfi = {};
+    if (SHGetFileInfoW(path, I.isDir ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL, &sfi, sizeof(sfi),
+                       SHGFI_USEFILEATTRIBUTES | SHGFI_TYPENAME | SHGFI_SYSICONINDEX)) {
+        lstrcpynW(I.type, sfi.szTypeName, 128);
+        g_peekIconBig   = SysIconByIndex(SHIL_JUMBO, sfi.iIcon);
+        g_peekIconSmall = SysIconByIndex(SHIL_SMALL, sfi.iIcon);
+    }
+
+    if (I.isDir) {
+        // Скільки всередині — лише верхній рівень і зі стелею: мережеві теки й
+        // теки на сотні тисяч файлів не мають морозити перегляд.
+        wchar_t pattern[MAX_PATH + 4] = {};
+        swprintf(pattern, MAX_PATH + 4, L"%s\\*", path);
+        WIN32_FIND_DATAW fd = {};
+        HANDLE h = FindFirstFileExW(pattern, FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, 0);
+        if (h != INVALID_HANDLE_VALUE) {
+            I.items = 0;
+            do {
+                if (fd.cFileName[0] == L'.' && (!fd.cFileName[1] || (fd.cFileName[1] == L'.' && !fd.cFileName[2]))) continue;
+                if (++I.items >= 9999) { I.itemsMore = true; break; }
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+        wchar_t items[64] = {};
+        if (I.items >= 0) swprintf(items, 64, S(Str::PeekFmtItems), I.items, I.itemsMore ? L"+" : L"");
+        if (items[0]) swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, items);
+        else          lstrcpynW(I.subtitle, I.type, 320);
+        g_peekKind = PeekKind::Card;
+        return;
+    }
+
+    const wchar_t* ext = PathFindExtensionW(path);
+    if (IsImageExt(ext) && PeekLoadImage(path)) {
+        swprintf(I.subtitle, 320, S(Str::PeekFmtImage), I.imgW, I.imgH, I.size);
+        g_peekKind = PeekKind::Image;
+        return;
+    }
+    // Відоме текстове розширення — текст; невідоме — лише якщо вміст на це схожий.
+    if ((IsTextExt(ext) || (!IsImageExt(ext) && SniffText(path))) && PeekLoadText(path, ext)) {
+        swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, I.size);
+        g_peekKind = PeekKind::Text;
+        return;
+    }
+    swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, I.size);
+    g_peekKind = PeekKind::Card;
+}
+
+// ---- вікно перегляду: геометрія, тема, малювання ----
+
+RECT PeekCloseRect(const RECT& rc)
+{
+    const int s = PeekPx(kPeekHead);
+    return { rc.right - s, rc.top, rc.right, rc.top + s };
+}
+
+RECT PeekContentRect(HWND hwnd)
+{
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    rc.top += PeekPx(kPeekHead);
+    return rc;
+}
+
+void PeekApplyTheme()
+{
+    if (!g_peekWnd) return;
+    g_peekDark = ComputeDark();
+    const BOOL dark = g_peekDark ? TRUE : FALSE;
+    DwmSetWindowAttribute(g_peekWnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
+    const COLORREF border = g_peekDark ? kDkBorder : RGB(200, 200, 200);
+    DwmSetWindowAttribute(g_peekWnd, 34 /* DWMWA_BORDER_COLOR */, &border, sizeof(border));
+    // Смуга прокрутки поля: як і трекбари в головному вікні, comctl32 тримає власний
+    // кеш зображення й на самий лише SetWindowTheme не реагує — будить його WM_THEMECHANGED.
+    SetWindowTheme(g_peekEdit, g_peekDark ? L"DarkMode_Explorer" : nullptr, nullptr);
+    SendMessageW(g_peekEdit, WM_THEMECHANGED, 0, 0);
+    InvalidateRect(g_peekWnd, nullptr, TRUE);
+    RedrawWindow(g_peekEdit, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
+}
+
+void PeekLayout(HWND hwnd)
+{
+    RECT c = PeekContentRect(hwnd);
+    if (g_peekKind == PeekKind::Text) {
+        // Поле трохи менше за область вмісту: текст не притискається до країв
+        c.left += PeekPx(12); c.right -= PeekPx(4); c.top += PeekPx(10); c.bottom -= PeekPx(8);
+        SetWindowPos(g_peekEdit, nullptr, c.left, c.top, c.right - c.left, c.bottom - c.top,
+                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    } else {
+        ShowWindow(g_peekEdit, SW_HIDE);
+    }
+    delete g_peekScaled;
+    g_peekScaled = nullptr;   // під новий розмір перерахується при малюванні
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+// Скільки місця дати вікну на моніторі, де стоїть Провідник.
+void PeekWorkArea(RECT& work)
+{
+    HMONITOR mon = MonitorFromWindow(g_peekRoot ? g_peekRoot : g_mainWnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(mi) };
+    if (mon && GetMonitorInfoW(mon, &mi)) work = mi.rcWork;
+    else SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+}
+
+// Показати (або переставити під новий вміст): розмір від вмісту, по центру
+// монітора Провідника, без активації.
+void PeekShow()
+{
+    RECT work;
+    PeekWorkArea(work);
+    const int availW = (work.right - work.left) * 72 / 100;
+    const int availH = (work.bottom - work.top) * 80 / 100;
+    const int head = PeekPx(kPeekHead);
+    int w = PeekPx(720), h = PeekPx(560);
+    if (g_peekKind == PeekKind::Image && g_peekImg) {
+        double scale = 1.0;
+        if (g_peekInfo.imgW > availW) scale = (double)availW / g_peekInfo.imgW;
+        if (g_peekInfo.imgH * scale > availH - head) scale = (double)(availH - head) / g_peekInfo.imgH;
+        w = (int)(g_peekInfo.imgW * scale + 0.5);
+        h = (int)(g_peekInfo.imgH * scale + 0.5) + head;
+    } else if (g_peekKind == PeekKind::Card) {
+        w = PeekPx(560);
+        h = head + PeekPx(232);
+    }
+    if (w < PeekPx(kPeekMinW)) w = PeekPx(kPeekMinW);
+    if (h < PeekPx(kPeekMinH)) h = PeekPx(kPeekMinH);
+    if (w > availW) w = availW;
+    if (h > availH) h = availH;
+    const int x = work.left + ((work.right - work.left) - w) / 2;
+    const int y = work.top  + ((work.bottom - work.top) - h) / 2;
+
+    PeekApplyTheme();
+    SetWindowPos(g_peekWnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    PeekLayout(g_peekWnd);
+}
+
+void PeekClose()
+{
+    if (g_peekWnd) {
+        KillTimer(g_peekWnd, TIMER_PEEK_FOLLOW);
+        ShowWindow(g_peekWnd, SW_HIDE);
+    }
+    g_peekShown = false;
+    g_peekRoot  = nullptr;
+    g_peekView  = nullptr;
+    if (g_peekSv) { g_peekSv->Release(); g_peekSv = nullptr; }
+    if (g_peekEdit) SetWindowTextW(g_peekEdit, L"");
+    PeekReset();
+    g_peekPath[0] = 0;
+}
+
+// Пробіл у списку файлів (з хука). view — SHELLDLL_DefView, де стоїть фокус.
+void PeekToggle(HWND view)
+{
+    if (g_peekShown) { PeekClose(); return; }
+    if (!g_peekWnd || !view || !IsWindow(view)) return;
+
+    IShellView* sv = PeekFindShellView(view);
+    wchar_t path[MAX_PATH] = {};
+    if (!sv || !PeekReadSelection(sv, path, MAX_PATH)) {
+        // Нічого показувати — пробіл повертається Провіднику (виділити елемент у фокусі тощо)
+        if (sv) sv->Release();
+        ReinjectSpace();
+        return;
+    }
+    g_peekSv   = sv;
+    g_peekView = view;
+    g_peekRoot = GetAncestor(view, GA_ROOT);
+    PeekLoad(path);
+    PeekShow();
+    g_peekShown = true;
+    SetTimer(g_peekWnd, TIMER_PEEK_FOLLOW, 150, nullptr);
+}
+
+// Раз на 150 мс: Провідник ще той самий і в фокусі? виділення те саме?
+void PeekFollowTick()
+{
+    if (!g_peekShown) return;
+    const HWND fg = GetForegroundWindow();
+    if (!g_peekSv || !IsWindow(g_peekView) || (fg != g_peekRoot && fg != g_peekWnd)) { PeekClose(); return; }
+    // Вкладки Провідника (Windows 11) живуть в одному вікні, тож перевірки вікна мало:
+    // перемикання вкладки лишає наш вигляд живим, але показане більше не те, що виділено.
+    // Питаємо саме НАШЕ вікно: глобальний фокус тут не годиться — він міг піти будь-куди.
+    if (const HWND now = ShellListIn(g_peekRoot))
+        if (now != g_peekView) { PeekClose(); return; }
+    wchar_t path[MAX_PATH] = {};
+    if (!PeekReadSelection(g_peekSv, path, MAX_PATH)) { PeekClose(); return; }   // виділення зникло або вигляд змінився
+    if (lstrcmpiW(path, g_peekPath) != 0) {
+        PeekLoad(path);
+        PeekShow();
+    }
+}
+
+// Активне вікно змінилось (WinEvent на головному потоці): перегляд живе лише
+// поки активний той самий Провідник.
+void PeekOnForeground()
+{
+    if (g_peekShown && GetForegroundWindow() != g_peekRoot) PeekClose();
+}
+
+void PeekPaintClose(HDC dc, const RECT& r, COLORREF fg)
+{
+    if (g_peekCloseHot) {
+        HBRUSH b = CreateSolidBrush(RGB(196, 43, 28));
+        FillRect(dc, &r, b);
+        DeleteObject(b);
+        fg = RGB(255, 255, 255);
+    }
+    Gdiplus::Graphics g(dc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::Pen pen(Gdiplus::Color(255, GetRValue(fg), GetGValue(fg), GetBValue(fg)), (Gdiplus::REAL)PeekPx(1) * 1.2f);
+    const float cx = (r.left + r.right) / 2.0f, cy = (r.top + r.bottom) / 2.0f, d = PeekPx(5) * 1.0f;
+    g.DrawLine(&pen, cx - d, cy - d, cx + d, cy + d);
+    g.DrawLine(&pen, cx - d, cy + d, cx + d, cy - d);
+}
+
+void PeekPaint(HDC dc, const RECT& rc)
+{
+    const COLORREF bg     = g_peekDark ? kDkBg : RGB(255, 255, 255);
+    const COLORREF text   = g_peekDark ? kDkText : GetSysColor(COLOR_WINDOWTEXT);
+    const COLORREF gray   = g_peekDark ? kDkGray : GetSysColor(COLOR_GRAYTEXT);
+    const COLORREF line   = g_peekDark ? kDkBorder : RGB(229, 229, 229);
+    HBRUSH bgBrush = CreateSolidBrush(bg);
+    FillRect(dc, &rc, bgBrush);
+    DeleteObject(bgBrush);
+    SetBkMode(dc, TRANSPARENT);
+
+    // ---- смуга з назвою ----
+    const int head = PeekPx(kPeekHead), pad = PeekPx(16);
+    const RECT closeR = PeekCloseRect(rc);
+    int x = rc.left + pad;
+    if (g_peekIconSmall) {
+        const int s = GetSystemMetrics(SM_CXSMICON);
+        DrawIconEx(dc, x, rc.top + (head - s) / 2, g_peekIconSmall, s, s, 0, nullptr, DI_NORMAL);
+        x += s + PeekPx(10);
+    }
+    RECT nameR = { x, rc.top + PeekPx(7), closeR.left - PeekPx(8), rc.top + PeekPx(7) + PeekPx(20) };
+    HGDIOBJ old = SelectObject(dc, g_peekFontBold);
+    SetTextColor(dc, text);
+    DrawTextW(dc, g_peekInfo.name, -1, &nameR, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    RECT subR = { x, nameR.bottom, closeR.left - PeekPx(8), rc.top + head - PeekPx(4) };
+    SelectObject(dc, g_peekFont);
+    SetTextColor(dc, gray);
+    DrawTextW(dc, g_peekInfo.subtitle, -1, &subR, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    PeekPaintClose(dc, closeR, text);
+    {
+        RECT sep = { rc.left, rc.top + head - 1, rc.right, rc.top + head };
+        HBRUSH b = CreateSolidBrush(line);
+        FillRect(dc, &sep, b);
+        DeleteObject(b);
+    }
+
+    // ---- вміст ----
+    RECT c = rc;
+    c.top += head;
+    const int cw = c.right - c.left, ch = c.bottom - c.top;
+
+    if (g_peekKind == PeekKind::Image && g_peekImg && cw > 0 && ch > 0) {
+        double scale = 1.0;
+        if (g_peekInfo.imgW > cw) scale = (double)cw / g_peekInfo.imgW;
+        if (g_peekInfo.imgH * scale > ch) scale = (double)ch / g_peekInfo.imgH;
+        const int dw = (int)(g_peekInfo.imgW * scale + 0.5), dh = (int)(g_peekInfo.imgH * scale + 0.5);
+        const int dx = c.left + (cw - dw) / 2, dy = c.top + (ch - dh) / 2;
+        Gdiplus::Graphics g(dc);
+        if (dw == g_peekInfo.imgW && dh == g_peekInfo.imgH) {
+            g.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            g.DrawImage(g_peekImg, dx, dy, dw, dh);
+        } else {
+            // Зменшена копія кешується: перемальовування (наведення на ✕) не має
+            // щоразу масштабувати десятки мегапікселів.
+            if (!g_peekScaled || (int)g_peekScaled->GetWidth() != dw || (int)g_peekScaled->GetHeight() != dh) {
+                delete g_peekScaled;
+                g_peekScaled = new Gdiplus::Bitmap(dw, dh, PixelFormat32bppPARGB);
+                Gdiplus::Graphics sg(g_peekScaled);
+                sg.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+                sg.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+                Gdiplus::ImageAttributes ia;
+                ia.SetWrapMode(Gdiplus::WrapModeTileFlipXY);   // без напівпрозорої рамки по краю
+                sg.DrawImage(g_peekImg, Gdiplus::Rect(0, 0, dw, dh), 0, 0, g_peekInfo.imgW, g_peekInfo.imgH,
+                             Gdiplus::UnitPixel, &ia);
+            }
+            g.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            g.DrawImage(g_peekScaled, dx, dy, dw, dh);
+        }
+    } else if (g_peekKind == PeekKind::Card) {
+        const int icon = PeekPx(96);
+        int ix = c.left + PeekPx(28), iy = c.top + PeekPx(28);
+        if (g_peekIconBig) DrawIconEx(dc, ix, iy, g_peekIconBig, icon, icon, 0, nullptr, DI_NORMAL);
+        const int lx = ix + icon + PeekPx(28), vx = lx + PeekPx(112), rowH = PeekPx(24);
+        int y = iy + PeekPx(2);
+        auto row = [&](Str label, const wchar_t* value) {
+            if (!value || !*value) return;
+            RECT lr = { lx, y, vx - PeekPx(8), y + rowH };
+            RECT vr = { vx, y, c.right - PeekPx(20), y + rowH };
+            SelectObject(dc, g_peekFont);
+            SetTextColor(dc, gray);
+            DrawTextW(dc, S(label), -1, &lr, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            SetTextColor(dc, text);
+            DrawTextW(dc, value, -1, &vr, DT_SINGLELINE | DT_VCENTER | DT_PATH_ELLIPSIS | DT_NOPREFIX);
+            y += rowH;
+        };
+        wchar_t items[64] = {};
+        if (g_peekInfo.isDir && g_peekInfo.items >= 0)
+            swprintf(items, 64, L"%d%s", g_peekInfo.items, g_peekInfo.itemsMore ? L"+" : L"");
+        row(Str::PeekLblType, g_peekInfo.type);
+        if (g_peekInfo.isDir) row(Str::PeekLblItems, items);
+        else                  row(Str::PeekLblSize,  g_peekInfo.size);
+        row(Str::PeekLblModified, g_peekInfo.modified);
+        row(Str::PeekLblCreated,  g_peekInfo.created);
+        row(Str::PeekLblWhere,    g_peekInfo.folder);
+    }
+    SelectObject(dc, old);
+}
+
+// Поле тексту не сміє брати фокус: вікно перегляду не активується, а клік у
+// EDIT інакше потягнув би SetFocus і активацію. Прокрутка колесом лишається.
+LRESULT CALLBACK PeekEditSubclass(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR)
+{
+    switch (msg) {
+    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: case WM_RBUTTONDOWN: case WM_MBUTTONDOWN:
+        return 0;
+    case WM_SETCURSOR:
+        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+        return TRUE;
+    }
+    return DefSubclassProc(h, msg, wp, lp);
+}
+
+LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_NCCALCSIZE:
+        // Уся площа — клієнтська: WS_THICKFRAME лишається заради тіні DWM,
+        // округлених кутів Windows 11 і зміни розміру за край, а рамку й
+        // заголовок малюємо самі.
+        return 0;
+
+    case WM_NCHITTEST: {
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        ScreenToClient(hwnd, &pt);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        const int b = PeekPx(6);
+        const bool l = pt.x < b, r = pt.x >= rc.right - b, t = pt.y < b, bt = pt.y >= rc.bottom - b;
+        if (t && l) return HTTOPLEFT;
+        if (t && r) return HTTOPRIGHT;
+        if (bt && l) return HTBOTTOMLEFT;
+        if (bt && r) return HTBOTTOMRIGHT;
+        if (l) return HTLEFT;
+        if (r) return HTRIGHT;
+        if (t) return HTTOP;
+        if (bt) return HTBOTTOM;
+        const RECT closeR = PeekCloseRect(rc);
+        if (PtInRect(&closeR, pt)) return HTCLIENT;
+        if (pt.y < PeekPx(kPeekHead)) return HTCAPTION;   // тягнути за смугу з назвою
+        return HTCLIENT;
+    }
+
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO* mm = (MINMAXINFO*)lp;
+        mm->ptMinTrackSize.x = PeekPx(kPeekMinW);
+        mm->ptMinTrackSize.y = PeekPx(kPeekMinH);
+        return 0;
+    }
+
+    case WM_SIZE:
+        if (IsWindowVisible(hwnd)) PeekLayout(hwnd);
+        return 0;
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HDC mem = CreateCompatibleDC(dc);
+        HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+        HGDIOBJ old = SelectObject(mem, bmp);
+        PeekPaint(mem, rc);
+        BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+        SelectObject(mem, old);
+        DeleteObject(bmp);
+        DeleteDC(mem);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_MOUSEMOVE: {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        const RECT closeR = PeekCloseRect(rc);
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        const bool hot = PtInRect(&closeR, pt) != FALSE;
+        if (hot != g_peekCloseHot) { g_peekCloseHot = hot; InvalidateRect(hwnd, &closeR, FALSE); }
+        if (!g_peekTracking) {
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
+            TrackMouseEvent(&tme);
+            g_peekTracking = true;
+        }
+        return 0;
+    }
+
+    case WM_MOUSELEAVE:
+        g_peekTracking = false;
+        if (g_peekCloseHot) { g_peekCloseHot = false; InvalidateRect(hwnd, nullptr, FALSE); }
+        return 0;
+
+    case WM_LBUTTONUP: {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        const RECT closeR = PeekCloseRect(rc);
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        if (PtInRect(&closeR, pt)) PeekClose();
+        return 0;
+    }
+
+    case WM_KEYDOWN:   // страховка: якщо вікно все ж отримало фокус
+        if (wp == VK_ESCAPE || wp == VK_SPACE) PeekClose();
+        return 0;
+
+    case WM_TIMER:
+        if (wp == TIMER_PEEK_FOLLOW) PeekFollowTick();
+        return 0;
+
+    case WM_CTLCOLORSTATIC:   // EDIT лише для читання шле саме це
+        if ((HWND)lp == g_peekEdit) {
+            SetBkMode((HDC)wp, TRANSPARENT);
+            SetBkColor((HDC)wp, g_peekDark ? kDkBg : RGB(255, 255, 255));
+            SetTextColor((HDC)wp, g_peekDark ? kDkText : GetSysColor(COLOR_WINDOWTEXT));
+            return (LRESULT)(g_peekDark ? g_brDkBg : GetStockObject(WHITE_BRUSH));
+        }
+        break;
+
+    case WM_CLOSE:
+        PeekClose();
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void PeekCreateWindow(HINSTANCE hInst)
+{
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc   = PeekWndProc;
+    wc.hInstance     = hInst;
+    wc.lpszClassName = L"lilhelpers_peek";
+    wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hIcon         = LoadIconW(hInst, MAKEINTRESOURCEW(1));
+    RegisterClassW(&wc);
+
+    g_peekWnd = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"lilhelpers_peek", kAppName,
+                                WS_POPUP | WS_THICKFRAME | WS_CLIPCHILDREN,
+                                0, 0, PeekPx(kPeekMinW), PeekPx(kPeekMinH), nullptr, nullptr, hInst, nullptr);
+    if (!g_peekWnd) return;
+    {
+        MARGINS m = { 0, 0, 0, 1 };   // ненульовий відступ = DWM малює тінь навколо
+        DwmExtendFrameIntoClientArea(g_peekWnd, &m);
+        const int round = 2;          // DWMWCP_ROUND
+        DwmSetWindowAttribute(g_peekWnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &round, sizeof(round));
+    }
+
+    g_peekFont     = CreateUIFont(100, FW_NORMAL);
+    g_peekFontBold = CreateUIFont(105, FW_SEMIBOLD);
+    {
+        NONCLIENTMETRICSW ncm = { sizeof(ncm) };
+        SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
+        LOGFONTW lf = ncm.lfMessageFont;
+        lstrcpyW(lf.lfFaceName, L"Consolas");
+        lf.lfPitchAndFamily = FIXED_PITCH | FF_MODERN;
+        g_peekFontMono = CreateFontIndirectW(&lf);
+    }
+
+    g_peekEdit = CreateWindowExW(0, L"EDIT", L"",
+                                 WS_CHILD | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
+                                 0, 0, 10, 10, g_peekWnd, nullptr, hInst, nullptr);
+    SendMessageW(g_peekEdit, EM_SETLIMITTEXT, 0, 0);
+    SendMessageW(g_peekEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(PeekPx(14), PeekPx(14)));
+    {
+        int tab = 16;   // діалогові одиниці ≈ 4 символи
+        SendMessageW(g_peekEdit, EM_SETTABSTOPS, 1, (LPARAM)&tab);
+    }
+    SetWindowSubclass(g_peekEdit, PeekEditSubclass, 1, 0);
+}
+
+// Увімкнути/вимкнути: клавіатурний хук потрібен і тут, навіть якщо розкладка
+// в запасному режимі чи вимкнена; знімаємо його лише коли нікому не потрібен.
+void ApplyPeekFeature()
+{
+    if (!g_hookWnd) return;
+    if (g_peekOn) {
+        SendMessageW(g_hookWnd, HKW_INSTALL, 0, 0);
+    } else {
+        PeekClose();
+        if (!g_kbHookCaps) SendMessageW(g_hookWnd, HKW_UNINSTALL, 0, 0);
+    }
+}
+
 void ShowSettings(HWND hwnd)
 {
     SendMessageW(g_checkbox, BM_SETCHECK,
@@ -2859,7 +3951,7 @@ void ApplyLanguage()
 
     TCITEMW t = {};
     t.mask = TCIF_TEXT;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < kTabCount; ++i) {
         t.pszText = (LPWSTR)S(kTabTitles[i]);
         SendMessageW(g_tabs, TCM_SETITEMW, i, (LPARAM)&t);
     }
@@ -2962,6 +4054,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WMAPP_SHAKE:    // від мишачого хука
         MagnifyStart();
+        return 0;
+
+    case WMAPP_PEEK:     // CAPS-16: від хука — пробіл або Esc у списку файлів
+        if (wp == VK_ESCAPE) PeekClose();
+        else                 PeekToggle((HWND)lp);
         return 0;
 
     case WM_TIMER:
@@ -3171,6 +4268,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 if (want != g_lang) { g_lang = want; ApplyLanguage(); }
             }
             return 0;
+        case IDC_PEEK_ENABLE:     // CAPS-16
+            if (HIWORD(wp) == BN_CLICKED) {
+                g_peekOn = SendMessageW(g_peekEnableCb, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                RegSaveInt(kRegPeek, g_peekOn ? 1 : 0);
+                ApplyPeekFeature();
+            }
+            return 0;
         case IDC_WT_AUTO:         // CAPS-8
         case IDC_WT_LIGHT:
         case IDC_WT_DARK:
@@ -3345,6 +4449,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_DESTROY:
+        PeekClose();        // CAPS-16
         MagnifyRestore();
         Shell_NotifyIconW(NIM_DELETE, &g_nid);
         PostQuitMessage(0);
@@ -3396,6 +4501,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     g_layoutOn = RegLoadInt(kRegLayoutSwitch, 1, 0, 1) != 0;   // CAPS-9
     g_winTheme = (WinTheme)RegLoadInt(kRegWindowTheme, 0, 0, 2); // CAPS-8
     g_updDaily = RegLoadInt(kRegUpdDaily, 1, 0, 1) != 0;          // CAPS-10
+    g_peekOn   = RegLoadInt(kRegPeek, 1, 0, 1) != 0;              // CAPS-16
     g_updLast  = (DWORD)RegLoadInt(kRegUpdLast, 0, INT_MIN, INT_MAX);
     RegLoadStr(kRegUpdNotified, g_updNotified, 32);
     {   // недокачаний файл від обірваного оновлення — прибрати
@@ -3429,6 +4535,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     ov.hInstance     = hInst;
     ov.lpszClassName = L"lilhelpers_overlay";
     RegisterClassW(&ov);
+
+    PeekCreateWindow(hInst);   // CAPS-16: вікно перегляду, поки приховане
 
     // ---- геометрія вікна (логічні px при 96 dpi, sc() масштабує) ----
     //
@@ -3497,7 +4605,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     {
         TCITEMW tab = {};
         tab.mask = TCIF_TEXT;
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < kTabCount; ++i) {
             tab.pszText = (LPWSTR)S(kTabTitles[i]);
             SendMessageW(g_tabs, TCM_INSERTITEMW, i, (LPARAM)&tab);
         }
@@ -3509,6 +4617,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     auto addT  = [&](HWND c) { return AddTo(g_pageTheme,    g_pageThemeN,    c); };
     auto addTA = [&](HWND c) { return AddTo(g_thAdv,        g_thAdvN,        c); };
     auto addS  = [&](HWND c) { return AddTo(g_pageSettings, g_pageSettingsN, c); };
+    auto addP  = [&](HWND c) { return AddTo(g_pagePeek,     g_pagePeekN,     c); };   // CAPS-16
 
     // Сітка сторінки: y біжить згори вниз, кожен помічник сам відступає під себе.
     int y = PY;
@@ -3661,6 +4770,19 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         swprintf(b, 32, L"%.4f", g_th.lon); SetWindowTextW(g_thLon, b);
     }
 
+    // ---- вкладка «Перегляд» (CAPS-16) ----
+    y = PY;
+    g_peekEnableCb = check(addP, Str::PeekEnable, IDC_PEEK_ENABLE, g_peekOn, 2);
+    hint(addP, Str::PeekHint, 2);
+    y += 6;
+    sec(addP, Str::PeekSecTypes);
+    text(addP, Str::PeekTypesImages, 1, 0, 6);
+    text(addP, Str::PeekTypesText,   2, 0, 6);
+    text(addP, Str::PeekTypesOther,  1, 0, 12);
+    y += 6;
+    sec(addP, Str::PeekSecKeeps);
+    text(addP, Str::PeekKeeps, 3, 0, 8);
+
     // ---- вкладка «Налаштування» (CAPS-9) ----
     y = PY;
     g_checkbox = check(addS, Str::SetAutostart, IDC_AUTOSTART, false);
@@ -3742,6 +4864,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
                                  WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
     StartHookThread();  // має бути до StartInterception у режимі Hook
+    ApplyPeekFeature(); // CAPS-16: хук потрібен і перегляду, навіть без розкладки
     ApplyCursorFeature();  // CAPS-2: мишачий хук на тому ж потоці
     g_mode = LoadMode();
     // CAPS-9: перехоплення лише якщо перемикання ввімкнено; інакше програма живе
