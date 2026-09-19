@@ -68,6 +68,10 @@
 #include <wincodec.h>
 #include <string>
 #include <float.h>
+// CAPS-16: кадр і метадані відео — Media Foundation, теж системна.
+#include <mfapi.h>
+#include <mfidl.h>
+#include <mfreadwrite.h>
 
 namespace {
 
@@ -365,6 +369,7 @@ X(PeekFmtThree,       L"%s · %s · %s",           L"%s · %s · %s")           
 X(PeekReformatted,    L"відформатовано",              L"reformatted")                                \
 X(PeekSvgAsCode,      L"SVG з ефектами, яких ми не малюємо — показано розмітку",  L"SVG uses effects we do not draw — markup shown") \
 X(PeekFmtStl,         L"%.0f × %.0f × %.0f · трикутників: %u · %s",   L"%.0f × %.0f × %.0f · triangles: %u · %s") \
+X(PeekFmtVideo,       L"%d × %d · %s · %s",                      L"%d × %d · %s · %s")               \
 X(PeekLblType,        L"Тип",                           L"Type")                                        \
 X(PeekLblSize,        L"Розмір",                        L"Size")                                        \
 X(PeekLblItems,       L"Елементів",                     L"Items")                                       \
@@ -4096,6 +4101,144 @@ bool PeekLoadStl(const wchar_t* path, float dims[3], unsigned& triCount)
     return true;
 }
 
+
+// ---- відео ----
+//
+// Показуємо ОДИН кадр і метадані, а не програємо: справжнє відтворення — це вже
+// свій рендер, звук і керування, тобто інша задача. Для «що це за файл» кадру
+// достатньо, і коштує він одного виклику Media Foundation, без залежностей.
+//
+// Два місця, де це легко зробити неправильно:
+//  1. Без MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING читач відмовиться віддавати
+//     RGB32 для більшості кодеків — треба явно дозволити перетворення.
+//  2. Найперший кадр у багатьох файлах чорний (заставка/фейд), тому відмотуємо
+//     трохи вперед; якщо перемотка не вдалась — читаємо що є.
+
+bool g_mfStarted = false;
+
+bool VideoEnsureMf()
+{
+    if (g_mfStarted) return true;
+    g_mfStarted = SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_LITE));
+    return g_mfStarted;
+}
+
+bool IsVideoExt(const wchar_t* ext)
+{
+    static const wchar_t* const k[] = { L".mp4", L".m4v", L".mov", L".avi",
+                                        L".wmv", L".asf", L".mkv", L".webm", L".3gp" };
+    return ExtIn(ext, k, sizeof(k) / sizeof(*k));
+}
+
+void FormatDuration(LONGLONG hundredNs, wchar_t* buf, int n)
+{
+    const LONGLONG total = hundredNs / 10000000;            // у секунди
+    const int h = (int)(total / 3600), m = (int)((total / 60) % 60), s = (int)(total % 60);
+    if (h > 0) swprintf(buf, n, L"%d:%02d:%02d", h, m, s);
+    else       swprintf(buf, n, L"%d:%02d", m, s);
+}
+
+bool PeekLoadVideo(const wchar_t* path, wchar_t* durOut, int durCch)
+{
+    durOut[0] = 0;
+    if (!VideoEnsureMf()) return false;
+
+    IMFAttributes* attrs = nullptr;
+    if (FAILED(MFCreateAttributes(&attrs, 1)) || !attrs) return false;
+    // без цього SetCurrentMediaType(RGB32) провалиться на більшості кодеків
+    attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+
+    IMFSourceReader* reader = nullptr;
+    const HRESULT hrOpen = MFCreateSourceReaderFromURL(path, attrs, &reader);
+    attrs->Release();
+    if (FAILED(hrOpen) || !reader) return false;
+
+    bool ok = false;
+    IMFMediaType* want = nullptr;
+    IMFMediaType* cur = nullptr;
+    IMFSample* sample = nullptr;
+    IMFMediaBuffer* buffer = nullptr;
+
+    if (SUCCEEDED(MFCreateMediaType(&want)) && want) {
+        want->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+        want->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+        if (SUCCEEDED(reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, want)) &&
+            SUCCEEDED(reader->GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, &cur)) && cur) {
+            UINT32 w = 0, h = 0;
+            MFGetAttributeSize(cur, MF_MT_FRAME_SIZE, &w, &h);
+            INT32 stride = 0;
+            if (FAILED(cur->GetUINT32(MF_MT_DEFAULT_STRIDE, (UINT32*)&stride)) || stride == 0)
+                stride = (INT32)w * 4;
+
+            LONGLONG dur = 0;
+            PROPVARIANT pv;
+            PropVariantInit(&pv);
+            if (SUCCEEDED(reader->GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION, &pv))
+                && pv.vt == VT_UI8)
+                dur = (LONGLONG)pv.uhVal.QuadPart;
+            PropVariantClear(&pv);
+            if (dur > 0) FormatDuration(dur, durOut, durCch);
+
+            if (dur > 20000000) {          // довше 2 с — відмотати, щоб не впіймати чорну заставку
+                PROPVARIANT pos;
+                PropVariantInit(&pos);
+                pos.vt = VT_I8;
+                pos.hVal.QuadPart = (dur / 10 < 30000000) ? dur / 10 : 30000000;
+                reader->SetCurrentPosition(GUID_NULL, pos);   // бере посилання, не вказівник
+                PropVariantClear(&pos);
+            }
+
+            for (int attempt = 0; attempt < 12 && !sample; ++attempt) {
+                DWORD idx = 0, flags = 0;
+                LONGLONG ts = 0;
+                if (FAILED(reader->ReadSample(MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &idx, &flags, &ts, &sample)))
+                    break;
+                if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
+            }
+
+            if (sample && w && h && SUCCEEDED(sample->ConvertToContiguousBuffer(&buffer)) && buffer) {
+                BYTE* data = nullptr;
+                DWORD maxLen = 0, curLen = 0;
+                if (SUCCEEDED(buffer->Lock(&data, &maxLen, &curLen)) && data) {
+                    const bool bottomUp = stride < 0;
+                    const int absStride = bottomUp ? -stride : stride;
+                    if ((DWORD)absStride * h <= curLen) {
+                        Gdiplus::Bitmap* bmp = new Gdiplus::Bitmap((INT)w, (INT)h, PixelFormat32bppPARGB);
+                        Gdiplus::BitmapData bd = {};
+                        Gdiplus::Rect lock(0, 0, (INT)w, (INT)h);
+                        if (bmp->GetLastStatus() == Gdiplus::Ok &&
+                            bmp->LockBits(&lock, Gdiplus::ImageLockModeWrite, PixelFormat32bppPARGB, &bd) == Gdiplus::Ok) {
+                            for (UINT32 y = 0; y < h; ++y) {
+                                const BYTE* src = bottomUp ? data + (size_t)(h - 1 - y) * absStride
+                                                           : data + (size_t)y * absStride;
+                                DWORD* dst = (DWORD*)((BYTE*)bd.Scan0 + (size_t)y * bd.Stride);
+                                for (UINT32 x = 0; x < w; ++x) {
+                                    const DWORD px = ((const DWORD*)src)[x];
+                                    dst[x] = px | 0xFF000000u;   // RGB32 лишає альфу нульовою
+                                }
+                            }
+                            bmp->UnlockBits(&bd);
+                            g_peekImg = bmp;
+                            g_peekInfo.imgW = (int)w;
+                            g_peekInfo.imgH = (int)h;
+                            ok = true;
+                        } else {
+                            delete bmp;
+                        }
+                    }
+                    buffer->Unlock();
+                }
+            }
+        }
+    }
+    if (buffer) buffer->Release();
+    if (sample) sample->Release();
+    if (cur) cur->Release();
+    if (want) want->Release();
+    reader->Release();
+    return ok;
+}
+
 // ---- завантаження елемента ----
 
 void PeekReset()
@@ -4182,6 +4325,15 @@ void PeekLoad(const wchar_t* path)
         swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, I.size);
         g_peekKind = PeekKind::Card;
         return;
+    }
+    if (IsVideoExt(ext)) {
+        wchar_t dur[32] = {};
+        if (PeekLoadVideo(path, dur, 32)) {
+            swprintf(I.subtitle, 320, S(Str::PeekFmtVideo), I.imgW, I.imgH,
+                     dur[0] ? dur : L"?", I.size);
+            g_peekKind = PeekKind::Image;
+            return;
+        }
     }
     if (lstrcmpiW(ext, L".stl") == 0) {
         float dims[3] = {};
@@ -5677,7 +5829,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     StopHookThread();
     if (g_winEvent) UnhookWinEvent(g_winEvent);
     delete g_logo;
-    if (g_d2d) g_d2d->Release();   // CAPS-16
+    if (g_mfStarted) MFShutdown();   // CAPS-16
+    if (g_d2d) g_d2d->Release();
     if (g_wic) g_wic->Release();
     Gdiplus::GdiplusShutdown(g_gdiplusToken);
     CoUninitialize();
