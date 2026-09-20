@@ -158,6 +158,7 @@ constexpr int  IDC_PEEK_ENABLE   = 180;
 
 constexpr int  IDC_CAP_HK1       = 190;   // CAPS-21: три поля перехоплення
 constexpr int  IDC_CAP_HKRESET   = 193;
+constexpr int  IDC_CAP_CLOSECOPY = 194;   // CAPS-22
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -447,6 +448,21 @@ X(CapHkHint,          L"Клацніть поле і натисніть комб
                       L"Click a field and press a combination with Ctrl, Alt or Shift. If another "    \
                       L"app already holds it, the field stays as it was and says so. Backspace "       \
                       L"turns the shortcut off.")                                                       \
+X(EdCopy,             L"Копіювати",                     L"Copy")                                       \
+X(EdSaveAs,           L"Зберегти як",                   L"Save as")                                    \
+X(EdSaveName,         L"Знімок",                        L"Shot")                                       \
+X(EdSaveTitle,        L"Зберегти знімок",               L"Save screenshot")                            \
+X(EdFmtPng,           L"Зображення PNG",                L"PNG image")                                  \
+X(EdFmtJpg,           L"Зображення JPEG",               L"JPEG image")                                 \
+X(EdCopied,           L"Скопійовано",                   L"Copied")                                     \
+X(EdSaved,            L"Збережено",                     L"Saved")                                      \
+X(EdErrSave,          L"Не вдалося зберегти файл.",     L"Could not save the file.")                   \
+X(EdErrCopy,          L"Не вдалося покласти в буфер обміну.", L"Could not copy to the clipboard.")     \
+X(EdAskDiscard,       L"Закрити редактор? Позначки не збережено.",                                     \
+                      L"Close the editor? Marks are not saved.")                                       \
+X(CapSecOutput,       L"Після знімка",                  L"After a shot")                               \
+X(CapCloseAfterCopy,  L"Закривати редактор після копіювання",                                          \
+                      L"Close the editor after copying")                                               \
 X(EdCapScreen,        L"Знімок екрана",                 L"Screenshot")                                 \
 X(EdCapWindow,        L"Знімок вікна",                  L"Window shot")                                \
 X(EdHdrNote,          L"HDR · тон-мапінг застосовано",  L"HDR · tone-mapped")                          \
@@ -7259,7 +7275,7 @@ struct EdSnap {
 };
 
 enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
-                   Front, Back, Del, ZoomOut, ZoomIn, Fit, Panel };
+                   Front, Back, Del, ZoomOut, ZoomIn, Fit, Panel, Copy, Save };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7278,6 +7294,15 @@ Gdiplus::Bitmap* g_edImg = nullptr;
 int      g_edImgW = 0, g_edImgH = 0;
 wchar_t  g_edSource[MAX_PATH] = {};
 bool     g_edHdr = false, g_edToneMapped = false;   // CAPS-21: звідки прийшов кадр
+// CAPS-22: стан виходів. Остання використана дія підсвічується як дія для Enter.
+int      g_edLastAction  = 0;      // 0 буфер, 1 файл
+bool     g_edCloseOnCopy = true;
+bool     g_edSaved       = false;  // уже кудись пішло — Esc не питає
+DWORD    g_edToastUntil  = 0;
+Str      g_edToast       = Str::Empty;
+void EdDoCopy();
+void EdDoSave();
+bool EdConfirmClose();
 
 std::vector<EdObj> g_edObjs;
 int      g_edSel = -1;
@@ -7736,6 +7761,19 @@ void EdLayout(HWND hwnd)
         x = p.right + EdPx(8);
         const int fw = EdTextWidth(dc, S(Str::EdFit), g_edFont) + EdPx(20);
         RECT f = EdPill(x, cy, fw, EdPx(26)); EdAdd(f, EdHit::Fit, 0);
+
+        // CAPS-22: виходи в правому куті, підписані й далеко від системного ✕.
+        const int bh = EdPx(32);
+        const int wc = EdTextWidth(dc, S(Str::EdCopy), g_edFont)
+                     + EdTextWidth(dc, L"Ctrl+C", g_edFontSmall) + EdPx(44);
+        const int ws = EdTextWidth(dc, S(Str::EdSaveAs), g_edFont)
+                     + EdTextWidth(dc, L"Ctrl+S", g_edFontSmall) + EdPx(44);
+        int rx = rc.right - EdPx(14) - wc;
+        RECT rcCopy = { rx, cy - bh / 2, rx + wc, cy + bh / 2 };
+        EdAdd(rcCopy, EdHit::Copy, 0);
+        rx -= EdPx(8) + ws;
+        RECT rcSave = { rx, cy - bh / 2, rx + ws, cy + bh / 2 };
+        EdAdd(rcSave, EdHit::Save, 0);
         ReleaseDC(hwnd, dc);
     }
 
@@ -7903,6 +7941,20 @@ void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 }
 
+// Один малювальник на екран і на експорт. Якби їх було два, збережений файл
+// рано чи пізно розійшовся б із тим, що показано на екрані.
+void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, double oy)
+{
+    float pw = (float)(o.thick * s);
+    if (pw < 1.0f) pw = 1.0f;              // тонше пікселя — це вже невидимо
+    Gdiplus::Pen pen(EdC(o.color, o.alpha * 255 / 100), pw);
+    pen.SetLineJoin(Gdiplus::LineJoinMiter);
+    const float half = pw / 2.0f;
+    const float x = (float)(ox + o.x * s), y = (float)(oy + o.y * s);
+    const float w = (float)(o.w * s), h = (float)(o.h * s);
+    g.DrawRectangle(&pen, x + half, y + half, w - pw, h - pw);
+}
+
 void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     HBRUSH b = CreateSolidBrush(t.canvas);
@@ -7926,28 +7978,12 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     const double s = EdScale();
-    for (size_t i = 0; i < g_edObjs.size(); ++i) {
-        const EdObj& o = g_edObjs[i];
-        const RECT r = EdObjScreen(o);
-        float pw = (float)(o.thick * s);
-        if (pw < 1.0f) pw = 1.0f;              // тонше пікселя — це вже невидимо
-        Gdiplus::Pen pen(EdC(o.color, o.alpha * 255 / 100), pw);
-        pen.SetLineJoin(Gdiplus::LineJoinMiter);
-        const float half = pw / 2.0f;
-        g.DrawRectangle(&pen, r.left + half, r.top + half,
-                        (float)(r.right - r.left) - pw, (float)(r.bottom - r.top) - pw);
-    }
+    for (size_t i = 0; i < g_edObjs.size(); ++i)
+        EdDrawObject(g, g_edObjs[i], s, ir.left, ir.top);
 
     // Те, що зараз тягнуть мишею, ще не в списку — малюємо окремо.
-    if (g_edDrag == EdDrag::New) {
-        const RECT r = EdObjScreen(g_edNew);
-        float pw = (float)(g_edNew.thick * s);
-        if (pw < 1.0f) pw = 1.0f;
-        Gdiplus::Pen pen(EdC(g_edNew.color, g_edNew.alpha * 255 / 100), pw);
-        const float half = pw / 2.0f;
-        g.DrawRectangle(&pen, r.left + half, r.top + half,
-                        (float)(r.right - r.left) - pw, (float)(r.bottom - r.top) - pw);
-    }
+    if (g_edDrag == EdDrag::New)
+        EdDrawObject(g, g_edNew, s, ir.left, ir.top);
 
     if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) {
         const RECT r = EdObjScreen(g_edObjs[g_edSel]);
@@ -8039,12 +8075,16 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     DeleteObject(b);
     x = d1.right + EdPx(12);
 
-    if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())
+    const bool toast = (g_edToast != Str::Empty) && (int)(g_edToastUntil - GetTickCount()) > 0;
+    if (toast)
+        lstrcpynW(buf, S(g_edToast), 128);
+    else if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())
         wsprintfW(buf, S(Str::EdFmtSel), g_edObjs[g_edSel].w, g_edObjs[g_edSel].h);
     else
         lstrcpynW(buf, S(Str::EdNoSel), 128);
     RECT r2 = { x, g_edRcStatus.top, x + EdPx(190), g_edRcStatus.bottom };
-    EdDrawText(dc, r2, buf, g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    EdDrawText(dc, r2, buf, toast ? g_edFontBold : g_edFont, toast ? t.accent : t.text2,
+               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     x = r2.right + EdPx(12);
     RECT d2 = { x, d1.top, x + 1, d1.bottom };
     b = CreateSolidBrush(t.border);
@@ -8067,6 +8107,30 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     if (const RECT* rf = EdRegionRect(EdHit::Fit, 0)) {
         EdPaintButton(g, *rf, t, false, g_edHotWhat == EdHit::Fit, false);
         EdDrawText(dc, *rf, S(Str::EdFit), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    // Дві рівноправні кнопки. Підсвічена — та, якою користувалися востаннє:
+    // вона ж спрацює на Enter. Друга нікуди не дівається.
+    struct { EdHit what; Str label; const wchar_t* key; bool primary; } outs[2] = {
+        { EdHit::Save, Str::EdSaveAs, L"Ctrl+S", g_edLastAction == 1 },
+        { EdHit::Copy, Str::EdCopy,   L"Ctrl+C", g_edLastAction == 0 }
+    };
+    for (int i = 0; i < 2; ++i) {
+        const RECT* r = EdRegionRect(outs[i].what, 0);
+        if (!r) continue;
+        const bool hot = (g_edHotWhat == outs[i].what);
+        if (outs[i].primary) {
+            Gdiplus::Color fill = EdC(t.accent, hot ? 225 : 255);
+            Gdiplus::Color bd = EdC(t.accent);
+            EdFillRound(g, *r, (float)EdPx(6), &fill, &bd);
+        } else {
+            EdPaintButton(g, *r, t, false, hot, false);
+        }
+        const COLORREF fg = outs[i].primary ? (g_edDark ? RGB(0, 52, 79) : RGB(255, 255, 255)) : t.text;
+        const COLORREF dim = outs[i].primary ? (g_edDark ? RGB(0, 83, 124) : RGB(207, 228, 247)) : t.text2;
+        RECT lr = { r->left + EdPx(14), r->top, r->right - EdPx(12), r->bottom };
+        EdDrawText(dc, lr, S(outs[i].label), g_edFont, fg, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        EdDrawText(dc, lr, outs[i].key, g_edFontSmall, dim, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
 }
 
@@ -8209,6 +8273,9 @@ Gdiplus::Bitmap* EdBitmapFromFile(const wchar_t* path)
 // MSVC в іншій, і сходяться вони лише так.
 const GUID kCLSID_FileOpenDialog = { 0xdc1c5a9c, 0xe88a, 0x4dde, { 0xa5, 0xa1, 0x60, 0xf8, 0x2a, 0x20, 0xae, 0xf7 } };
 const GUID kIID_IFileOpenDialog  = { 0xd57c7288, 0xd4ad, 0x4768, { 0xbe, 0x02, 0x9d, 0x96, 0x95, 0x32, 0xd9, 0x60 } };
+const GUID kCLSID_FileSaveDialog = { 0xc0b4e2f3, 0xba21, 0x4773, { 0x8d, 0xba, 0x33, 0x5e, 0xc9, 0x46, 0xeb, 0x8b } };
+const GUID kIID_IFileSaveDialog  = { 0x84bccd23, 0x5fde, 0x4cdb, { 0xae, 0xa4, 0xaf, 0x64, 0xb8, 0x3d, 0x78, 0xab } };
+const GUID kIID_IShellItem       = { 0x43826d1e, 0xe718, 0x42ee, { 0xbc, 0x55, 0xa1, 0xe2, 0x61, 0xc3, 0x7b, 0xfe } };
 
 bool EdPickFile(HWND owner, wchar_t* out, size_t cch)
 {
@@ -8422,6 +8489,8 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                                            (g_edRcCanvas.top + g_edRcCanvas.bottom) / 2 };
                                EdZoomAt(c, true); return 0; }
         case EdHit::Fit:   EdFitView(); return 0;
+        case EdHit::Copy:  EdDoCopy();  return 0;
+        case EdHit::Save:  EdDoSave();  return 0;
         case EdHit::Panel:
             g_edPanelOpen = !g_edPanelOpen;
             EdLayout(hwnd);
@@ -8538,13 +8607,18 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         switch (wp) {
         case 'Z': if (ctrl) EdUndoAction(); return 0;
         case 'Y': if (ctrl) EdRedoAction(); return 0;
+        case 'C': if (ctrl) EdDoCopy(); return 0;
+        case 'S': if (ctrl) EdDoSave(); return 0;
+        case VK_RETURN:
+            if (g_edLastAction == 1) EdDoSave(); else EdDoCopy();
+            return 0;
         case 'V': if (!ctrl) { g_edTool = EdTool::Select; InvalidateRect(hwnd, nullptr, FALSE); } return 0;
         case 'R': if (!ctrl) { g_edTool = EdTool::Rect; g_edSel = -1; InvalidateRect(hwnd, nullptr, FALSE); } return 0;
         case VK_DELETE: EdDeleteSel(); return 0;
         case VK_ESCAPE:
             if (g_edSel >= 0) { g_edSel = -1; InvalidateRect(hwnd, nullptr, FALSE); }
             else if (g_edTool != EdTool::Select) { g_edTool = EdTool::Select; InvalidateRect(hwnd, nullptr, FALSE); }
-            else DestroyWindow(hwnd);
+            else if (EdConfirmClose()) DestroyWindow(hwnd);
             return 0;
         case VK_F1:
             MessageBoxW(hwnd, S(Str::EdHelpBody), S(Str::EdHelpTitle), MB_OK | MB_ICONINFORMATION);
@@ -8553,6 +8627,21 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
     }
+
+    case WM_CLOSE:
+        if (!EdConfirmClose()) return 0;
+        DestroyWindow(hwnd);
+        return 0;
+
+    case WM_TIMER:
+        if (wp == 7) {
+            if ((int)(g_edToastUntil - GetTickCount()) <= 0) {
+                KillTimer(hwnd, 7);
+                g_edToast = Str::Empty;
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
 
     case WM_DESTROY:
         delete g_edImg;
@@ -8597,6 +8686,8 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edImgH = (int)bmp->GetHeight();
     g_edHdr        = hdr;
     g_edToneMapped = toneMapped;
+    g_edSaved      = false;
+    g_edToast      = Str::Empty;
     lstrcpynW(g_edSource, label ? label : L"", MAX_PATH);
     g_edObjs.clear();
     g_edUndo.clear();
@@ -8676,6 +8767,273 @@ HWND CapForegroundTarget()
         h = GetWindow(h, GW_HWNDNEXT);
     }
     return nullptr;
+}
+
+// ---- CAPS-22: виходи — буфер обміну і файл ------------------------------
+// Дві рівноправні дії. «Рівноправні» тут не гасло, а вимога до коду: жодна з
+// них не є гілкою іншої, обидві беруть один і той самий растеризований кадр,
+// і програма лише ЗАПАМ'ЯТОВУЄ, якою користувалися востаннє, щоб підсвітити її
+// як дію для Enter.
+
+const wchar_t* kRegEdLast     = L"EditorLastAction";     // 0 буфер, 1 файл
+const wchar_t* kRegEdCloseCopy = L"EditorCloseAfterCopy";
+const wchar_t* kRegEdSaveDir  = L"EditorSaveDir";
+
+bool EdEncoderClsid(const wchar_t* mime, CLSID* out)
+{
+    UINT n = 0, size = 0;
+    Gdiplus::GetImageEncodersSize(&n, &size);
+    if (!size) return false;
+    std::vector<BYTE> buf(size);
+    Gdiplus::ImageCodecInfo* info = (Gdiplus::ImageCodecInfo*)buf.data();
+    if (Gdiplus::GetImageEncoders(n, size, info) != Gdiplus::Ok) return false;
+    for (UINT i = 0; i < n; ++i)
+        if (!lstrcmpW(info[i].MimeType, mime)) { *out = info[i].Clsid; return true; }
+    return false;
+}
+
+// Растеризація. Об'єкти малюються в РОЗМІРІ ЗОБРАЖЕННЯ, а не екрана: те, що
+// видно на екрані, — лише перегляд у масштабі, а йде у файл завжди повний кадр.
+Gdiplus::Bitmap* EdRender()
+{
+    if (!g_edImg) return nullptr;
+    Gdiplus::Bitmap* out = new Gdiplus::Bitmap(g_edImgW, g_edImgH, PixelFormat32bppPARGB);
+    if (!out || out->GetLastStatus() != Gdiplus::Ok) { delete out; return nullptr; }
+    Gdiplus::Graphics g(out);
+    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    g.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
+    g.DrawImage(g_edImg, Gdiplus::Rect(0, 0, g_edImgW, g_edImgH),
+                0, 0, g_edImgW, g_edImgH, Gdiplus::UnitPixel);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    for (size_t i = 0; i < g_edObjs.size(); ++i)
+        EdDrawObject(g, g_edObjs[i], 1.0, 0, 0);
+    return out;
+}
+
+// CF_DIB: знизу вгору, 32 біти, BI_RGB. Альфа в цьому форматі нічия — більшість
+// програм її ігнорує, — тому байт альфи ставимо 255 і не сподіваємось на нього.
+HGLOBAL EdDibGlobal(Gdiplus::Bitmap* bmp)
+{
+    const int w = (int)bmp->GetWidth(), h = (int)bmp->GetHeight();
+    Gdiplus::BitmapData bd;
+    Gdiplus::Rect all(0, 0, w, h);
+    if (bmp->LockBits(&all, Gdiplus::ImageLockModeRead, PixelFormat32bppPARGB, &bd) != Gdiplus::Ok)
+        return nullptr;
+    const SIZE_T bits = (SIZE_T)w * h * 4;
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + bits);
+    if (mem) {
+        BYTE* p = (BYTE*)GlobalLock(mem);
+        BITMAPINFOHEADER* bi = (BITMAPINFOHEADER*)p;
+        ZeroMemory(bi, sizeof(*bi));
+        bi->biSize = sizeof(BITMAPINFOHEADER);
+        bi->biWidth = w;
+        bi->biHeight = h;                 // додатна = знизу вгору
+        bi->biPlanes = 1;
+        bi->biBitCount = 32;
+        bi->biCompression = BI_RGB;
+        bi->biSizeImage = (DWORD)bits;
+        BYTE* dst = p + sizeof(BITMAPINFOHEADER);
+        for (int y = 0; y < h; ++y) {
+            const BYTE* src = (const BYTE*)bd.Scan0 + (size_t)y * bd.Stride;
+            BYTE* row = dst + (size_t)(h - 1 - y) * w * 4;
+            for (int x = 0; x < w; ++x) {
+                row[x * 4 + 0] = src[x * 4 + 0];
+                row[x * 4 + 1] = src[x * 4 + 1];
+                row[x * 4 + 2] = src[x * 4 + 2];
+                row[x * 4 + 3] = 255;
+            }
+        }
+        GlobalUnlock(mem);
+    }
+    bmp->UnlockBits(&bd);
+    return mem;
+}
+
+HGLOBAL EdPngGlobal(Gdiplus::Bitmap* bmp)
+{
+    CLSID png;
+    if (!EdEncoderClsid(L"image/png", &png)) return nullptr;
+    IStream* st = nullptr;
+    if (FAILED(CreateStreamOnHGlobal(nullptr, FALSE, &st)) || !st) return nullptr;
+    HGLOBAL mem = nullptr;
+    if (bmp->Save(st, &png, nullptr) == Gdiplus::Ok) {
+        HGLOBAL src = nullptr;
+        if (SUCCEEDED(GetHGlobalFromStream(st, &src)) && src) {
+            const SIZE_T n = GlobalSize(src);
+            mem = GlobalAlloc(GMEM_MOVEABLE, n);
+            if (mem) {
+                void* d = GlobalLock(mem);
+                const void* s = GlobalLock(src);
+                if (d && s) memcpy(d, s, n);
+                if (s) GlobalUnlock(src);
+                if (d) GlobalUnlock(mem);
+            }
+        }
+    }
+    st->Release();
+    return mem;
+}
+
+void EdToast(Str s)
+{
+    g_edToast = s;
+    g_edToastUntil = GetTickCount() + 2200;
+    if (g_edWnd) {
+        SetTimer(g_edWnd, 7, 400, nullptr);
+        InvalidateRect(g_edWnd, nullptr, FALSE);
+    }
+}
+
+bool EdCopy()
+{
+    Gdiplus::Bitmap* flat = EdRender();
+    if (!flat) return false;
+
+    // Три формати одразу: PNG для месенджерів і браузерів, CF_DIB для Office,
+    // CF_BITMAP для найстарішого, що трапляється. Жоден із них поодинці не
+    // приймається скрізь.
+    HGLOBAL png = EdPngGlobal(flat);
+    HGLOBAL dib = EdDibGlobal(flat);
+    HBITMAP ddb = nullptr;
+    flat->GetHBITMAP(Gdiplus::Color(255, 255, 255, 255), &ddb);
+    delete flat;
+
+    bool ok = false;
+    if (OpenClipboard(g_edWnd)) {
+        EmptyClipboard();
+        const UINT pngFmt = CapClipboardPngFormat();
+        if (png && pngFmt && SetClipboardData(pngFmt, png)) { png = nullptr; ok = true; }
+        if (dib && SetClipboardData(CF_DIB, dib))           { dib = nullptr; ok = true; }
+        if (ddb && SetClipboardData(CF_BITMAP, ddb))        { ddb = nullptr; ok = true; }
+        CloseClipboard();
+    }
+    if (png) GlobalFree(png);
+    if (dib) GlobalFree(dib);
+    if (ddb) DeleteObject(ddb);
+    return ok;
+}
+
+void EdSaveDirRemember(const wchar_t* path)
+{
+    wchar_t dir[MAX_PATH] = {};
+    lstrcpynW(dir, path, MAX_PATH);
+    if (wchar_t* slash = wcsrchr(dir, L'\\')) {
+        *slash = 0;
+        HKEY key;
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegPath, 0, nullptr, 0,
+                            KEY_SET_VALUE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
+            RegSetValueExW(key, kRegEdSaveDir, 0, REG_SZ, (const BYTE*)dir,
+                           (DWORD)((lstrlenW(dir) + 1) * sizeof(wchar_t)));
+            RegCloseKey(key);
+        }
+    }
+}
+
+bool EdSaveAs()
+{
+    IFileSaveDialog* dlg = nullptr;
+    if (FAILED(CoCreateInstance(kCLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                kIID_IFileSaveDialog, (void**)&dlg)) || !dlg)
+        return false;
+
+    COMDLG_FILTERSPEC fs[2];
+    fs[0].pszName = S(Str::EdFmtPng);
+    fs[0].pszSpec = L"*.png";
+    fs[1].pszName = S(Str::EdFmtJpg);
+    fs[1].pszSpec = L"*.jpg";
+    dlg->SetFileTypes(2, fs);
+    dlg->SetFileTypeIndex(1);
+    dlg->SetDefaultExtension(L"png");
+    dlg->SetTitle(S(Str::EdSaveTitle));
+
+    // Ім'я за шаблоном: дата й час у назві роблять теку зі знімками
+    // впорядкованою самі собою.
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    wchar_t name[160];
+    wsprintfW(name, L"%s %04d-%02d-%02d %02d-%02d-%02d", S(Str::EdSaveName),
+              t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    dlg->SetFileName(name);
+
+    wchar_t dir[MAX_PATH] = {};
+    DWORD cb = sizeof(dir);
+    if (RegGetValueW(HKEY_CURRENT_USER, kRegPath, kRegEdSaveDir, RRF_RT_REG_SZ,
+                     nullptr, dir, &cb) == ERROR_SUCCESS && dir[0]) {
+        IShellItem* folder = nullptr;
+        if (SUCCEEDED(SHCreateItemFromParsingName(dir, nullptr, kIID_IShellItem, (void**)&folder)) && folder) {
+            dlg->SetFolder(folder);
+            folder->Release();
+        }
+    }
+
+    bool ok = false;
+    if (SUCCEEDED(dlg->Show(g_edWnd))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dlg->GetResult(&item)) && item) {
+            PWSTR path = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+                if (Gdiplus::Bitmap* flat = EdRender()) {
+                    const wchar_t* ext = wcsrchr(path, L'.');
+                    const bool jpg = ext && (!lstrcmpiW(ext, L".jpg") || !lstrcmpiW(ext, L".jpeg"));
+                    CLSID enc;
+                    if (EdEncoderClsid(jpg ? L"image/jpeg" : L"image/png", &enc)) {
+                        if (jpg) {
+                            // Якість фіксована 92: помітної втрати ще нема, а
+                            // повзунок у системному діалозі не поставиш —
+                            // окремий контроль буде в налаштуваннях.
+                            ULONG q = 92;
+                            Gdiplus::EncoderParameters ep;
+                            ep.Count = 1;
+                            ep.Parameter[0].Guid = Gdiplus::EncoderQuality;
+                            ep.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
+                            ep.Parameter[0].NumberOfValues = 1;
+                            ep.Parameter[0].Value = &q;
+                            ok = flat->Save(path, &enc, &ep) == Gdiplus::Ok;
+                        } else {
+                            ok = flat->Save(path, &enc, nullptr) == Gdiplus::Ok;
+                        }
+                    }
+                    delete flat;
+                }
+                if (ok) EdSaveDirRemember(path);
+                else MessageBoxW(g_edWnd, S(Str::EdErrSave), kAppName, MB_OK | MB_ICONWARNING);
+                CoTaskMemFree(path);
+            }
+            item->Release();
+        }
+    }
+    dlg->Release();
+    return ok;
+}
+
+void EdDoCopy()
+{
+    if (!EdCopy()) {
+        MessageBoxW(g_edWnd, S(Str::EdErrCopy), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    g_edSaved = true;
+    g_edLastAction = 0;
+    RegSaveInt(kRegEdLast, 0);
+    if (g_edCloseOnCopy) { DestroyWindow(g_edWnd); return; }
+    EdToast(Str::EdCopied);
+}
+
+void EdDoSave()
+{
+    if (!EdSaveAs()) return;      // скасування діалогу помилкою не є
+    g_edSaved = true;
+    g_edLastAction = 1;
+    RegSaveInt(kRegEdLast, 1);
+    EdToast(Str::EdSaved);
+}
+
+// Esc і закриття: питаємо лише тоді, коли є що втрачати.
+bool EdConfirmClose()
+{
+    if (g_edSaved || g_edObjs.empty()) return true;
+    return MessageBoxW(g_edWnd, S(Str::EdAskDiscard), kAppName,
+                       MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
 }
 
 // ---- CAPS-21: гарячі клавіші -------------------------------------------
@@ -9307,6 +9665,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_EDITOR:
             EdOpen(GetModuleHandleW(nullptr), hwnd);
             break;
+        case IDC_CAP_CLOSECOPY:
+            g_edCloseOnCopy = SendMessageW(GetDlgItem(hwnd, IDC_CAP_CLOSECOPY), BM_GETCHECK, 0, 0) == BST_CHECKED;
+            RegSaveInt(kRegEdCloseCopy, g_edCloseOnCopy ? 1 : 0);
+            break;
         case IDC_CAP_HKRESET:
             g_hk[0] = kHkDefClip;
             g_hk[1] = kHkDefRegion;
@@ -9757,6 +10119,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     y += 42;
     button(addK, Str::CapHkDefaults, PX, 170, IDC_CAP_HKRESET);
     y += 38;
+    sec(addK, Str::CapSecOutput);
+    check(addK, Str::CapCloseAfterCopy, IDC_CAP_CLOSECOPY, g_edCloseOnCopy);
 
     // ---- вкладка «Налаштування» (CAPS-9) ----
     y = PY;
@@ -9846,6 +10210,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 
     // CAPS-21: гарячі клавіші знімків. Якщо котрась зайнята — кажемо про це
     // вголос: мовчазна невдача виглядає як «програма зламалась».
+    g_edLastAction  = RegLoadInt(kRegEdLast, 0, 0, 1);
+    g_edCloseOnCopy = RegLoadInt(kRegEdCloseCopy, 1, 0, 1) != 0;
     CapLoadHotkeys();
     if (!CapApplyHotkeys(hwnd)) TrayBalloon(kAppName, S(Str::CapHkBusy));
     CapHkRefresh();
