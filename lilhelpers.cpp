@@ -592,7 +592,8 @@ X(EdHelpBody,         L"Інструменти: V вибір, R прямокут
                       L"подвійний клік по напису — відкрити на правку\n"                                \
                       L"Delete — видалити вибране\nCtrl+Z, Ctrl+Y — скасувати й повторити\n"           \
                       L"Ctrl+O — відкрити, Ctrl+C — копіювати, Ctrl+S — зберегти\n"                                        \
-                      L"Коліщатко — масштаб, подвійний клік — вписати\n"                                \
+                      L"Коліщатко — прокрутка, Ctrl — убік, Alt — масштаб\n"                                 \
+                      L"Подвійний клік — вписати у вікно\n"                                \
                       L"Пробіл або середня кнопка — рухати полотно",                                    \
                       L"Tools: V select, R rectangle, E ellipse, A arrow, L line,\n"                       \
                       L"P pencil, T text, B hide, H marker,\nN counter, S stamp, C crop.\n\n"            \
@@ -601,7 +602,8 @@ X(EdHelpBody,         L"Інструменти: V вибір, R прямокут
                       L"double click a caption to edit it again\n"                                      \
                       L"Delete — remove the selection\nCtrl+Z, Ctrl+Y — undo and redo\n"               \
                       L"Ctrl+C — copy, Ctrl+S — save\n"                                                 \
-                      L"Wheel — zoom, double click — fit\n"                                             \
+                      L"Wheel scrolls, Ctrl sideways, Alt zooms\n"                                           \
+                      L"Double click — fit to window\n"                                             \
                       L"Space or middle button — pan the canvas")                                       \
 X(MenuExit,           L"Вихід",                         L"Exit")                                       \
 X(TaskDesc,           L"Little Helpers — розкладка по Caps Lock, пошук курсора, день/ніч, перегляд по пробілу", \
@@ -8535,6 +8537,31 @@ void EdZoomAt(POINT cur, bool in)
     EdZoomSet(in ? g_edZoom * 1.25f : g_edZoom / 1.25f, cur);
 }
 
+// Прокрутка полотна. Зсув у ЕКРАННИХ точках: коліщатко крутить видиму
+// картинку, а не пікселі знімка, і крок не має залежати від масштабу.
+// Обмеження рахує EdClampPan усередині EdImageRect — тут воно не потрібне.
+void EdScrollBy(int dx, int dy)
+{
+    if (!g_edImg) return;
+    const int oldX = g_edPanX, oldY = g_edPanY;
+    g_edPanX += dx;
+    g_edPanY += dy;
+    const RECT before = EdImageRect();      // сам і затисне значення в межі
+    (void)before;
+    if (g_edPanX != oldX || g_edPanY != oldY)
+        InvalidateRect(g_edWnd, nullptr, FALSE);
+}
+
+// Крок коліщатка: одна «зарубка» = 120 одиниць. Беремо системну кількість
+// рядків прокрутки, як це робить решта Windows, і рахуємо рядок у 40 точок.
+int EdWheelStep(int delta)
+{
+    UINT lines = 3;
+    SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
+    if (lines == 0 || lines > 20) lines = 3;      // «по екрану» теж зводимо до трьох
+    return (int)(delta / 120.0 * lines * EdPx(40));
+}
+
 POINT EdCanvasCentre()
 {
     POINT c = { (g_edRcCanvas.left + g_edRcCanvas.right) / 2,
@@ -12739,11 +12766,34 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (HIWORD(wp) == EN_CHANGE && LOWORD(wp) == kEdEditId) { EdTextFitBox(); return 0; }
         break;
 
+    // ⚠ Коліщатко ПРОКРУЧУЄ, а не зумить (зауваження власника 21.09). Зум лишився
+    // на повзунку й на Alt+коліщатко: спроба «докрутити до краю» не має міняти
+    // масштаб — це найчастіший жест і найгірша несподіванка.
     case WM_MOUSEWHEEL: {
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         ScreenToClient(hwnd, &pt);
         if (!PtInRect(&g_edRcCanvas, pt)) return 0;
-        EdZoomAt(pt, GET_WHEEL_DELTA_WPARAM(wp) > 0);
+        const int delta = GET_WHEEL_DELTA_WPARAM(wp);
+        if (GetKeyState(VK_MENU) < 0) { EdZoomAt(pt, delta > 0); return 0; }
+        // Ctrl — для мишей без горизонтального коліщатка; Shift робить те саме,
+        // бо в решті Windows горизонтальна прокрутка живе саме на ньому.
+        // ⚠ Модифікатори беремо з wParam, а не з GetKeyState: вони ПРИХОДЯТЬ
+        // разом із повідомленням, тож стан клавіатури тут ні до чого — і саме
+        // тому це можна перевірити харнесом, який шле повідомлення.
+        const bool horz = (LOWORD(wp) & (MK_CONTROL | MK_SHIFT)) != 0;
+        const int step = EdWheelStep(delta);
+        if (horz) EdScrollBy(step, 0);
+        else      EdScrollBy(0, step);
+        return 0;
+    }
+
+    // Горизонтальне коліщатко: нахил праворуч дає ДОДАТНУ дельту, а видима
+    // картинка при цьому має їхати вліво — звідси мінус.
+    case WM_MOUSEHWHEEL: {
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        ScreenToClient(hwnd, &pt);
+        if (!PtInRect(&g_edRcCanvas, pt)) return 0;
+        EdScrollBy(-EdWheelStep(GET_WHEEL_DELTA_WPARAM(wp)), 0);
         return 0;
     }
 
