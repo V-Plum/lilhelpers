@@ -14697,7 +14697,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // ⚠ Мітки й тіло мають лишатися разом. Коли між ними вклинився ще один
         // case, КОЖНА літера інструмента почала відкривати кадр — і помітно це
         // стало лише на знімку харнеса.
-        case 'R': case 'E': case 'A': case 'L': case 'P': case 'T': case 'B': case 'H':
+        case 'R': case 'E': case 'L': case 'P': case 'T': case 'B': case 'H':
         case 'N': case 'S':
             // ⚠ 'S' носить дві ролі: сам по собі — штамп, із Ctrl — збереження.
             // ⚠ Еліпс переїхав із 'O' на 'E' саме для того, щоб звільнити Ctrl+O
