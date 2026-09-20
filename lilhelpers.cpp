@@ -522,6 +522,10 @@ X(EdTipFit,           L"Вписати у вікно",               L"Fit to wi
 X(EdTipPanelHide,     L"Згорнути панель",               L"Collapse the panel")                         \
 X(EdTipPanelShow,     L"Розгорнути панель",             L"Expand the panel")                           \
 X(EdTipOpenMore,      L"Інші джерела зображення",       L"Other image sources")                        \
+X(EdTipMin,           L"Згорнути",                      L"Minimise")                                   \
+X(EdTipMax,           L"Розгорнути",                    L"Maximise")                                   \
+X(EdTipRestore,       L"Відновити розмір",              L"Restore down")                               \
+X(EdTipClose,         L"Закрити",                       L"Close")                                      \
 X(EdTipTextBox,       L"Ручками з боків — ширина блока; кегль — степером",                              \
                       L"Side handles set the block width; type size has a stepper")                    \
 X(EdAskReplace,       L"Відкрити інше зображення? Позначки не збережено.",                             \
@@ -7302,13 +7306,18 @@ bool CapRegion(CapShot* out)
 // Етап 1 свідомо не має: захоплення екрана (CAPS-21), виходу в буфер і файл
 // (CAPS-22), решти інструментів (CAPS-23..27) і тону (CAPS-28).
 
+// Власний заголовок. Системний підпис — мертве місце заввишки в кнопку, і
+// скасування з довідкою живуть там природніше, ніж у смузі властивостей, якій
+// місця бракує. Ціна — свої кнопки згорнути/розгорнути/закрити й власний
+// розбір WM_NCCALCSIZE та WM_NCHITTEST.
+constexpr int kEdCaption = 40;    // заголовок
 constexpr int kEdStrip   = 48;    // смуга властивостей
 constexpr int kEdRail    = 52;    // панель інструментів
 constexpr int kEdPanel   = 260;   // права панель
 constexpr int kEdPanelLo = 30;    // вона ж згорнута
 constexpr int kEdStatus  = 48;
 constexpr int kEdMinW    = 1160;
-constexpr int kEdMinH    = 560;
+constexpr int kEdMinH    = 600;
 constexpr int kEdUndoMax = 120;   // глибина скасування; знімок списку дешевий
 
 struct EdTheme {
@@ -7455,7 +7464,7 @@ struct EdSnap {
 enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Front, Back, Del, ZoomOut, ZoomIn, Fit, Panel, Copy, Save,
                    Thick, Fill, Size, Bold, Italic, Align, Stroke, Dup, Open,
-                   OpenMenu };
+                   OpenMenu, Min, Max, Close };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7463,12 +7472,14 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoDel, IcoOpacity, IcoChevR, IcoChevL, IcoMinus, IcoPlus,
              IcoEllipse, IcoArrow, IcoLine, IcoPen, IcoText, IcoBold, IcoItalic,
              IcoAlignL, IcoAlignC, IcoAlignR, IcoStroke0, IcoStroke1, IcoStroke2,
-             IcoDup, IcoOpen, IcoChevD };
+             IcoDup, IcoOpen, IcoChevD, IcoSave, IcoCopy,
+             IcoWinMin, IcoWinMax, IcoWinRestore, IcoWinClose };
 
 enum class EdDrag { None, New, Move, Resize, Pan, Slider };
 
 HWND  g_edWnd = nullptr;
 HFONT g_edFont = nullptr, g_edFontBold = nullptr, g_edFontSmall = nullptr;
+HICON g_edIcon = nullptr;         // значок у власному заголовку
 int   g_edDpi = 96;
 bool  g_edDark = false;
 bool  g_edPanelOpen = true;
@@ -7517,7 +7528,10 @@ std::vector<EdRegion> g_edRegions;
 // межа між ними: усе ліве малюється з клипом по ній, тож переповнення видно
 // зрізаною кнопкою, а не двома іконками одна на одній.
 int g_edStripLimit = 0;
+int g_edCapLimit = 0;      // те саме для заголовка: доки тягнеться підпис
+RECT  g_edRcCaption = {};
 RECT  g_edRcStrip = {}, g_edRcRail = {}, g_edRcCanvas = {}, g_edRcPanel = {}, g_edRcStatus = {};
+bool  g_edActive = true;          // вікно активне: неактивний підпис приглушуємо
 EdHit g_edHotWhat = EdHit::None;
 int   g_edHotIdx  = -1;
 bool  g_edTracking = false;
@@ -7667,6 +7681,43 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
         break;
     // Дублювання: два однакові аркуші зі зсувом. Задній навмисно не суцільний —
     // інакше на 20 точках пара зливається в одну товсту рамку.
+    // Зберегти — стрілка вниз у лоток. Копіювати — планшет із затискачем:
+    // два аркуші зі зсувом тут уже зайняті дублюванням.
+    // Кнопки вікна малюємо тонкою лінією в один піксель, як це робить сама
+    // Windows: товстий штрих поруч із системними вікнами читається як чужий.
+    case IcoWinMin:
+        g.DrawLine(&pen, 4.0f, 10.0f, 16.0f, 10.0f);
+        break;
+    case IcoWinMax:
+        g.DrawRectangle(&pen, 4.5f, 4.5f, 11.0f, 11.0f);
+        break;
+    case IcoWinRestore:
+        g.DrawRectangle(&pen, 3.5f, 6.5f, 10.0f, 10.0f);
+        g.DrawLine(&pen, 6.5f, 6.5f, 6.5f, 3.5f);
+        g.DrawLine(&pen, 6.5f, 3.5f, 16.5f, 3.5f);
+        g.DrawLine(&pen, 16.5f, 3.5f, 16.5f, 13.5f);
+        g.DrawLine(&pen, 16.5f, 13.5f, 13.5f, 13.5f);
+        break;
+    case IcoWinClose:
+        g.DrawLine(&pen, 4.5f, 4.5f, 15.5f, 15.5f);
+        g.DrawLine(&pen, 15.5f, 4.5f, 4.5f, 15.5f);
+        break;
+    case IcoSave:
+        g.DrawLine(&pen, 10.0f, 2.8f, 10.0f, 11.8f);
+        g.DrawLine(&pen, 6.4f, 8.4f, 10.0f, 12.0f);
+        g.DrawLine(&pen, 10.0f, 12.0f, 13.6f, 8.4f);
+        g.DrawLine(&pen, 3.2f, 12.6f, 3.2f, 16.6f);
+        g.DrawLine(&pen, 3.2f, 16.6f, 16.8f, 16.6f);
+        g.DrawLine(&pen, 16.8f, 16.6f, 16.8f, 12.6f);
+        break;
+    case IcoCopy:
+        g.DrawRectangle(&pen, 4.2f, 3.8f, 11.6f, 13.6f);
+        g.DrawLine(&pen, 7.6f, 3.8f, 7.6f, 2.4f);
+        g.DrawLine(&pen, 7.6f, 2.4f, 12.4f, 2.4f);
+        g.DrawLine(&pen, 12.4f, 2.4f, 12.4f, 3.8f);
+        g.DrawLine(&pen, 7.2f, 9.0f, 12.8f, 9.0f);
+        g.DrawLine(&pen, 7.2f, 12.4f, 12.8f, 12.4f);
+        break;
     case IcoDup:
         g.DrawRectangle(&pen, 2.8f, 2.8f, 10.4f, 10.4f);
         g.DrawRectangle(&pen, 6.8f, 6.8f, 10.4f, 10.4f);
@@ -8015,14 +8066,37 @@ void EdLayout(HWND hwnd)
     GetClientRect(hwnd, &rc);
     g_edRegions.clear();
 
+    const int cap = EdPx(kEdCaption);
     const int strip = EdPx(kEdStrip), rail = EdPx(kEdRail), status = EdPx(kEdStatus);
     const int panel = g_edPanelOpen ? EdPx(kEdPanel) : EdPx(kEdPanelLo);
 
-    g_edRcStrip  = { 0, 0, rc.right, strip };
+    g_edRcCaption = { 0, 0, rc.right, cap };
+    g_edRcStrip  = { 0, cap, rc.right, cap + strip };
     g_edRcStatus = { 0, rc.bottom - status, rc.right, rc.bottom };
-    g_edRcRail   = { 0, strip, rail, rc.bottom - status };
-    g_edRcPanel  = { rc.right - panel, strip, rc.right, rc.bottom - status };
-    g_edRcCanvas = { rail, strip, rc.right - panel, rc.bottom - status };
+    g_edRcRail   = { 0, cap + strip, rail, rc.bottom - status };
+    g_edRcPanel  = { rc.right - panel, cap + strip, rc.right, rc.bottom - status };
+    g_edRcCanvas = { rail, cap + strip, rc.right - panel, rc.bottom - status };
+
+    // заголовок: кнопки вікна праворуч, перед ними — скасувати, повторити, довідка
+    {
+        const int ccy = (g_edRcCaption.top + g_edRcCaption.bottom) / 2;
+        const int bw = EdPx(46);
+        int rx = rc.right - bw;
+        RECT rcl = { rx, 0, rx + bw, cap }; EdAdd(rcl, EdHit::Close, 0);
+        rx -= bw;
+        RECT rmx = { rx, 0, rx + bw, cap }; EdAdd(rmx, EdHit::Max, 0);
+        rx -= bw;
+        RECT rmn = { rx, 0, rx + bw, cap }; EdAdd(rmn, EdHit::Min, 0);
+
+        const int b = EdPx(32);
+        rx -= EdPx(10) + b;
+        RECT rh = EdPill(rx, ccy, b, b); EdAdd(rh, EdHit::Help, 0);
+        rx -= b + EdPx(2);
+        RECT rr = EdPill(rx, ccy, b, b); EdAdd(rr, EdHit::Redo, 0);
+        rx -= b + EdPx(2);
+        RECT ru = EdPill(rx, ccy, b, b); EdAdd(ru, EdHit::Undo, 0);
+        g_edCapLimit = rx - EdPx(10);
+    }
 
     EdAdd(g_edRcCanvas, EdHit::Canvas, 0);   // найнижчий пріоритет: перевіряємо останнім
 
@@ -8112,7 +8186,9 @@ void EdLayout(HWND hwnd)
                 const int w1 = EdTextWidth(dc, S(Str::EdOutline), g_edFont) + EdPx(24);
                 const int w2 = EdTextWidth(dc, S(Str::EdFilled), g_edFont) + EdPx(24);
                 RECT a = EdPill(x, cy, w1, EdPx(28)); EdAdd(a, EdHit::Fill, 0);
-                RECT b2 = EdPill(a.right, cy, w2, EdPx(28)); EdAdd(b2, EdHit::Fill, 1);
+                // Проміжок такий самий, як між товщинами: злиті кнопки читалися
+                // як один перемикач із двох половин, а це два різні стани.
+                RECT b2 = EdPill(a.right + EdPx(4), cy, w2, EdPx(28)); EdAdd(b2, EdHit::Fill, 1);
                 x = b2.right + gap;
             }
 
@@ -8124,26 +8200,21 @@ void EdLayout(HWND hwnd)
             x = sl.right + EdPx(8) + EdPx(44) + gap;
         }
 
-        // Скасувати, Повторити й довідка притиснуті праворуч. У макеті вони в
-        // заголовку вікна; поки заголовок системний, їх дім — тут. Дії над
-        // вибраним стоять там само, ліворуч від них: у лівій течії вони
-        // налазили на цю групу, щойно кнопок у ній побільшало.
+        // Скасувати, повторити й довідка переїхали в заголовок (рішення власника
+        // 20.09), а дії над вибраним лишились притиснутими праворуч тут: у лівій
+        // течії вони налазили на сусідів, щойно кнопок побільшало.
         {
             const int b = EdPx(32);
             int rx = rc.right - EdPx(14) - b;
-            RECT h = EdPill(rx, cy, b, b); EdAdd(h, EdHit::Help, 0);
-            rx -= b + EdPx(10);
-            RECT rr = EdPill(rx, cy, b, b); EdAdd(rr, EdHit::Redo, 0);
-            rx -= b + EdPx(2);
-            RECT ru = EdPill(rx, cy, b, b); EdAdd(ru, EdHit::Undo, 0);
             if (hasSel) {
                 const EdHit acts[4] = { EdHit::Del, EdHit::Dup, EdHit::Back, EdHit::Front };
-                rx -= EdPx(14) + b;
                 for (int i = 0; i < 4; ++i) {
                     RECT ra = EdPill(rx, cy, b, b);
                     EdAdd(ra, acts[i], 0);
                     if (i < 3) rx -= b + EdPx(4);
                 }
+            } else {
+                rx = rc.right - EdPx(14);
             }
             g_edStripLimit = rx - EdPx(10);
         }
@@ -8175,10 +8246,10 @@ void EdLayout(HWND hwnd)
 
         // CAPS-22: виходи в правому куті, підписані й далеко від системного ✕.
         const int bh = EdPx(32);
-        const int wc = EdTextWidth(dc, S(Str::EdCopy), g_edFont)
-                     + EdTextWidth(dc, L"Ctrl+C", g_edFontSmall) + EdPx(44);
-        const int ws = EdTextWidth(dc, S(Str::EdSaveAs), g_edFont)
-                     + EdTextWidth(dc, L"Ctrl+S", g_edFontSmall) + EdPx(44);
+        // Клавіша переїхала в підказку, натомість зліва стоїть іконка — як у
+        // кнопки «Відкрити», щоб три дії над файлом виглядали однією родиною.
+        const int wc = EdTextWidth(dc, S(Str::EdCopy), g_edFont) + EdPx(52);
+        const int ws = EdTextWidth(dc, S(Str::EdSaveAs), g_edFont) + EdPx(52);
         int rx = rc.right - EdPx(14) - wc;
         RECT rcCopy = { rx, cy - bh / 2, rx + wc, cy + bh / 2 };
         EdAdd(rcCopy, EdHit::Copy, 0);
@@ -8248,6 +8319,80 @@ void EdPaintSlider(Gdiplus::Graphics& g, const RECT& r, const EdTheme& t, int pe
     Gdiplus::Color kf = EdC(g_edDark ? RGB(230, 230, 230) : RGB(255, 255, 255));
     Gdiplus::Color kb = EdC(t.btnBd);
     EdFillRound(g, knob, k / 2.0f, &kf, &kb);
+}
+
+// ---- CAPS-37: власний заголовок -----------------------------------------
+//
+// Системний підпис прибрано в WM_NCCALCSIZE, і його місце стало звичайним
+// клієнтом. Через це кнопки вікна доводиться малювати самим — зате скасування,
+// повторення й довідка живуть там, де в сучасних застосунках, а смуга
+// властивостей отримала назад майже сто точок.
+
+void EdPaintCaption(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
+{
+    HBRUSH b = CreateSolidBrush(t.chrome);
+    FillRect(dc, &g_edRcCaption, b);
+    DeleteObject(b);
+    RECT line = { g_edRcCaption.left, g_edRcCaption.bottom - 1, g_edRcCaption.right, g_edRcCaption.bottom };
+    b = CreateSolidBrush(t.border);
+    FillRect(dc, &line, b);
+    DeleteObject(b);
+
+    // Значок і назва — те саме, що показував системний підпис.
+    const int cy = (g_edRcCaption.top + g_edRcCaption.bottom) / 2;
+    int x = EdPx(12);
+    if (g_edIcon) {
+        const int side = EdPx(16);
+        DrawIconEx(dc, x, cy - side / 2, g_edIcon, side, side, 0, nullptr, DI_NORMAL);
+        x += side + EdPx(10);
+    }
+    wchar_t cap[160];
+    wsprintfW(cap, L"%s — %s", S(Str::EdTitle), kAppName);
+    RECT tr = { x, g_edRcCaption.top, g_edCapLimit > x ? g_edCapLimit : g_edRcCaption.right,
+                g_edRcCaption.bottom };
+    EdDrawText(dc, tr, cap, g_edFont, g_edActive ? t.text : t.text2,
+               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    struct { EdHit what; int ico; bool on; } cmds[3] = {
+        { EdHit::Undo, IcoUndo, !g_edUndo.empty() },
+        { EdHit::Redo, IcoRedo, !g_edRedo.empty() },
+        { EdHit::Help, IcoHelp, true }
+    };
+    for (int i = 0; i < 3; ++i) {
+        const RECT* r = EdRegionRect(cmds[i].what, 0);
+        if (!r) continue;
+        const bool hot = (g_edHotWhat == cmds[i].what) && cmds[i].on;
+        EdPaintButton(g, *r, t, false, hot, true);
+        EdIcon(g, cmds[i].ico, EdIconBox(*r), EdC(cmds[i].on ? t.text : t.text2, cmds[i].on ? 255 : 130), 1.5f);
+    }
+
+    // Кнопки вікна: прямокутні на всю висоту, як у системи. У закривної своя
+    // підсвітка — червона; це єдиний колір, який користувач тут очікує.
+    const bool zoomed = IsZoomed(g_edWnd) != 0;
+    struct { EdHit what; int ico; } wins[3] = {
+        { EdHit::Min,   IcoWinMin },
+        { EdHit::Max,   zoomed ? IcoWinRestore : IcoWinMax },
+        { EdHit::Close, IcoWinClose }
+    };
+    for (int i = 0; i < 3; ++i) {
+        const RECT* r = EdRegionRect(wins[i].what, 0);
+        if (!r) continue;
+        const bool hot = (g_edHotWhat == wins[i].what);
+        COLORREF fg = g_edActive ? t.text : t.text2;
+        if (hot) {
+            const COLORREF bg = (wins[i].what == EdHit::Close) ? RGB(232, 17, 35) : t.hot;
+            HBRUSH hb = CreateSolidBrush(bg);
+            FillRect(dc, r, hb);
+            DeleteObject(hb);
+            if (wins[i].what == EdHit::Close) fg = RGB(255, 255, 255);
+        }
+        // Піктограма в 20 точок на кнопці в 46: рахуємо квадрат самі, бо
+        // EdIconBox бере 58 % меншої сторони, а тут менша — висота.
+        const int side = EdPx(20);
+        RECT ib = { (r->left + r->right) / 2 - side / 2, (r->top + r->bottom) / 2 - side / 2,
+                    (r->left + r->right) / 2 + side / 2, (r->top + r->bottom) / 2 + side / 2 };
+        EdIcon(g, wins[i].ico, ib, EdC(fg), 1.2f);
+    }
 }
 
 void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
@@ -8414,18 +8559,6 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         EdIcon(g, acts[i].ico, EdIconBox(*r), EdC(acts[i].danger ? t.dangerFg : t.text), 1.5f);
     }
 
-    struct { EdHit what; int ico; bool on; } cmds[3] = {
-        { EdHit::Undo, IcoUndo, !g_edUndo.empty() },
-        { EdHit::Redo, IcoRedo, !g_edRedo.empty() },
-        { EdHit::Help, IcoHelp, true }
-    };
-    for (int i = 0; i < 3; ++i) {
-        const RECT* r = EdRegionRect(cmds[i].what, 0);
-        if (!r) continue;
-        const bool hot = (g_edHotWhat == cmds[i].what) && cmds[i].on;
-        EdPaintButton(g, *r, t, false, hot, true);
-        EdIcon(g, cmds[i].ico, EdIconBox(*r), EdC(cmds[i].on ? t.text : t.text2, cmds[i].on ? 255 : 130), 1.5f);
-    }
 }
 
 void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
@@ -8952,9 +9085,9 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 
     // Дві рівноправні кнопки. Підсвічена — та, якою користувалися востаннє:
     // вона ж спрацює на Enter. Друга нікуди не дівається.
-    struct { EdHit what; Str label; const wchar_t* key; bool primary; } outs[2] = {
-        { EdHit::Save, Str::EdSaveAs, L"Ctrl+S", g_edLastAction == 1 },
-        { EdHit::Copy, Str::EdCopy,   L"Ctrl+C", g_edLastAction == 0 }
+    struct { EdHit what; Str label; int ico; bool primary; } outs[2] = {
+        { EdHit::Save, Str::EdSaveAs, IcoSave, g_edLastAction == 1 },
+        { EdHit::Copy, Str::EdCopy,   IcoCopy, g_edLastAction == 0 }
     };
     for (int i = 0; i < 2; ++i) {
         const RECT* r = EdRegionRect(outs[i].what, 0);
@@ -8968,10 +9101,10 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
             EdPaintButton(g, *r, t, false, hot, false);
         }
         const COLORREF fg = outs[i].primary ? (g_edDark ? RGB(0, 52, 79) : RGB(255, 255, 255)) : t.text;
-        const COLORREF dim = outs[i].primary ? (g_edDark ? RGB(0, 83, 124) : RGB(207, 228, 247)) : t.text2;
-        RECT lr = { r->left + EdPx(14), r->top, r->right - EdPx(12), r->bottom };
+        RECT ic = { r->left + EdPx(10), r->top, r->left + EdPx(10) + EdPx(18), r->bottom };
+        EdIcon(g, outs[i].ico, EdIconBox(ic), EdC(fg), 1.5f);
+        RECT lr = { ic.right + EdPx(6), r->top, r->right - EdPx(10), r->bottom };
         EdDrawText(dc, lr, S(outs[i].label), g_edFont, fg, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        EdDrawText(dc, lr, outs[i].key, g_edFontSmall, dim, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
 }
 
@@ -8981,6 +9114,7 @@ void EdPaint(HWND hwnd, HDC dc)
     Gdiplus::Graphics g(dc);
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     EdPaintCanvas(dc, g, t);
+    EdPaintCaption(dc, g, t);
     EdPaintRail(dc, g, t);
     EdPaintPanel(dc, g, t);
     EdPaintStrip(dc, g, t);
@@ -9342,6 +9476,9 @@ const UINT kEdTipInfoSize = TTTOOLINFOW_V1_SIZE;   // макет, а не conste
 constexpr UINT kEdTipTimer = 8;
 constexpr UINT kEdTipDelay = 450;
 
+// Підказка більше не одна константа: до інструментів і виходів дописується
+// клавіша. Тримати для кожної пари «назва + клавіша» окремий рядок у таблиці
+// перекладів означало б перекладати клавіші, яких ніхто не перекладає.
 Str EdTipFor(EdHit what, int idx)
 {
     switch (what) {
@@ -9374,9 +9511,41 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::ZoomIn:  return Str::EdTipZoomIn;
     case EdHit::Fit:     return Str::EdTipFit;
     case EdHit::Panel:   return g_edPanelOpen ? Str::EdTipPanelHide : Str::EdTipPanelShow;
+    case EdHit::Copy:    return Str::EdCopy;
+    case EdHit::Save:    return Str::EdSaveAs;
+    case EdHit::Min:     return Str::EdTipMin;
+    case EdHit::Max:     return IsZoomed(g_edWnd) ? Str::EdTipRestore : Str::EdTipMax;
+    case EdHit::Close:   return Str::EdTipClose;
     case EdHit::Open:    return Str::EdOpenTitle;
     case EdHit::OpenMenu:return Str::EdTipOpenMore;
     default:             return Str::Empty;
+    }
+}
+
+// Клавіша інструмента — та сама, що в довідці. Один масив на обидва місця:
+// якби їх було два, вони розійшлися б за перший же новий інструмент.
+const wchar_t* const kEdToolKeys[7] = { L"V", L"R", L"O", L"A", L"L", L"P", L"T" };
+
+void EdTipText(EdHit what, int idx, wchar_t* out, int cch)
+{
+    out[0] = L'\0';
+    const Str st = EdTipFor(what, idx);
+    if (st == Str::Empty) return;
+    const wchar_t* key = nullptr;
+    if (what == EdHit::Tool && idx >= 0 && idx < 7) key = kEdToolKeys[idx];
+    else if (what == EdHit::Copy) key = L"Ctrl+C";
+    else if (what == EdHit::Save) key = L"Ctrl+S";
+    if (key) {
+        lstrcpynW(out, S(st), cch);
+        const int len = lstrlenW(out);
+        if (len + 6 < cch) {
+            lstrcpynW(out + len, L" (", cch - len);
+            lstrcpynW(out + len + 2, key, cch - len - 2);
+            const int l2 = lstrlenW(out);
+            if (l2 + 2 < cch) lstrcpynW(out + l2, L")", cch - l2);
+        }
+    } else {
+        lstrcpynW(out, S(st), cch);
     }
 }
 
@@ -9426,14 +9595,15 @@ void EdTipTheme()
 
 void EdTipShow(HWND hwnd)
 {
-    const Str st = EdTipFor(g_edHotWhat, g_edHotIdx);
-    if (st == Str::Empty || !EdTipEnsure(hwnd)) return;
+    wchar_t tip[160];
+    EdTipText(g_edHotWhat, g_edHotIdx, tip, 160);
+    if (!tip[0] || !EdTipEnsure(hwnd)) return;
 
     TTTOOLINFOW ti = {};
     ti.cbSize   = kEdTipInfoSize;
     ti.hwnd     = hwnd;
     ti.uId      = 1;
-    ti.lpszText = (LPWSTR)S(st);
+    ti.lpszText = tip;
     SendMessageW(g_edTip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
 
     // ⚠ Спершу вмикаємо, потім позиціонуємо — саме в такому порядку, як у
@@ -9710,6 +9880,84 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         EdApplyTheme(hwnd);
         return 0;
 
+    // ---- власний заголовок: підпис віддаємо клієнту ----------------------
+    case WM_NCCALCSIZE: {
+        if (!wp) break;
+        NCCALCSIZE_PARAMS* p = (NCCALCSIZE_PARAMS*)lp;
+        const LONG top = p->rgrc[0].top;
+        DefWindowProcW(hwnd, msg, wp, lp);       // хай порахує рамки як завжди
+        p->rgrc[0].top = top;                    // а верх лишаємо клієнтові
+        if (IsZoomed(hwnd)) {
+            // ⚠ Розгорнуте вікно вилазить за межі монітора рівно на товщину
+            // рамки. Якщо верх не підрізати, перший рядок заголовка опиниться
+            // за екраном — класична вада власних підписів.
+            const UINT dpi = GetDpiForWindow(hwnd);
+            p->rgrc[0].top += GetSystemMetricsForDpi(SM_CYFRAME, dpi)
+                            + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+        }
+        return 0;
+    }
+
+    case WM_NCHITTEST: {
+        const LRESULT sys = DefWindowProcW(hwnd, msg, wp, lp);
+        if (sys != HTCLIENT) return sys;         // рамки й кути лишаються системі
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        ScreenToClient(hwnd, &pt);
+        if (pt.y >= g_edRcCaption.bottom) return HTCLIENT;
+        if (!IsZoomed(hwnd)) {
+            // Верхньої рамки більше немає — смужку під зміну розміру лишаємо самі.
+            const UINT dpi = GetDpiForWindow(hwnd);
+            const int grip = GetSystemMetricsForDpi(SM_CYFRAME, dpi)
+                           + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            if (pt.y < grip) return HTTOP;
+        }
+        const EdRegion* r = EdFind(pt);
+        // Кнопка «розгорнути» віддається системі як HTMAXBUTTON: лише так
+        // Windows 11 показує над нею підказку з розкладками вікон.
+        if (r && r->what == EdHit::Max) return HTMAXBUTTON;
+        if (r) return HTCLIENT;
+        return HTCAPTION;
+    }
+
+    // HTMAXBUTTON обслуговує система, тож клік і наведення приходять сюди
+    // неклієнтськими повідомленнями, а не звичайними.
+    case WM_NCMOUSEMOVE:
+        if (wp == HTMAXBUTTON) {
+            if (g_edHotWhat != EdHit::Max) {
+                g_edHotWhat = EdHit::Max;
+                g_edHotIdx = 0;
+                TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE | TME_NONCLIENT, hwnd, 0 };
+                TrackMouseEvent(&tme);
+                InvalidateRect(hwnd, &g_edRcCaption, FALSE);
+            }
+            return 0;
+        }
+        break;
+
+    case WM_NCMOUSELEAVE:
+        if (g_edHotWhat == EdHit::Max) {
+            g_edHotWhat = EdHit::None;
+            g_edHotIdx = -1;
+            InvalidateRect(hwnd, &g_edRcCaption, FALSE);
+        }
+        break;
+
+    case WM_NCLBUTTONDOWN:
+        if (wp == HTMAXBUTTON) return 0;         // натиск ковтаємо, діємо на відпусканні
+        break;
+
+    case WM_NCLBUTTONUP:
+        if (wp == HTMAXBUTTON) {
+            ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+            return 0;
+        }
+        break;
+
+    case WM_ACTIVATE:
+        g_edActive = (LOWORD(wp) != WA_INACTIVE);
+        InvalidateRect(hwnd, &g_edRcCaption, FALSE);
+        break;
+
     case WM_DPICHANGED: {
         g_edDpi = HIWORD(wp);
         EdMakeFonts();
@@ -9946,6 +10194,9 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             SetCapture(hwnd);
             EdSetAlphaAt(pt.x);
             return 0;
+        case EdHit::Min:   ShowWindow(hwnd, SW_MINIMIZE); return 0;
+        case EdHit::Max:   ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE); return 0;
+        case EdHit::Close: SendMessageW(hwnd, WM_CLOSE, 0, 0); return 0;
         case EdHit::Undo:  EdUndoAction(); return 0;
         case EdHit::Redo:  EdRedoAction(); return 0;
         case EdHit::Help:  MessageBoxW(hwnd, S(Str::EdHelpBody), S(Str::EdHelpTitle),
@@ -10236,6 +10487,11 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
         SetForegroundWindow(g_edWnd);
         return;
     }
+
+    if (!g_edIcon)
+        g_edIcon = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                     GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+                                     LR_DEFAULTCOLOR | LR_SHARED);
 
     wchar_t caption[160];
     wsprintfW(caption, L"%s — %s", S(Str::EdTitle), kAppName);
