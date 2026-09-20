@@ -155,6 +155,9 @@ constexpr int  IDC_LANG_UK       = 171;
 constexpr int  IDC_LANG_EN       = 172;
 // CAPS-16: вкладка «Перегляд»
 constexpr int  IDC_PEEK_ENABLE   = 180;
+
+constexpr int  IDC_CAP_HK1       = 190;   // CAPS-21: три поля перехоплення
+constexpr int  IDC_CAP_HKRESET   = 193;
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -431,6 +434,19 @@ X(EdErrClip,          L"У буфері обміну немає зображен
 X(CapHkNone,          L"не задано",                     L"not set")                                    \
 X(CapHkBusy,          L"Частину гарячих клавіш тримає інша програма — знімки по них не працюватимуть.", \
                       L"Another program holds some hotkeys; those shortcuts will not work.")           \
+X(TabShots,           L"Знімки",                        L"Shots")                                      \
+X(CapSecHotkeys,      L"Гарячі клавіші",                L"Hotkeys")                                    \
+X(CapHkClipL,         L"Зображення з буфера",           L"From clipboard")                             \
+X(CapHkPress,         L"натисніть комбінацію…",         L"press a combination…")                       \
+X(CapHkTaken,         L"зайнято іншою програмою",       L"held by another app")                        \
+X(CapHkOff,           L"вимкнено",                      L"off")                                        \
+X(CapHkDefaults,      L"Повернути типові",              L"Restore defaults")                           \
+X(CapHkHint,          L"Клацніть поле і натисніть комбінацію з Ctrl, Alt або Shift. Якщо її вже "      \
+                      L"тримає інша програма, поле лишиться як було й скаже про це. Backspace "        \
+                      L"вимикає клавішу зовсім.",                                                       \
+                      L"Click a field and press a combination with Ctrl, Alt or Shift. If another "    \
+                      L"app already holds it, the field stays as it was and says so. Backspace "       \
+                      L"turns the shortcut off.")                                                       \
 X(EdCapScreen,        L"Знімок екрана",                 L"Screenshot")                                 \
 X(EdCapWindow,        L"Знімок вікна",                  L"Window shot")                                \
 X(EdHdrNote,          L"HDR · тон-мапінг застосовано",  L"HDR · tone-mapped")                          \
@@ -502,8 +518,9 @@ void RememberLoc(HWND h, Str id)
         g_locCtrls[g_locCtrlsN++] = { h, id };
 }
 
-constexpr int kTabCount = 5;
-const Str kTabTitles[kTabCount] = { Str::TabLayout, Str::TabCursor, Str::TabTheme, Str::TabPeek, Str::TabSettings };
+constexpr int kTabCount = 6;
+const Str kTabTitles[kTabCount] = { Str::TabLayout, Str::TabCursor, Str::TabTheme,
+                                    Str::TabPeek, Str::TabShots, Str::TabSettings };
 
 // Два способи перехопити клавішу. Основний тримає Caps Lock вимкненим, але це
 // клавіатурний хук, який деякі захисні програми не люблять; запасний працює
@@ -531,6 +548,7 @@ bool  g_layoutOn = true;
 HWND  g_layoutCheckbox = nullptr;
 HWND  g_pageSettings[32] = {};  int g_pageSettingsN = 0;
 HWND  g_pagePeek[24]     = {};  int g_pagePeekN = 0;   // CAPS-16
+HWND  g_pageShots[24]    = {};  int g_pageShotsN = 0;  // CAPS-21
 
 // ---------- CAPS-8: тема самого вікна ----------
 //
@@ -2866,6 +2884,7 @@ bool IsPageControl(HWND c)
     for (int i = 0; i < g_thAdvN; ++i)      if (g_thAdv[i]      == c) return true;
     for (int i = 0; i < g_pageSettingsN; ++i) if (g_pageSettings[i] == c) return true;
     for (int i = 0; i < g_pagePeekN; ++i)     if (g_pagePeek[i]     == c) return true;
+    for (int i = 0; i < g_pageShotsN; ++i)    if (g_pageShots[i]    == c) return true;
     return false;
 }
 
@@ -2886,7 +2905,8 @@ void SelectTab(int index)
     ShowGroup(g_pageTheme, g_pageThemeN, index == 2);
     ShowGroup(g_thAdv, g_thAdvN, index == 2 && g_thAdvVisible);
     ShowGroup(g_pagePeek, g_pagePeekN, index == 3);          // CAPS-16
-    ShowGroup(g_pageSettings, g_pageSettingsN, index == 4);
+    ShowGroup(g_pageShots, g_pageShotsN, index == 4);        // CAPS-21
+    ShowGroup(g_pageSettings, g_pageSettingsN, index == 5);
 }
 
 // CAPS-12: обидві кнопки «Детально» несуть ще й стрілку стану, тож їхній підпис
@@ -6309,6 +6329,8 @@ void UpdateModeHint()
 // CAPS-12: перемалювати інтерфейс новою мовою. Вікно не перестворюється —
 // позиції й розміри однакові для обох мов (див. вимогу до довжини перекладу),
 // тож достатньо переписати підписи й оновити рядки стану.
+void CapHkRefresh();   // CAPS-21: підписи клавіш теж залежать від мови
+
 void ApplyLanguage()
 {
     for (int i = 0; i < g_locCtrlsN; ++i)
@@ -8781,6 +8803,95 @@ struct CapDpiScope {
     ~CapDpiScope() { if (prev) SetThreadDpiAwarenessContext(prev); }
 };
 
+// ---- CAPS-21: поля перехоплення гарячих клавіш --------------------------
+
+HWND g_capHkEdit[3] = {};
+HWND g_capHkStatus  = nullptr;
+
+void CapHkRefresh()
+{
+    for (int i = 0; i < 3; ++i) {
+        if (!g_capHkEdit[i]) continue;
+        wchar_t buf[128];
+        CapHotkeyText(g_hk[i], buf, 128);
+        SetWindowTextW(g_capHkEdit[i], buf);
+    }
+    if (!g_capHkStatus) return;
+    // Один рядок стану на всі три: місця на сторінці 420 px, а окрема колонка
+    // під кожним полем не вміщає жодного осмисленого тексту.
+    wchar_t line[512] = {};
+    const Str names[3] = { Str::CapHkClipL, Str::EdCapRegion, Str::EdCapScreen };
+    for (int i = 0; i < 3; ++i) {
+        const wchar_t* what = nullptr;
+        if (!g_hk[i])         what = S(Str::CapHkOff);
+        else if (!g_hkOk[i])  what = S(Str::CapHkTaken);
+        if (!what) continue;
+        if (line[0]) lstrcatW(line, L"    ");
+        lstrcatW(line, S(names[i]));
+        lstrcatW(line, L" — ");
+        lstrcatW(line, what);
+    }
+    SetWindowTextW(g_capHkStatus, line);
+}
+
+void CapHkSet(int slot, int packed)
+{
+    const int prev = g_hk[slot];
+    if (packed == prev) { CapHkRefresh(); return; }
+    g_hk[slot] = packed;
+    CapApplyHotkeys(g_mainWnd);
+    if (packed && !g_hkOk[slot]) {       // не далась — вертаємо як було
+        g_hk[slot] = prev;
+        CapApplyHotkeys(g_mainWnd);
+    } else {
+        CapSaveHotkeys();
+    }
+    CapHkRefresh();
+}
+
+LRESULT CALLBACK CapHkSubclass(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR)
+{
+    const int slot = (int)id;
+    switch (msg) {
+    case WM_GETDLGCODE:
+        return DLGC_WANTALLKEYS | DLGC_WANTARROWS | DLGC_WANTCHARS;
+    case WM_SETFOCUS:
+        SetWindowTextW(h, S(Str::CapHkPress));
+        break;
+    case WM_KILLFOCUS:
+        CapHkRefresh();
+        break;
+    case WM_CHAR:
+    case WM_SYSCHAR:
+        return 0;                         // щоб поле не наповнювалось літерами
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN: {
+        const UINT vk = (UINT)wp;
+        if (vk == VK_TAB) {
+            SetFocus(GetNextDlgTabItem(GetParent(h), h, GetKeyState(VK_SHIFT) < 0));
+            return 0;
+        }
+        if (vk == VK_CONTROL || vk == VK_SHIFT || vk == VK_MENU ||
+            vk == VK_LWIN || vk == VK_RWIN || vk == VK_CAPITAL)
+            return 0;                     // самі модифікатори нічого не задають
+        if (vk == VK_ESCAPE) { CapHkRefresh(); return 0; }
+        if (vk == VK_BACK || vk == VK_DELETE) { CapHkSet(slot, 0); return 0; }
+        UINT mods = 0;
+        if (GetKeyState(VK_CONTROL) < 0) mods |= MOD_CONTROL;
+        if (GetKeyState(VK_MENU) < 0)    mods |= MOD_ALT;
+        if (GetKeyState(VK_SHIFT) < 0)   mods |= MOD_SHIFT;
+        if (!mods) return 0;              // без модифікатора глобальна клавіша не має сенсу
+        CapHkSet(slot, (int)((mods << 16) | vk));
+        return 0;
+    }
+    case WM_NCDESTROY:
+        RemoveWindowSubclass(h, CapHkSubclass, id);
+        break;
+    default: break;
+    }
+    return DefSubclassProc(h, msg, wp, lp);
+}
+
 void CapTake(HINSTANCE hInst, HWND owner, CapMode mode, HWND target)
 {
     CapShot shot = {};
@@ -9196,6 +9307,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_EDITOR:
             EdOpen(GetModuleHandleW(nullptr), hwnd);
             break;
+        case IDC_CAP_HKRESET:
+            g_hk[0] = kHkDefClip;
+            g_hk[1] = kHkDefRegion;
+            g_hk[2] = kHkDefScreen;
+            CapApplyHotkeys(hwnd);
+            CapSaveHotkeys();
+            CapHkRefresh();
+            break;
         case IDM_CAPSCREEN:
             CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Screen, nullptr);
             break;
@@ -9449,6 +9568,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     auto addTA = [&](HWND c) { return AddTo(g_thAdv,        g_thAdvN,        c); };
     auto addS  = [&](HWND c) { return AddTo(g_pageSettings, g_pageSettingsN, c); };
     auto addP  = [&](HWND c) { return AddTo(g_pagePeek,     g_pagePeekN,     c); };   // CAPS-16
+    auto addK  = [&](HWND c) { return AddTo(g_pageShots,    g_pageShotsN,    c); };   // CAPS-21
 
     // Сітка сторінки: y біжить згори вниз, кожен помічник сам відступає під себе.
     int y = PY;
@@ -9618,6 +9738,26 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     sec(addP, Str::PeekSecKeeps);
     text(addP, Str::PeekKeeps, 3, 0, 8);
 
+    // ---- вкладка «Знімки» (CAPS-21) ----
+    y = PY;
+    sec(addK, Str::CapSecHotkeys);
+    {
+        const Str names[3] = { Str::CapHkClipL, Str::EdCapRegion, Str::EdCapScreen };
+        for (int i = 0; i < 3; ++i) {
+            addK(mkS(L"STATIC", names[i], 0, PX, y + 5, 186, 20, 0));
+            g_capHkEdit[i] = addK(mk(L"EDIT", L"", ES_CENTER | ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP,
+                                     PX + 192, y, 224, 26, IDC_CAP_HK1 + i));
+            SetWindowSubclass(g_capHkEdit[i], CapHkSubclass, (UINT_PTR)i, 0);
+            y += 32;
+        }
+    }
+    y += 6;
+    hint(addK, Str::CapHkHint, 3);
+    g_capHkStatus = addK(mkS(L"STATIC", Str::Empty, 0, PX, y, PW, 36, IDC_HINT_GRAY));
+    y += 42;
+    button(addK, Str::CapHkDefaults, PX, 170, IDC_CAP_HKRESET);
+    y += 38;
+
     // ---- вкладка «Налаштування» (CAPS-9) ----
     y = PY;
     g_checkbox = check(addS, Str::SetAutostart, IDC_AUTOSTART, false);
@@ -9708,6 +9848,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // вголос: мовчазна невдача виглядає як «програма зламалась».
     CapLoadHotkeys();
     if (!CapApplyHotkeys(hwnd)) TrayBalloon(kAppName, S(Str::CapHkBusy));
+    CapHkRefresh();
     ApplyCursorFeature();  // CAPS-2: мишачий хук на тому ж потоці
     g_mode = LoadMode();
     // CAPS-9: перехоплення лише якщо перемикання ввімкнено; інакше програма живе
