@@ -480,6 +480,8 @@ X(EdToolArrow,        L"Стрілка",                       L"Arrow")        
 X(EdToolLine,         L"Лінія",                         L"Line")                                       \
 X(EdToolPen,          L"Олівець",                       L"Pencil")                                     \
 X(EdToolText,         L"Текст",                         L"Text")                                       \
+X(EdToolHide,         L"Приховати",                     L"Hide")                                       \
+X(EdToolMark,         L"Маркер",                        L"Marker")                                     \
 X(EdOutline,          L"Контур",                        L"Outline")                                    \
 X(EdFilled,           L"Заливка",                       L"Filled")                                     \
 X(CapKeepTool,        L"Лишати інструмент активним після малювання",                                   \
@@ -526,6 +528,11 @@ X(EdTipMin,           L"Згорнути",                      L"Minimise")    
 X(EdTipMax,           L"Розгорнути",                    L"Maximise")                                   \
 X(EdTipRestore,       L"Відновити розмір",              L"Restore down")                               \
 X(EdTipClose,         L"Закрити",                       L"Close")                                      \
+X(EdTipBlur,          L"Розмиття",                      L"Blur")                                       \
+X(EdTipPixels,        L"Пікселі",                       L"Pixels")                                     \
+X(EdTipPlate,         L"Суцільна плашка",               L"Solid plate")                                \
+X(EdTipStrength,      L"Сила приховування",             L"Hiding strength")                            \
+X(EdTipMarkH,         L"Висота смуги",                  L"Band height")                                \
 X(EdTipTextBox,       L"Ручками з боків — ширина блока; кегль — степером",                              \
                       L"Side handles set the block width; type size has a stepper")                    \
 X(EdAskReplace,       L"Відкрити інше зображення? Позначки не збережено.",                             \
@@ -534,7 +541,7 @@ X(EdOpenFilter,       L"Зображення",                    L"Images")    
 X(EdErrOpen,          L"Не вдалося відкрити зображення.", L"Could not open the image.")                \
 X(EdHelpTitle,        L"Редактор знімків",              L"Screenshot editor")                          \
 X(EdHelpBody,         L"Інструменти: V вибір, R прямокутник, O овал, A стрілка, L лінія,\n"            \
-                      L"P олівець, T текст.\n\n"                                                       \
+                      L"P олівець, T текст, B приховати, H маркер.\n\n"                                \
                       L"Shift під час малювання — квадрат, коло, кут через 45°\n"                       \
                       L"Текст: Enter — готово, Shift+Enter — новий рядок,\n"                            \
                       L"подвійний клік по напису — відкрити на правку\n"                                \
@@ -543,7 +550,7 @@ X(EdHelpBody,         L"Інструменти: V вибір, R прямокут
                       L"Коліщатко — масштаб, подвійний клік — вписати\n"                                \
                       L"Пробіл або середня кнопка — рухати полотно",                                    \
                       L"Tools: V select, R rectangle, O oval, A arrow, L line,\n"                       \
-                      L"P pencil, T text.\n\n"                                                         \
+                      L"P pencil, T text, B hide, H marker.\n\n"                                       \
                       L"Shift while drawing — square, circle, 45° steps\n"                              \
                       L"Text: Enter finishes, Shift+Enter adds a line,\n"                               \
                       L"double click a caption to edit it again\n"                                      \
@@ -7356,8 +7363,8 @@ const COLORREF kEdPalette[8] = {
     RGB(0, 120, 212), RGB(123, 63, 228), RGB(27, 27, 31), RGB(255, 255, 255)
 };
 
-enum class EdTool { Select, Rect, Ellipse, Arrow, Line, Pen, Text };
-enum class EdKind { Rect, Ellipse, Arrow, Line, Pen, Text };
+enum class EdTool { Select, Rect, Ellipse, Arrow, Line, Pen, Text, Hide, Mark };
+enum class EdKind { Rect, Ellipse, Arrow, Line, Pen, Text, Hide, Mark };
 
 struct EdObj {
     EdKind   kind;
@@ -7381,6 +7388,10 @@ struct EdObj {
     // вирівнювати немає відносно чого: рядок дорівнює блоку. Розтягнута
     // ручкою ширина вмикає переноси, і аж тоді вирівнювання щось означає.
     int      boxw;
+    // Далі — лише Hide. Режим: 0 розмиття, 1 пікселі, 2 плашка. Сила — 10..100 %,
+    // і від неї залежить радіус розмиття чи розмір блока пікселізації.
+    int      mode;
+    int      strength;
 };
 
 // Чіп називає вид однією назвою і для інструмента, і для вибраного. Префікс
@@ -7394,6 +7405,8 @@ Str EdKindName(EdKind k)
     case EdKind::Line:    return Str::EdToolLine;
     case EdKind::Pen:     return Str::EdToolPen;
     case EdKind::Text:    return Str::EdToolText;
+    case EdKind::Hide:    return Str::EdToolHide;
+    case EdKind::Mark:    return Str::EdToolMark;
     default:              return Str::EdToolRect;
     }
 }
@@ -7406,6 +7419,8 @@ Str EdToolName(EdTool t)
     case EdTool::Line:    return Str::EdToolLine;
     case EdTool::Pen:     return Str::EdToolPen;
     case EdTool::Text:    return Str::EdToolText;
+    case EdTool::Hide:    return Str::EdToolHide;
+    case EdTool::Mark:    return Str::EdToolMark;
     case EdTool::Rect:    return Str::EdToolRect;
     default:              return Str::Empty;
     }
@@ -7419,22 +7434,50 @@ EdKind EdToolKind(EdTool t)
     case EdTool::Line:    return EdKind::Line;
     case EdTool::Pen:     return EdKind::Pen;
     case EdTool::Text:    return EdKind::Text;
+    case EdTool::Hide:    return EdKind::Hide;
+    case EdTool::Mark:    return EdKind::Mark;
     default:              return EdKind::Rect;
     }
 }
 
 bool EdIsSegment(EdKind k) { return k == EdKind::Arrow || k == EdKind::Line; }
 bool EdCanFill(EdKind k)   { return k == EdKind::Rect || k == EdKind::Ellipse; }
-// У напису товщини немає: її роль грає кегль, і дві шкали розміру на одній
-// смузі властивостей читались би як помилка.
-bool EdHasThick(EdKind k)  { return k != EdKind::Text; }
+// Приховування й маркер — не мазки пером, а дії НАД ПІКСЕЛЯМИ знімка: обидва
+// беруть ділянку базового бітмапа й повертають її зміненою.
+bool EdIsEffect(EdKind k)  { return k == EdKind::Hide || k == EdKind::Mark; }
+// У напису товщини немає: її роль грає кегль. У приховування — теж: там сила.
+// У маркера ті самі три кнопки означають висоту смуги.
+bool EdHasThick(EdKind k)  { return k != EdKind::Text && k != EdKind::Hide; }
+
+// Три висоти смуги маркера — у пікселях знімка, як і решта розмірів.
+const int kEdMarkH[3] = { 16, 26, 40 };
+
+// ⚠ Чотири кольори маркера — з чистими каналами (0 або 255) НАВМИСНО. Множення
+// на фон у нас робиться через порозрядне І, і лише для таких кольорів воно
+// точно збігається зі справжнім множенням: 255 лишає канал як був, 0 гасить.
+const COLORREF kEdMarkPalette[4] = {
+    RGB(255, 255, 0), RGB(0, 255, 0), RGB(255, 0, 255), RGB(0, 255, 255)
+};
+
+const COLORREF* EdPaletteFor(EdKind k, int& n)
+{
+    if (k == EdKind::Mark) { n = 4; return kEdMarkPalette; }
+    n = 8;
+    return kEdPalette;
+}
 
 // Товщини: тонка, середня, товста. У пікселях знімка (рішення власника).
 const int kEdThicks[3] = { 2, 4, 7 };
 
-int EdThickIndex(int t)
+const int* EdThickSet(EdKind k)
 {
-    for (int i = 0; i < 3; ++i) if (kEdThicks[i] == t) return i;
+    return (k == EdKind::Mark) ? kEdMarkH : kEdThicks;
+}
+
+int EdThickIndex(EdKind k, int t)
+{
+    const int* set = EdThickSet(k);
+    for (int i = 0; i < 3; ++i) if (set[i] == t) return i;
     return 1;
 }
 
@@ -7464,7 +7507,7 @@ struct EdSnap {
 enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Front, Back, Del, ZoomOut, ZoomIn, Fit, Panel, Copy, Save,
                    Thick, Fill, Size, Bold, Italic, Align, Stroke, Dup, Open,
-                   OpenMenu, Min, Max, Close };
+                   OpenMenu, Min, Max, Close, HideMode, Strength };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7473,9 +7516,10 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoEllipse, IcoArrow, IcoLine, IcoPen, IcoText, IcoBold, IcoItalic,
              IcoAlignL, IcoAlignC, IcoAlignR, IcoStroke0, IcoStroke1, IcoStroke2,
              IcoDup, IcoOpen, IcoChevD, IcoSave, IcoCopy,
-             IcoWinMin, IcoWinMax, IcoWinRestore, IcoWinClose };
+             IcoWinMin, IcoWinMax, IcoWinRestore, IcoWinClose,
+             IcoHide, IcoMark, IcoBlur, IcoPixels, IcoPlate, IcoStrength };
 
-enum class EdDrag { None, New, Move, Resize, Pan, Slider };
+enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength };
 
 HWND  g_edWnd = nullptr;
 HFONT g_edFont = nullptr, g_edFontBold = nullptr, g_edFontSmall = nullptr;
@@ -7519,6 +7563,12 @@ bool     g_edBold    = true;
 bool     g_edItalic  = false;
 int      g_edAlign   = 0;
 int      g_edOutline = 1;
+// Типова сила приховування навмисно висока: інструмент існує, щоб під ним
+// нічого не читалося. Ослабити її користувач може свідомо, посиливши — ні.
+int      g_edHideMode = 1;        // типово пікселі: вони чесніші за розмиття
+int      g_edStrength = 70;
+int      g_edMarkH    = kEdMarkH[1];
+COLORREF g_edMarkColor = RGB(255, 255, 0);
 
 float g_edZoom = 1.0f;                   // множник до «вписаного», як у перегляді
 int   g_edPanX = 0, g_edPanY = 0;
@@ -7546,6 +7596,7 @@ int    g_edHandle = -1;
 POINT  g_edDragFrom = {};
 EdObj  g_edDragOrig = {};
 EdObj  g_edNew = {};
+POINT  g_edNewOrigin = {};   // точка натиску в координатах знімка: маркер тягнеться від неї
 
 int EdPx(int v) { return MulDiv(v, g_edDpi, 96); }
 
@@ -7685,6 +7736,48 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
     // два аркуші зі зсувом тут уже зайняті дублюванням.
     // Кнопки вікна малюємо тонкою лінією в один піксель, як це робить сама
     // Windows: товстий штрих поруч із системними вікнами читається як чужий.
+    // Приховати — око з рискою: те саме, чим позначають «не показувати».
+    case IcoHide:
+        g.DrawBezier(&pen, 2.4f, 10.0f, 6.0f, 4.6f, 14.0f, 4.6f, 17.6f, 10.0f);
+        g.DrawBezier(&pen, 17.6f, 10.0f, 14.0f, 15.4f, 6.0f, 15.4f, 2.4f, 10.0f);
+        g.DrawEllipse(&pen, 7.4f, 7.0f, 5.2f, 6.0f);
+        g.DrawLine(&pen, 3.6f, 16.8f, 16.4f, 3.2f);
+        break;
+    // Маркер — скошене перо зі слідом під ним.
+    case IcoMark:
+        g.DrawLine(&pen, 5.0f, 11.2f, 12.6f, 3.6f);
+        g.DrawLine(&pen, 12.6f, 3.6f, 16.0f, 7.0f);
+        g.DrawLine(&pen, 16.0f, 7.0f, 8.4f, 14.6f);
+        g.DrawLine(&pen, 8.4f, 14.6f, 5.0f, 11.2f);
+        g.DrawLine(&pen, 3.0f, 17.4f, 17.0f, 17.4f);
+        break;
+    case IcoBlur: {
+        Gdiplus::SolidBrush b1(Gdiplus::Color(70, c.GetR(), c.GetG(), c.GetB()));
+        Gdiplus::SolidBrush b2(Gdiplus::Color(130, c.GetR(), c.GetG(), c.GetB()));
+        g.FillEllipse(&b1, 1.6f, 1.6f, 16.8f, 16.8f);
+        g.FillEllipse(&b2, 4.8f, 4.8f, 10.4f, 10.4f);
+        g.FillEllipse(&br, 7.8f, 7.8f, 4.4f, 4.4f);
+        break;
+    }
+    case IcoPixels: {
+        const float q = 4.2f;
+        for (int gy = 0; gy < 3; ++gy)
+            for (int gx = 0; gx < 3; ++gx) {
+                Gdiplus::SolidBrush qb(Gdiplus::Color((BYTE)(70 + 60 * ((gx + gy) % 3)),
+                                                      c.GetR(), c.GetG(), c.GetB()));
+                g.FillRectangle(&qb, 3.4f + gx * (q + 0.6f), 3.4f + gy * (q + 0.6f), q, q);
+            }
+        break;
+    }
+    case IcoPlate:
+        g.FillRectangle(&br, 3.0f, 5.0f, 14.0f, 10.0f);
+        break;
+    case IcoStrength:
+        g.DrawLine(&pen, 3.4f, 14.6f, 3.4f, 12.2f);
+        g.DrawLine(&pen, 7.6f, 14.6f, 7.6f, 9.4f);
+        g.DrawLine(&pen, 11.8f, 14.6f, 11.8f, 6.6f);
+        g.DrawLine(&pen, 16.0f, 14.6f, 16.0f, 3.8f);
+        break;
     case IcoWinMin:
         g.DrawLine(&pen, 4.0f, 10.0f, 16.0f, 10.0f);
         break;
@@ -7975,7 +8068,9 @@ RECT EdObjScreen(const EdObj& o)
 // у нього теж немає.
 int EdHandleCount(const EdObj& o)
 {
-    if (o.kind == EdKind::Text) return 2;
+    // Маркер, як і напис, тягнеться лише вшир: висота смуги — це набір із трьох
+    // значень, і ручка, що її розтягує, зробила б сусідні смуги різними.
+    if (o.kind == EdKind::Text || o.kind == EdKind::Mark) return 2;
     return EdIsSegment(o.kind) ? 2 : 8;
 }
 
@@ -7983,7 +8078,7 @@ int EdHandles(const EdObj& o, RECT out[8])
 {
     const int h = EdPx(9), k = h / 2;
     const int n = EdHandleCount(o);
-    if (o.kind == EdKind::Text) {
+    if (o.kind == EdKind::Text || o.kind == EdKind::Mark) {
         const RECT r = EdObjScreen(o);
         const int cy = (r.top + r.bottom) / 2;
         const int cx[2] = { r.left, r.right };
@@ -8105,7 +8200,7 @@ void EdLayout(HWND hwnd)
         const int b = EdPx(40), gap = EdPx(4);
         int y = g_edRcRail.top + EdPx(8);
         const int x = g_edRcRail.left + (rail - b) / 2;
-        for (int i = 0; i < 7; ++i) {
+        for (int i = 0; i < 9; ++i) {
             if (i == 1) y += EdPx(7);      // вказівник відділено від фігур
             RECT r = { x, y, x + b, y + b };
             EdAdd(r, EdHit::Tool, i);
@@ -8134,13 +8229,38 @@ void EdLayout(HWND hwnd)
         const bool showProps = hasSel || g_edTool != EdTool::Select;
         if (showProps) {
             const EdKind kk = hasSel ? g_edObjs[g_edSel].kind : EdToolKind(g_edTool);
-            const int sw = EdPx(22), sg = EdPx(5);
-            for (int i = 0; i < 8; ++i) {
-                RECT r = EdPill(x, cy, sw, sw);
-                EdAdd(r, EdHit::Swatch, i);
-                x = r.right + sg;
+            const int curMode = (hasSel && kk == EdKind::Hide) ? g_edObjs[g_edSel].mode : g_edHideMode;
+
+            // Приховування: три режими й сила. Кольору в розмиття й пікселів
+            // немає — фарбувати там нічого, тож і зразків не показуємо.
+            if (kk == EdKind::Hide) {
+                for (int i = 0; i < 3; ++i) {
+                    RECT r = EdPill(x, cy, EdPx(30), EdPx(28));
+                    EdAdd(r, EdHit::HideMode, i);
+                    x = r.right + EdPx(2);
+                }
+                x += gap - EdPx(2);
+                RECT si = EdPill(x, cy, EdPx(18), EdPx(18));
+                EdAdd(si, EdHit::None, 0);
+                x = si.right + EdPx(8);
+                RECT ss = EdPill(x, cy, EdPx(76), EdPx(20));
+                EdAdd(ss, EdHit::Strength, 0);
+                x = ss.right + EdPx(8) + EdPx(44) + gap;
             }
-            x += gap - sg;
+
+            int npal = 8;
+            const COLORREF* pal = EdPaletteFor(kk, npal);
+            const bool showPal = (kk != EdKind::Hide) || (curMode == 2);
+            if (showPal) {
+                const int sw = EdPx(22), sg = EdPx(5);
+                for (int i = 0; i < npal; ++i) {
+                    RECT r = EdPill(x, cy, sw, sw);
+                    EdAdd(r, EdHit::Swatch, i);
+                    x = r.right + sg;
+                }
+                x += gap - sg;
+            }
+            (void)pal;
 
             if (EdHasThick(kk)) {
                 for (int i = 0; i < 3; ++i) {
@@ -8437,14 +8557,18 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         EdDrawText(dc, r, S(Str::EdSelHint), g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     }
 
-    const COLORREF cur = hasSel ? g_edObjs[g_edSel].color : g_edColor;
-    for (int i = 0; i < 8; ++i) {
+    const EdKind kkp = hasSel ? g_edObjs[g_edSel].kind : EdToolKind(g_edTool);
+    int npalp = 8;
+    const COLORREF* palp = EdPaletteFor(kkp, npalp);
+    const COLORREF cur = hasSel ? g_edObjs[g_edSel].color
+                                : (kkp == EdKind::Mark ? g_edMarkColor : g_edColor);
+    for (int i = 0; i < npalp; ++i) {
         const RECT* r = EdRegionRect(EdHit::Swatch, i);
         if (!r) break;
-        Gdiplus::Color f = EdC(kEdPalette[i]);
+        Gdiplus::Color f = EdC(palp[i]);
         Gdiplus::Color bd = EdC(g_edDark ? RGB(90, 90, 96) : RGB(201, 201, 204));
         EdFillRound(g, *r, (float)EdPx(5), &f, &bd);
-        if (kEdPalette[i] == cur) {
+        if (palp[i] == cur) {
             RECT ring = { r->left - EdPx(3), r->top - EdPx(3), r->right + EdPx(3), r->bottom + EdPx(3) };
             Gdiplus::Color ac = EdC(t.accent);
             EdFillRound(g, ring, (float)EdPx(7), nullptr, &ac, (float)EdPx(2));
@@ -8452,17 +8576,23 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 
     {
-        const int cur = hasSel ? EdThickIndex(g_edObjs[g_edSel].thick) : EdThickIndex(g_edThick);
+        const int* tset = EdThickSet(kkp);
+        const int curThick = hasSel ? EdThickIndex(kkp, g_edObjs[g_edSel].thick)
+                                    : EdThickIndex(kkp, kkp == EdKind::Mark ? g_edMarkH : g_edThick);
         for (int i = 0; i < 3; ++i) {
             const RECT* r = EdRegionRect(EdHit::Thick, i);
             if (!r) break;
-            const bool on = (i == cur);
+            const bool on = (i == curThick);
             EdPaintButton(g, *r, t, on, g_edHotWhat == EdHit::Thick && g_edHotIdx == i, false);
-            const int bh = EdPx(kEdThicks[i]) * 2 / 3;
+            // Смуга маркера вища за лінію — показуємо її в тій самій пропорції,
+            // але приборкуємо, щоб найтовща не вилазила за кнопку.
+            int bh = EdPx(tset[i]) * 2 / 3;
+            if (kkp == EdKind::Mark) bh = EdPx(tset[i]) / 3;
             RECT bar = { r->left + EdPx(8), (r->top + r->bottom) / 2 - bh / 2,
                          r->right - EdPx(8), (r->top + r->bottom) / 2 - bh / 2 + (bh < 2 ? 2 : bh) };
             Gdiplus::Color bc = EdC(on ? t.accent : t.text);
             EdFillRound(g, bar, (float)(bh / 2.0), &bc, nullptr);
+            (void)tset;
         }
     }
     {
@@ -8532,6 +8662,32 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         }
     }
 
+    // Приховування: режим і сила.
+    {
+        const bool selHide = hasSel && g_edObjs[g_edSel].kind == EdKind::Hide;
+        const int vMode = selHide ? g_edObjs[g_edSel].mode : g_edHideMode;
+        const int vStr  = selHide ? g_edObjs[g_edSel].strength : g_edStrength;
+        const int icons[3] = { IcoBlur, IcoPixels, IcoPlate };
+        for (int i = 0; i < 3; ++i) {
+            const RECT* r = EdRegionRect(EdHit::HideMode, i);
+            if (!r) break;
+            const bool on = (i == vMode);
+            EdPaintButton(g, *r, t, on, g_edHotWhat == EdHit::HideMode && g_edHotIdx == i, false);
+            EdIcon(g, icons[i], EdIconBox(*r), EdC(on ? t.accent : t.text), 1.5f);
+        }
+        if (const RECT* sl = EdRegionRect(EdHit::Strength, 0)) {
+            RECT ic = { sl->left - EdPx(8) - EdPx(18), (sl->top + sl->bottom) / 2 - EdPx(9),
+                        sl->left - EdPx(8), (sl->top + sl->bottom) / 2 + EdPx(9) };
+            EdIcon(g, IcoStrength, ic, EdC(t.text2), 1.6f);
+            EdPaintSlider(g, *sl, t, vStr);
+            wchar_t sb[32];
+            wsprintfW(sb, L"%d %%", vStr);
+            RECT tv = { sl->right + EdPx(8), g_edRcStrip.top, sl->right + EdPx(8) + EdPx(44),
+                        g_edRcStrip.bottom };
+            EdDrawText(dc, tv, sb, g_edFont, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
+    }
+
     if (const RECT* sl = EdRegionRect(EdHit::Opacity, 0)) {
         const int a = hasSel ? g_edObjs[g_edSel].alpha : g_edAlpha;
         RECT ic = { sl->left - EdPx(8) - EdPx(18), (sl->top + sl->bottom) / 2 - EdPx(9),
@@ -8571,8 +8727,9 @@ void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     FillRect(dc, &line, b);
     DeleteObject(b);
 
-    const int icos[7] = { IcoSelect, IcoRect, IcoEllipse, IcoArrow, IcoLine, IcoPen, IcoText };
-    for (int i = 0; i < 7; ++i) {
+    const int icos[9] = { IcoSelect, IcoRect, IcoEllipse, IcoArrow, IcoLine, IcoPen, IcoText,
+                          IcoHide, IcoMark };
+    for (int i = 0; i < 9; ++i) {
         const RECT* r = EdRegionRect(EdHit::Tool, i);
         if (!r) break;
         if (i == 1) {                       // лінія-розділювач над фігурами
@@ -8824,6 +8981,215 @@ const EdTile* EdTextTile(const EdObj& o, double s)
     return &g_edTiles.back();
 }
 
+// ---- CAPS-25: приховування й маркер --------------------------------------
+//
+// Обидва інструменти — дії над ПІКСЕЛЯМИ знімка, а не мазки пером: вони беруть
+// ділянку базового бітмапа й повертають її зміненою. Результат лягає в таку
+// саму плитку, як текст у CAPS-24, і далі його кладе звичайний GDI+. Тому
+// приховане місце лишається звичайним об'єктом списку — його можна посунути
+// хоч через десять інших дій, — а незворотним стає лише у вихідному файлі.
+//
+// ⚠ Наслідок, про який варто пам'ятати: джерело — САМЕ БАЗОВИЙ бітмап. Позначки,
+// намальовані раніше в тій самій ділянці, плитка не бачить і накриває собою.
+
+int EdHideRadius(const EdObj& o)
+{
+    const int side = o.w < o.h ? o.w : o.h;
+    int r = side * o.strength / 600;
+    if (r < 3)  r = 3;
+    if (r > 60) r = 60;
+    return r;
+}
+
+int EdHideBlock(const EdObj& o)
+{
+    const int side = o.w < o.h ? o.w : o.h;
+    int b = side * o.strength / 500;
+    if (b < 4)  b = 4;
+    if (b > 64) b = 64;
+    return b;
+}
+
+// Коробкове розмиття в три проходи: на око це вже гаусове, а рахується лінійно
+// від кількості пікселів, а не від радіуса. Для ділянки в пів-екрана різниця
+// між «миттєво» і «помітно» саме тут.
+void EdBoxBlur(BYTE* px, int w, int h, int stride, int radius)
+{
+    if (radius < 1 || w < 2 || h < 2) return;
+    std::vector<BYTE> tmp((size_t)stride * h);
+    for (int pass = 0; pass < 3; ++pass) {
+        // горизонтально
+        for (int y = 0; y < h; ++y) {
+            BYTE* src = px + (size_t)y * stride;
+            BYTE* dst = tmp.data() + (size_t)y * stride;
+            int sum[4] = { 0, 0, 0, 0 };
+            int cnt = 0;
+            for (int x = 0; x <= radius && x < w; ++x, ++cnt)
+                for (int c = 0; c < 4; ++c) sum[c] += src[x * 4 + c];
+            for (int x = 0; x < w; ++x) {
+                for (int c = 0; c < 4; ++c) dst[x * 4 + c] = (BYTE)(sum[c] / cnt);
+                const int add = x + radius + 1, sub = x - radius;
+                if (add < w) { for (int c = 0; c < 4; ++c) sum[c] += src[add * 4 + c]; ++cnt; }
+                if (sub >= 0) { for (int c = 0; c < 4; ++c) sum[c] -= src[sub * 4 + c]; --cnt; }
+            }
+        }
+        // вертикально
+        for (int x = 0; x < w; ++x) {
+            int sum[4] = { 0, 0, 0, 0 };
+            int cnt = 0;
+            for (int y = 0; y <= radius && y < h; ++y, ++cnt)
+                for (int c = 0; c < 4; ++c) sum[c] += tmp[(size_t)y * stride + x * 4 + c];
+            for (int y = 0; y < h; ++y) {
+                for (int c = 0; c < 4; ++c) px[(size_t)y * stride + x * 4 + c] = (BYTE)(sum[c] / cnt);
+                const int add = y + radius + 1, sub = y - radius;
+                if (add < h) { for (int c = 0; c < 4; ++c) sum[c] += tmp[(size_t)add * stride + x * 4 + c]; ++cnt; }
+                if (sub >= 0) { for (int c = 0; c < 4; ++c) sum[c] -= tmp[(size_t)sub * stride + x * 4 + c]; --cnt; }
+            }
+        }
+    }
+}
+
+// Пікселізація на місці: кожен блок стає своїм середнім. Саме середнє й робить
+// її незворотною — з нього оригінальних пікселів не дістати.
+void EdPixelate(BYTE* px, int w, int h, int stride, int block)
+{
+    if (block < 2) return;
+    for (int by = 0; by < h; by += block) {
+        const int y2 = (by + block < h) ? by + block : h;
+        for (int bx = 0; bx < w; bx += block) {
+            const int x2 = (bx + block < w) ? bx + block : w;
+            int sum[4] = { 0, 0, 0, 0 };
+            const int n = (x2 - bx) * (y2 - by);
+            for (int y = by; y < y2; ++y) {
+                const BYTE* row = px + (size_t)y * stride;
+                for (int x = bx; x < x2; ++x)
+                    for (int c = 0; c < 4; ++c) sum[c] += row[x * 4 + c];
+            }
+            BYTE avg[4];
+            for (int c = 0; c < 4; ++c) avg[c] = (BYTE)(sum[c] / n);
+            for (int y = by; y < y2; ++y) {
+                BYTE* row = px + (size_t)y * stride;
+                for (int x = bx; x < x2; ++x)
+                    for (int c = 0; c < 4; ++c) row[x * 4 + c] = avg[c];
+            }
+        }
+    }
+}
+
+std::wstring EdFxKey(const EdObj& o, double s)
+{
+    wchar_t head[160];
+    wsprintfW(head, L"fx|%d|%d|%d|%d|%d|%d|%d|%d|%d|%08X",
+              (int)o.kind, (int)(s * 1000 + 0.5), o.x, o.y, o.w, o.h,
+              o.mode, o.strength, o.alpha, (unsigned)o.color);
+    return std::wstring(head);
+}
+
+// Плитка ефекту в РОЗМІРІ ЗНІМКА, потім за потреби зменшена до екранного
+// масштабу. Рахувати одразу в масштабі екрана не можна: у файл пішов би слабший
+// ефект, ніж той, що бачив користувач.
+const EdTile* EdEffectTile(const EdObj& o, double s)
+{
+    const std::wstring key = EdFxKey(o, s);
+    for (size_t i = 0; i < g_edTiles.size(); ++i)
+        if (g_edTiles[i].key == key) return &g_edTiles[i];
+    if (!g_edImg || o.w < 1 || o.h < 1) return nullptr;
+
+    // Ділянка може вийти за край знімка — беремо перетин, решта лишається порожньою.
+    int rx = o.x, ry = o.y, rw = o.w, rh = o.h;
+    if (rx < 0) { rw += rx; rx = 0; }
+    if (ry < 0) { rh += ry; ry = 0; }
+    if (rx + rw > g_edImgW) rw = g_edImgW - rx;
+    if (ry + rh > g_edImgH) rh = g_edImgH - ry;
+    if (rw < 1 || rh < 1) return nullptr;
+
+    Gdiplus::Bitmap* full = new Gdiplus::Bitmap(rw, rh, PixelFormat32bppPARGB);
+    if (!full || full->GetLastStatus() != Gdiplus::Ok) { delete full; return nullptr; }
+    {
+        Gdiplus::Graphics g(full);
+        g.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
+        g.DrawImage(g_edImg, Gdiplus::Rect(0, 0, rw, rh), rx, ry, rw, rh, Gdiplus::UnitPixel);
+    }
+
+    Gdiplus::BitmapData bd = {};
+    Gdiplus::Rect lock(0, 0, rw, rh);
+    bool ok = false;
+    if (full->LockBits(&lock, Gdiplus::ImageLockModeRead | Gdiplus::ImageLockModeWrite,
+                       PixelFormat32bppPARGB, &bd) == Gdiplus::Ok) {
+        BYTE* px = (BYTE*)bd.Scan0;
+        if (bd.Stride > 0) {
+            if (o.kind == EdKind::Mark) {
+                // Множення на фон — порозрядним І. Для кольорів із каналами 0/255
+                // це точно множення, а головне — воно однакове і на екрані, і в файлі.
+                const BYTE mr = GetRValue(o.color), mg = GetGValue(o.color), mb = GetBValue(o.color);
+                for (int y = 0; y < rh; ++y) {
+                    BYTE* row = px + (size_t)y * bd.Stride;
+                    for (int x = 0; x < rw; ++x) {
+                        row[x * 4 + 0] = (BYTE)(row[x * 4 + 0] & mb);
+                        row[x * 4 + 1] = (BYTE)(row[x * 4 + 1] & mg);
+                        row[x * 4 + 2] = (BYTE)(row[x * 4 + 2] & mr);
+                    }
+                }
+            } else if (o.mode == 2) {
+                const BYTE pr = GetRValue(o.color), pg = GetGValue(o.color), pb = GetBValue(o.color);
+                for (int y = 0; y < rh; ++y) {
+                    BYTE* row = px + (size_t)y * bd.Stride;
+                    for (int x = 0; x < rw; ++x) {
+                        row[x * 4 + 0] = pb; row[x * 4 + 1] = pg;
+                        row[x * 4 + 2] = pr; row[x * 4 + 3] = 255;
+                    }
+                }
+            } else if (o.mode == 1) {
+                EdPixelate(px, rw, rh, bd.Stride, EdHideBlock(o));
+            } else {
+                EdBoxBlur(px, rw, rh, bd.Stride, EdHideRadius(o));
+            }
+            if (o.alpha < 100) {
+                const unsigned k = (unsigned)(o.alpha * 255 / 100);
+                for (int y = 0; y < rh; ++y) {
+                    BYTE* row = px + (size_t)y * bd.Stride;
+                    for (int x = 0; x < rw * 4; ++x) row[x] = (BYTE)(row[x] * k / 255);
+                }
+            }
+            ok = true;
+        }
+        full->UnlockBits(&bd);
+    }
+    if (!ok) { delete full; return nullptr; }
+
+    // На екрані плитку показуємо зменшеною; у файл (s == 1) іде як є.
+    Gdiplus::Bitmap* out = full;
+    const int dw = (int)(rw * s + 0.5), dh = (int)(rh * s + 0.5);
+    if (dw != rw || dh != rh) {
+        if (dw < 1 || dh < 1) { delete full; return nullptr; }
+        out = new Gdiplus::Bitmap(dw, dh, PixelFormat32bppPARGB);
+        if (out && out->GetLastStatus() == Gdiplus::Ok) {
+            Gdiplus::Graphics g(out);
+            // Пікселі зменшуємо без згладжування: інакше блоки розмиються і
+            // приховане місце почне «проступати» назад.
+            g.SetInterpolationMode(o.mode == 1 && o.kind == EdKind::Hide
+                                       ? Gdiplus::InterpolationModeNearestNeighbor
+                                       : Gdiplus::InterpolationModeHighQualityBicubic);
+            g.DrawImage(full, Gdiplus::Rect(0, 0, dw, dh), 0, 0, rw, rh, Gdiplus::UnitPixel);
+        } else {
+            delete out;
+            out = full;
+        }
+        if (out != full) delete full;
+    }
+
+    if (g_edTiles.size() >= kEdTileMax) {
+        delete g_edTiles.front().bmp;
+        g_edTiles.erase(g_edTiles.begin());
+    }
+    EdTile t;
+    t.key = key;
+    t.bmp = out;
+    t.pad = 0;
+    g_edTiles.push_back(t);
+    return &g_edTiles.back();
+}
+
 // Один малювальник на екран і на експорт. Якби їх було два, збережений файл
 // рано чи пізно розійшовся б із тим, що показано на екрані.
 void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, double oy)
@@ -8884,6 +9250,15 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
         // це видно. Натяг малий, щоб крива не «вилітала» за точки на різких кутах.
         if (n >= 3) g.DrawCurve(&pen, p.data(), (INT)n, 0.3f);
         else g.DrawLines(&pen, p.data(), (INT)n);
+        break;
+    }
+    case EdKind::Hide:
+    case EdKind::Mark: {
+        const EdTile* tile = EdEffectTile(o, s);
+        if (!tile || !tile->bmp) break;
+        const int tw = (int)tile->bmp->GetWidth(), th = (int)tile->bmp->GetHeight();
+        g.DrawImage(tile->bmp, Gdiplus::Rect((int)(x + 0.5f), (int)(y + 0.5f), tw, th),
+                    0, 0, tw, th, Gdiplus::UnitPixel);
         break;
     }
     case EdKind::Text: {
@@ -9189,6 +9564,22 @@ void EdSetAlphaAt(int mouseX)
     InvalidateRect(g_edWnd, nullptr, FALSE);
 }
 
+void EdSetStrengthAt(int mouseX)
+{
+    const RECT* sl = EdRegionRect(EdHit::Strength, 0);
+    if (!sl) return;
+    const int w = sl->right - sl->left;
+    if (w <= 0) return;
+    int p = 10 + (int)((mouseX - sl->left) * 90.0 / w + 0.5);
+    if (p < 10)  p = 10;
+    if (p > 100) p = 100;
+    if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() && g_edObjs[g_edSel].kind == EdKind::Hide)
+        g_edObjs[g_edSel].strength = p;
+    else
+        g_edStrength = p;
+    InvalidateRect(g_edWnd, nullptr, FALSE);
+}
+
 bool EdHitObject(const EdObj& o, POINT pt)
 {
     const RECT ir = EdImageRect();
@@ -9278,6 +9669,24 @@ void EdConstrain(EdObj& o)
 void EdResizeSel(int handle, POINT img)
 {
     EdObj o = g_edDragOrig;
+
+    // Маркер: ручка тягне край смуги, висота лишається сталою.
+    if (o.kind == EdKind::Mark) {
+        EdObj n = o;
+        const int right = o.x + o.w;
+        if (handle == 0) {
+            int nx = img.x;
+            if (nx > right - 6) nx = right - 6;
+            n.x = nx;
+            n.w = right - nx;
+        } else {
+            int nw = img.x - o.x;
+            if (nw < 6) nw = 6;
+            n.w = nw;
+        }
+        g_edObjs[g_edSel] = n;
+        return;
+    }
 
     // Напис: ручка тягне край БЛОКА. Мінімум — приблизно одна літера, інакше
     // блок можна було б зім'яти в нуль і більше ніколи не знайти ручку.
@@ -9490,10 +9899,17 @@ Str EdTipFor(EdHit what, int idx)
         case 3: return Str::EdToolArrow;
         case 4: return Str::EdToolLine;
         case 5: return Str::EdToolPen;
-        default: return Str::EdToolText;
+        case 6: return Str::EdToolText;
+        case 7: return Str::EdToolHide;
+        default: return Str::EdToolMark;
         }
     case EdHit::Swatch:  return Str::EdTipColor;
-    case EdHit::Thick:   return Str::EdTipThick;
+    case EdHit::Thick:
+        return (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
+                g_edObjs[g_edSel].kind == EdKind::Mark) ||
+               (g_edSel < 0 && g_edTool == EdTool::Mark) ? Str::EdTipMarkH : Str::EdTipThick;
+    case EdHit::HideMode: return idx == 1 ? Str::EdTipPixels : idx == 2 ? Str::EdTipPlate : Str::EdTipBlur;
+    case EdHit::Strength: return Str::EdTipStrength;
     case EdHit::Size:    return idx ? Str::EdTipSizeUp : Str::EdTipSizeDn;
     case EdHit::Bold:    return Str::EdTipBold;
     case EdHit::Italic:  return Str::EdTipItalic;
@@ -9524,7 +9940,7 @@ Str EdTipFor(EdHit what, int idx)
 
 // Клавіша інструмента — та сама, що в довідці. Один масив на обидва місця:
 // якби їх було два, вони розійшлися б за перший же новий інструмент.
-const wchar_t* const kEdToolKeys[7] = { L"V", L"R", L"O", L"A", L"L", L"P", L"T" };
+const wchar_t* const kEdToolKeys[9] = { L"V", L"R", L"O", L"A", L"L", L"P", L"T", L"B", L"H" };
 
 void EdTipText(EdHit what, int idx, wchar_t* out, int cch)
 {
@@ -9532,7 +9948,7 @@ void EdTipText(EdHit what, int idx, wchar_t* out, int cch)
     const Str st = EdTipFor(what, idx);
     if (st == Str::Empty) return;
     const wchar_t* key = nullptr;
-    if (what == EdHit::Tool && idx >= 0 && idx < 7) key = kEdToolKeys[idx];
+    if (what == EdHit::Tool && idx >= 0 && idx < 9) key = kEdToolKeys[idx];
     else if (what == EdHit::Copy) key = L"Ctrl+C";
     else if (what == EdHit::Save) key = L"Ctrl+S";
     if (key) {
@@ -10025,6 +10441,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_MOUSEMOVE: {
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         if (g_edDrag == EdDrag::Slider) { EdSetAlphaAt(pt.x); return 0; }
+        if (g_edDrag == EdDrag::Strength) { EdSetStrengthAt(pt.x); return 0; }
         if (g_edDrag == EdDrag::Pan) {
             g_edPanX += pt.x - g_edDragFrom.x;
             g_edPanY += pt.y - g_edDragFrom.y;
@@ -10041,6 +10458,15 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 const long dx = img.x - last.x, dy = img.y - last.y;
                 if (dx * dx + dy * dy >= 4) g_edNew.pts.push_back(img);
                 EdPenBounds(g_edNew);
+            } else if (g_edNew.kind == EdKind::Mark) {
+                // Тягнемо тільки по горизонталі: висота вже стала.
+                if (img.x < g_edNewOrigin.x) {
+                    g_edNew.x = img.x;
+                    g_edNew.w = g_edNewOrigin.x - img.x;
+                } else {
+                    g_edNew.x = g_edNewOrigin.x;
+                    g_edNew.w = img.x - g_edNewOrigin.x;
+                }
             } else {
                 g_edNew.w = img.x - g_edNew.x;
                 g_edNew.h = img.y - g_edNew.y;
@@ -10134,16 +10560,52 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (g_edTool != EdTool::Select) g_edSel = -1;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
-        case EdHit::Swatch:
-            EdSetColor(kEdPalette[r->idx]);
+        case EdHit::Swatch: {
+            const EdKind kk = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())
+                                  ? g_edObjs[g_edSel].kind : EdToolKind(g_edTool);
+            int np = 8;
+            const COLORREF* pl = EdPaletteFor(kk, np);
+            if (r->idx < 0 || r->idx >= np) return 0;
+            if (kk == EdKind::Mark) g_edMarkColor = pl[r->idx];
+            EdSetColor(pl[r->idx]);
+            return 0;
+        }
+        case EdHit::HideMode: {
+            if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
+                g_edObjs[g_edSel].kind == EdKind::Hide && g_edObjs[g_edSel].mode != r->idx) {
+                EdPushUndo();
+                g_edObjs[g_edSel].mode = r->idx;
+            }
+            g_edHideMode = r->idx;
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case EdHit::Strength:
+            if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) EdPushUndo();
+            g_edDrag = EdDrag::Strength;
+            SetCapture(hwnd);
+            EdSetStrengthAt(pt.x);
             return 0;
         case EdHit::Thick:
-            if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
-                g_edObjs[g_edSel].thick != kEdThicks[r->idx]) {
-                EdPushUndo();
-                g_edObjs[g_edSel].thick = kEdThicks[r->idx];
+            {
+                const EdKind kk = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())
+                                      ? g_edObjs[g_edSel].kind : EdToolKind(g_edTool);
+                const int val = EdThickSet(kk)[r->idx];
+                if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
+                    g_edObjs[g_edSel].thick != val) {
+                    EdPushUndo();
+                    g_edObjs[g_edSel].thick = val;
+                    if (kk == EdKind::Mark) {
+                        // Висота смуги росте від її середини, інакше маркер
+                        // з'їжджав би вниз від рядка, який підкреслює.
+                        EdObj& mo = g_edObjs[g_edSel];
+                        mo.y += (mo.h - val) / 2;
+                        mo.h = val;
+                    }
+                }
+                if (kk == EdKind::Mark) g_edMarkH = val; else g_edThick = val;
             }
-            g_edThick = kEdThicks[r->idx];
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         case EdHit::Fill: {
@@ -10273,6 +10735,18 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_edNew.thick = g_edThick;
             g_edNew.alpha = g_edAlpha;
             g_edNew.filled = EdCanFill(g_edNew.kind) ? g_edFill : false;
+            g_edNew.mode = g_edHideMode;
+            g_edNew.strength = g_edStrength;
+            g_edNewOrigin = img;
+            if (g_edNew.kind == EdKind::Mark) {
+                // Смуга маркера має сталу висоту й тягнеться лише вшир, тому
+                // верх і низ визначено вже тут, на натиску.
+                g_edNew.color = g_edMarkColor;
+                g_edNew.thick = g_edMarkH;
+                g_edNew.h = g_edMarkH;
+                g_edNew.y = img.y - g_edMarkH / 2;
+                g_edNew.w = 0;
+            }
             if (g_edNew.kind == EdKind::Pen) g_edNew.pts.push_back(img);
             g_edDrag = EdDrag::New;
             SetCapture(hwnd);
@@ -10300,6 +10774,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             bool keep;
             if (o.kind == EdKind::Pen)          keep = o.pts.size() >= 2;
             else if (EdIsSegment(o.kind))       keep = (o.w * o.w + o.h * o.h) >= 36;
+            else if (o.kind == EdKind::Mark)    keep = (o.w >= 6);
             else                                keep = (o.w >= 3 && o.h >= 3);
             if (keep) {
                 EdPushUndo();
@@ -10383,11 +10858,12 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (g_edLastAction == 1) EdDoSave(); else EdDoCopy();
             return 0;
         case 'V': if (!ctrl) { g_edTool = EdTool::Select; InvalidateRect(hwnd, nullptr, FALSE); } return 0;
-        case 'R': case 'O': case 'A': case 'L': case 'P': case 'T':
+        case 'R': case 'O': case 'A': case 'L': case 'P': case 'T': case 'B': case 'H':
             if (!ctrl) {
                 g_edTool = (wp == 'R') ? EdTool::Rect : (wp == 'O') ? EdTool::Ellipse
                          : (wp == 'A') ? EdTool::Arrow : (wp == 'L') ? EdTool::Line
-                         : (wp == 'T') ? EdTool::Text : EdTool::Pen;
+                         : (wp == 'T') ? EdTool::Text : (wp == 'B') ? EdTool::Hide
+                         : (wp == 'H') ? EdTool::Mark : EdTool::Pen;
                 g_edSel = -1;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
