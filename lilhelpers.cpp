@@ -534,6 +534,10 @@ X(EdTipGroupEdit,     L"Редагування групи: колір, розм�
                                                         L"Group editing: colour, size and opacity go to every circle") \
 X(EdTipGroupDel,      L"Видалити всю групу",            L"Delete the whole group")                     \
 X(EdTipThick,         L"Товщина лінії",                 L"Line width")                                 \
+X(EdTipDash,          L"Стиль лінії",                   L"Line style")                                 \
+X(EdTipHead,          L"Наконечник стрілки",            L"Arrowhead")                                  \
+X(EdTipHeadSize,      L"Розмір наконечника",            L"Arrowhead size")                             \
+X(EdTipHeadEnds,      L"На яких кінцях наконечник",     L"Which ends get a head")                      \
 X(EdTipSizeDn,        L"Менший кегль",                  L"Smaller type")                               \
 X(EdTipSizeUp,        L"Більший кегль",                 L"Larger type")                                \
 X(EdTipBold,          L"Жирний",                        L"Bold")                                       \
@@ -7458,6 +7462,12 @@ struct EdObj {
     int      group;   // група: у кожної своя незалежна нумерація
     int      start;   // з якого числа починає група (однакове в усіх її кружечках)
     int      stamp;
+    // CAPS-34. Стиль лінії — для всіх контурних; наконечник — лише для стрілки.
+    // dash: 0 суцільна, 1 пунктир, 2 штрихпунктир.
+    // head: 0 трикутник, 1 «пташка», 2 кружечок. headSize: 0 малий…2 великий.
+    // headEnds: 0 у кінці, 1 з обох боків, 2 на початку.
+    int      dash;
+    int      head, headSize, headEnds;
 };
 
 // Чіп називає вид однією назвою і для інструмента, і для вибраного. Префікс
@@ -7520,6 +7530,13 @@ EdKind EdToolKind(EdTool t)
 }
 
 bool EdIsSegment(EdKind k) { return k == EdKind::Arrow || k == EdKind::Line; }
+// Стиль лінії має сенс лише там, де є сама лінія: у напису, приховування,
+// маркера, лічильника й штампа контуру немає.
+bool EdHasDash(EdKind k)
+{
+    return k == EdKind::Rect || k == EdKind::Ellipse || k == EdKind::Line ||
+           k == EdKind::Arrow || k == EdKind::Pen;
+}
 bool EdCanFill(EdKind k)   { return k == EdKind::Rect || k == EdKind::Ellipse; }
 // Приховування й маркер — не мазки пером, а дії НАД ПІКСЕЛЯМИ знімка: обидва
 // беруть ділянку базового бітмапа й повертають її зміненою.
@@ -7637,7 +7654,7 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    NumStart, NumReset, StampPick, StampMore, NumGroup, NumNext,
                    Aspect, CropReset, CropOk, CropNo,
                    RotL, RotR, FlipH, FlipV, Exposure, Gamma, Contrast,
-                   ToneReset, Compare, GroupEdit, GroupDel };
+                   ToneReset, Compare, GroupEdit, GroupDel, Pick, PickItem };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7690,6 +7707,10 @@ bool     g_edGroupEdit  = false;
 // CAPS-47: серія натискань стрілки — ОДИН крок скасування. Прапорець тримає
 // серію відкритою, доки клавішу не відпустили.
 bool     g_edNudging    = false;
+// CAPS-34: який випадний селект зараз розкрито (-1 — жоден). Селект — це не
+// вікно, а ділянки поверх полотна: власне вікно заради трьох рядків коштувало б
+// класу, фокуса й окремого шляху закриття.
+int      g_edPickOpen   = -1;
 
 void EdRebuildImage();                // тіло далеко нижче: йому потрібні плитки
 void EdFitView();                     // поворот міняє сторони — вид доводиться вписувати
@@ -7760,6 +7781,8 @@ int      g_edCounterGroup = 0;    // куди піде наступний кру
 int EdCurGroup();
 int EdGroupStart(int grp);
 int EdGroupCount(int grp);
+int      g_edDash = 0;                   // CAPS-34: стиль лінії за замовчуванням
+int      g_edHead = 0, g_edHeadSize = 1, g_edHeadEnds = 0;
 int      g_edStampSize = kEdStampSizes[1];
 int      g_edStamp    = 0;
 
@@ -7800,6 +7823,7 @@ inline Gdiplus::Color EdC(COLORREF c, int a = 255)
 }
 
 inline int EdMin(int a, int b) { return a < b ? a : b; }
+inline double EdMinD(double a, double b) { return a < b ? a : b; }
 
 void EdRoundPath(Gdiplus::GraphicsPath& p, const RECT& r, float rad)
 {
@@ -8605,6 +8629,9 @@ int EdPanelInfoBottom()
     return y + EdPx(20);                           // «Позначок: N»
 }
 
+// Потрібна вже в розкладці — розкритий селект ставиться під своєю кнопкою.
+const RECT* EdRegionRect(EdHit what, int idx);
+
 void EdLayout(HWND hwnd)
 {
     RECT rc;
@@ -8815,6 +8842,19 @@ void EdLayout(HWND hwnd)
                 x += gap - EdPx(4);
             }
 
+            // CAPS-34: стиль лінії — усім контурним; наконечники — лише стрілці.
+            // Кожен набір згорнуто у ВИПАДНИЙ СЕЛЕКТ (рішення власника 21.09):
+            // кнопка показує поточний вибір, решта варіантів — за нею.
+            if (EdHasDash(kk) && !cropMode) {
+                const int pn = (kk == EdKind::Arrow) ? 4 : 1;
+                for (int gi = 0; gi < pn; ++gi) {
+                    RECT r = EdPill(x, cy, EdPx(42), EdPx(28));
+                    EdAdd(r, EdHit::Pick, gi);
+                    x = r.right + EdPx(4);
+                }
+                x += gap - EdPx(4);
+            }
+
             // Набір напису: кегль степером, накреслення, вирівнювання, обводка.
             // Кнопки навмисно вужчі за решту смуги — інакше цей набір не влазить
             // у вікно мінімальної ширини разом із рештою.
@@ -8944,6 +8984,19 @@ void EdLayout(HWND hwnd)
             r.right = r.left + b;
         }
         EdAdd(r, EdHit::Panel, 0);
+    }
+
+    // Розкритий селект додаємо ОСТАННІМ: EdFind іде списком з кінця, тож його
+    // ділянки перекривають і полотно, і смугу під ним.
+    if (g_edPickOpen >= 0) {
+        if (const RECT* btn = EdRegionRect(EdHit::Pick, g_edPickOpen)) {
+            const int iw = EdPx(52), ih = EdPx(32);
+            const int top = btn->bottom + EdPx(6);
+            for (int i = 0; i < 3; ++i) {
+                RECT r = { btn->left, top + i * ih, btn->left + iw, top + (i + 1) * ih };
+                EdAdd(r, EdHit::PickItem, i);
+            }
+        }
     }
 
     // CAPS-28: геометрія знімка і тон. Живуть у правій панелі, бо стосуються
@@ -9207,6 +9260,47 @@ void EdPaintCrop(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 }
 
+// Наконечник малює той самий код, що й на полотні — інакше зразок у кнопці
+// рано чи пізно почав би обіцяти не те, що малюється.
+void EdDrawHead(Gdiplus::Graphics& g, const Gdiplus::Color& col, float tipX, float tipY,
+                double dirX, double dirY, double len, float pw, int type);
+
+// Поточне значення селекта: у вибраного об'єкта або типове.
+int EdPickValue(int group)
+{
+    const bool sel = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size());
+    const EdObj* o = sel ? &g_edObjs[g_edSel] : nullptr;
+    switch (group) {
+    case 0:  return o ? o->dash     : g_edDash;
+    case 1:  return o ? o->head     : g_edHead;
+    case 2:  return o ? o->headSize : g_edHeadSize;
+    default: return o ? o->headEnds : g_edHeadEnds;
+    }
+}
+
+// Зразок у кнопці й у списку: та сама фігура, що буде на полотні, тільки мала.
+void EdPickSample(Gdiplus::Graphics& g, const RECT& r, int group, int value,
+                  const Gdiplus::Color& c)
+{
+    const float cy = (r.top + r.bottom) / 2.0f;
+    const float x0 = (float)(r.left + EdPx(7)), x1 = (float)(r.right - EdPx(7));
+    Gdiplus::Pen pen(c, 2.0f);
+    if (group == 0) {
+        if (value == 1) pen.SetDashStyle(Gdiplus::DashStyleDash);
+        if (value == 2) pen.SetDashStyle(Gdiplus::DashStyleDashDot);
+        g.DrawLine(&pen, x0, cy, x1, cy);
+        return;
+    }
+    const int type = (group == 1) ? value : g_edHead;
+    const double len = (group == 2) ? (5.0 + value * 3.0) : 8.0;
+    const int ends = (group == 3) ? value : 0;
+    const float tail = (float)(x1 - len * 0.9);
+    const float headStart = (ends >= 1) ? (float)(x0 + len * 0.9) : x0;
+    g.DrawLine(&pen, headStart, cy, (ends == 2) ? x1 : tail, cy);
+    if (ends != 2) EdDrawHead(g, c, x1, cy,  1.0, 0.0, len, 1.6f, type);
+    if (ends >= 1) EdDrawHead(g, c, x0, cy, -1.0, 0.0, len, 1.6f, type);
+}
+
 void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     HBRUSH b = CreateSolidBrush(t.surface);
@@ -9363,6 +9457,20 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
             EdPaintButton(g, *r, t, on, g_edHotWhat == EdHit::Stroke && g_edHotIdx == i, false);
             EdIcon(g, IcoStroke0 + i, EdIconBox(*r), EdC(on ? t.accent : t.text), 1.5f);
         }
+    }
+    // CAPS-34: кнопки випадних селектів. Кожна показує поточний вибір.
+    for (int gi = 0; gi < 4; ++gi) {
+        const RECT* r = EdRegionRect(EdHit::Pick, gi);
+        if (!r) break;
+        const bool open = (g_edPickOpen == gi);
+        EdPaintButton(g, *r, t, open, g_edHotWhat == EdHit::Pick && g_edHotIdx == gi, false);
+        RECT inner = { r->left, r->top, r->right - EdPx(8), r->bottom };
+        EdPickSample(g, inner, gi, EdPickValue(gi), EdC(t.text));
+        // Маленька стрілка вниз: кнопка з нею читається як список, а не як тогл.
+        Gdiplus::Pen chev(EdC(t.text2), 1.4f);
+        const float cxx = (float)(r->right - EdPx(7)), cyy = (float)((r->top + r->bottom) / 2);
+        g.DrawLine(&chev, cxx - EdPx(3), cyy - EdPx(1), cxx, cyy + EdPx(2));
+        g.DrawLine(&chev, cxx, cyy + EdPx(2), cxx + EdPx(3), cyy - EdPx(1));
     }
 
     // Кадр: пропорції й скидання.
@@ -10383,6 +10491,58 @@ EdObj EdGlyphObj(const EdObj& o, const wchar_t* glyph, int size, COLORREF col)
 
 // Один малювальник на екран і на експорт. Якби їх було два, збережений файл
 // рано чи пізно розійшовся б із тим, що показано на екрані.
+// ⚠ Пунктир із круглими ковпачками перетворюється на низку крапок: кожен
+// штрих отримує по півкола з кожного боку й заповнює проміжок. Для пунктиру
+// ковпачки мусять бути плоскі.
+void EdApplyDash(Gdiplus::Pen& pen, int dash)
+{
+    if (dash <= 0) return;
+    pen.SetDashStyle(dash == 1 ? Gdiplus::DashStyleDash : Gdiplus::DashStyleDashDot);
+    pen.SetStartCap(Gdiplus::LineCapFlat);
+    pen.SetEndCap(Gdiplus::LineCapFlat);
+    pen.SetDashCap(Gdiplus::DashCapFlat);
+}
+
+// Довжина наконечника в пікселях ЗНІМКА. Раніше вона задавалась в одиницях
+// товщини пера (AdjustableArrowCap), і «великий наконечник» на тонкій лінії
+// лишався маленьким. Тепер розмір — це розмір, а товщина лише додає трохи.
+double EdHeadLen(const EdObj& o, double s)
+{
+    static const double kMul[3] = { 3.0, 4.5, 6.5 };
+    const int idx = (o.headSize < 0 || o.headSize > 2) ? 1 : o.headSize;
+    double len = (o.thick * kMul[idx] + 4.0) * s;
+    if (len < 6.0) len = 6.0;
+    return len;
+}
+
+// Наконечник власною геометрією: три форми, і кожна знає свій розмір у
+// пікселях. Малюється НА кінці відрізка, а сам відрізок під ним коротшає.
+void EdDrawHead(Gdiplus::Graphics& g, const Gdiplus::Color& col, float tipX, float tipY,
+                double dirX, double dirY, double len, float pw, int type)
+{
+    const double nx = -dirY, ny = dirX;            // нормаль до напрямку
+    const double halfW = len * 0.42;
+    Gdiplus::SolidBrush brush(col);
+    Gdiplus::Pen pen(col, pw);
+    pen.SetLineJoin(Gdiplus::LineJoinMiter);
+    if (type == 2) {
+        const float r = (float)(len * 0.36);
+        g.FillEllipse(&brush, tipX - r, tipY - r, r * 2, r * 2);
+        return;
+    }
+    const float bx = (float)(tipX - dirX * len), by = (float)(tipY - dirY * len);
+    Gdiplus::PointF p1((float)(bx + nx * halfW), (float)(by + ny * halfW));
+    Gdiplus::PointF p2((float)(bx - nx * halfW), (float)(by - ny * halfW));
+    if (type == 1) {
+        // «Пташка»: дві лінії від вістря, без заливки.
+        g.DrawLine(&pen, p1.X, p1.Y, tipX, tipY);
+        g.DrawLine(&pen, p2.X, p2.Y, tipX, tipY);
+        return;
+    }
+    Gdiplus::PointF tri[3] = { Gdiplus::PointF(tipX, tipY), p1, p2 };
+    g.FillPolygon(&brush, tri, 3);
+}
+
 void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, double oy)
 {
     float pw = (float)(o.thick * s);
@@ -10398,32 +10558,41 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
     switch (o.kind) {
     case EdKind::Rect:
         if (o.filled) g.FillRectangle(&brush, x, y, w, h);
-        else g.DrawRectangle(&pen, x + half, y + half, w - pw, h - pw);
+        else { EdApplyDash(pen, o.dash); g.DrawRectangle(&pen, x + half, y + half, w - pw, h - pw); }
         break;
     case EdKind::Ellipse:
         if (o.filled) g.FillEllipse(&brush, x, y, w, h);
-        else g.DrawEllipse(&pen, x + half, y + half, w - pw, h - pw);
+        else { EdApplyDash(pen, o.dash); g.DrawEllipse(&pen, x + half, y + half, w - pw, h - pw); }
         break;
     case EdKind::Line:
+        EdApplyDash(pen, o.dash);
         g.DrawLine(&pen, x, y, x + w, y + h);
         break;
     case EdKind::Arrow: {
-        // Наконечник — AdjustableArrowCap на самому пері: він масштабується
-        // разом із товщиною, тож своєї геометрії рахувати не треба.
-        // Розміри задаються В ОДИНИЦЯХ товщини пера, звідси сталі, а не пікселі.
-        Gdiplus::AdjustableArrowCap cap(3.2f, 3.6f, TRUE);
-        cap.SetMiddleInset(1.2f);
-        pen.SetCustomEndCap(&cap);
-        pen.SetStartCap(Gdiplus::LineCapRound);
-        // Лінію трохи вкорочуємо: інакше вістря наїжджає за задану точку.
+        // Наконечники малюємо самі — див. EdDrawHead. AdjustableArrowCap мав
+        // розмір В ОДИНИЦЯХ ТОВЩИНИ, тож «великий» на тонкій лінії лишався
+        // маленьким, а ще не вмів ні «пташки», ні кружечка.
         const double len = sqrt((double)w * w + (double)h * h);
-        const double back = (len > pw * 2.0) ? (pw * 1.6) : 0.0;
-        const float ex = (float)(x + w - (len > 0 ? w * back / len : 0));
-        const float ey = (float)(y + h - (len > 0 ? h * back / len : 0));
-        g.DrawLine(&pen, x, y, ex, ey);
+        if (len < 0.5) break;
+        const double dx = w / len, dy = h / len;
+        const double hl = EdHeadLen(o, s);
+        const bool atEnd   = (o.headEnds != 2);
+        const bool atStart = (o.headEnds >= 1);
+        // Лінія коротшає рівно на ту частину, яку закриває наконечник, —
+        // інакше вістря наїжджає за точку відпускання миші.
+        const double backE = atEnd   ? EdMinD(hl * 0.85, len * 0.5) : 0.0;
+        const double backS = atStart ? EdMinD(hl * 0.85, len * 0.5) : 0.0;
+        const float sx = (float)(x + dx * backS),      sy2 = (float)(y + dy * backS);
+        const float ex = (float)(x + w - dx * backE),  ey  = (float)(y + h - dy * backE);
+        EdApplyDash(pen, o.dash);
+        if (!o.dash) { pen.SetStartCap(Gdiplus::LineCapRound); pen.SetEndCap(Gdiplus::LineCapRound); }
+        g.DrawLine(&pen, sx, sy2, ex, ey);
+        if (atEnd)   EdDrawHead(g, col, (float)(x + w), (float)(y + h),  dx,  dy, hl, pw, o.head);
+        if (atStart) EdDrawHead(g, col, x,              y,              -dx, -dy, hl, pw, o.head);
         break;
     }
     case EdKind::Pen: {
+        EdApplyDash(pen, o.dash);
         const size_t n = o.pts.size();
         if (n < 2) {
             if (n == 1) {
@@ -10694,6 +10863,37 @@ void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 }
 
+// Розкритий список малюється ОСТАННІМ у всьому вікні — інакше його накриє
+// полотно, поверх якого він висить.
+void EdPaintPick(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
+{
+    if (g_edPickOpen < 0) return;
+    const RECT* first = EdRegionRect(EdHit::PickItem, 0);
+    const RECT* last  = EdRegionRect(EdHit::PickItem, 2);
+    if (!first || !last) return;
+    RECT box = { first->left - EdPx(4), first->top - EdPx(4),
+                 last->right + EdPx(4), last->bottom + EdPx(4) };
+    Gdiplus::Color shadow(60, 0, 0, 0);
+    RECT sh = box;
+    OffsetRect(&sh, 0, EdPx(2));
+    EdFillRound(g, sh, (float)EdPx(8), &shadow, nullptr);
+    Gdiplus::Color fill = EdC(t.chrome), bd = EdC(t.border);
+    EdFillRound(g, box, (float)EdPx(8), &fill, &bd);
+    const int cur = EdPickValue(g_edPickOpen);
+    for (int i = 0; i < 3; ++i) {
+        const RECT* r = EdRegionRect(EdHit::PickItem, i);
+        if (!r) break;
+        const bool hot = (g_edHotWhat == EdHit::PickItem && g_edHotIdx == i);
+        if (i == cur || hot) {
+            Gdiplus::Color f = EdC(i == cur ? t.accentBg : t.hot);
+            RECT rr = *r;
+            InflateRect(&rr, -EdPx(2), -EdPx(2));
+            EdFillRound(g, rr, (float)EdPx(5), &f, nullptr);
+        }
+        EdPickSample(g, *r, g_edPickOpen, i, EdC(i == cur ? t.accent : t.text));
+    }
+}
+
 void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     HBRUSH b = CreateSolidBrush(t.chrome);
@@ -10814,9 +11014,29 @@ void EdPaint(HWND hwnd, HDC dc)
     EdPaintPanel(dc, g, t);
     EdPaintStrip(dc, g, t);
     EdPaintStatus(dc, g, t);
+    EdPaintPick(dc, g, t);     // розкритий селект — поверх усього
 }
 
 // ---- дії ---------------------------------------------------------------
+
+// Вибір у селекті: вибраному об'єкту — зі знімком для скасування, і завжди
+// в типові значення, щоб наступна позначка успадкувала те саме.
+void EdPickApply(int group, int value)
+{
+    const bool sel = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size());
+    if (sel) {
+        EdObj& o = g_edObjs[g_edSel];
+        int* dst = (group == 0) ? &o.dash : (group == 1) ? &o.head
+                 : (group == 2) ? &o.headSize : &o.headEnds;
+        if (*dst != value) { EdPushUndo(); *dst = value; }
+    }
+    switch (group) {
+    case 0:  g_edDash = value; break;
+    case 1:  g_edHead = value; break;
+    case 2:  g_edHeadSize = value; break;
+    default: g_edHeadEnds = value; break;
+    }
+}
 
 void EdSetColor(COLORREF c)
 {
@@ -11323,6 +11543,9 @@ Str EdTipFor(EdHit what, int idx)
         default: return Str::EdToolCrop;
         }
     case EdHit::Swatch:  return EdCounterKind() ? Str::EdTipColorGroup : Str::EdTipColor;
+    case EdHit::Pick:
+        return idx == 0 ? Str::EdTipDash : idx == 1 ? Str::EdTipHead
+             : idx == 2 ? Str::EdTipHeadSize : Str::EdTipHeadEnds;
     case EdHit::GroupEdit: return Str::EdTipGroupEdit;
     case EdHit::GroupDel:  return Str::EdTipGroupDel;
     case EdHit::Thick:
@@ -12304,6 +12527,17 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_LBUTTONDOWN: {
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        // Клік повз розкритий селект закриває його — і НЕ робить нічого іншого:
+        // інакше той самий клік, яким список згортають, ще й малював би позначку.
+        if (g_edPickOpen >= 0) {
+            const EdRegion* pr = EdFind(pt);
+            if (!pr || (pr->what != EdHit::Pick && pr->what != EdHit::PickItem)) {
+                g_edPickOpen = -1;
+                EdLayout(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+        }
         // Клік будь-де поза полем спершу фіксує напис — СИНХРОННО, до розбору
         // самого кліка: інакше «жирний» одразу після набору потрапив би в
         // старий об'єкт, бо фіксація прийшла б повідомленням уже після.
@@ -12518,6 +12752,17 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             SetCapture(hwnd);
             EdSetAlphaAt(pt.x);
             return 0;
+        case EdHit::Pick:
+            g_edPickOpen = (g_edPickOpen == r->idx) ? -1 : r->idx;
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case EdHit::PickItem:
+            EdPickApply(g_edPickOpen, r->idx);
+            g_edPickOpen = -1;
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         case EdHit::GroupEdit:
             g_edGroupEdit = !g_edGroupEdit;
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -12679,6 +12924,10 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_edNew.filled = EdCanFill(g_edNew.kind) ? g_edFill : false;
             g_edNew.mode = g_edHideMode;
             g_edNew.strength = g_edStrength;
+            g_edNew.dash = g_edDash;
+            g_edNew.head = g_edHead;
+            g_edNew.headSize = g_edHeadSize;
+            g_edNew.headEnds = g_edHeadEnds;
             g_edNewOrigin = img;
             if (g_edNew.kind == EdKind::Mark) {
                 // Смуга маркера має сталу висоту й тягнеться лише вшир, тому
@@ -12899,6 +13148,14 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case VK_DELETE: EdDeleteSel(); return 0;
         case VK_ESCAPE:
+            // Esc знімає рівно один шар за раз: спершу розкритий селект, потім
+            // кадр, потім вибір, потім інструмент — і лише тоді закриває вікно.
+            if (g_edPickOpen >= 0) {
+                g_edPickOpen = -1;
+                EdLayout(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             if (g_edCropping) { EdCropFinish(false); return 0; }
             if (g_edSel >= 0) { g_edSel = -1; InvalidateRect(hwnd, nullptr, FALSE); }
             else if (g_edTool != EdTool::Select) { g_edTool = EdTool::Select; InvalidateRect(hwnd, nullptr, FALSE); }
