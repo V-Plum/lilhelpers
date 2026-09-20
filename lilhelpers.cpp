@@ -526,6 +526,13 @@ X(EdOpenTitle,        L"Відкрити зображення",           L"Open
 X(EdOpenBtn,          L"Відкрити",                      L"Open")                                       \
 X(EdToolSelect,       L"Вибір",                         L"Select")                                     \
 X(EdTipColor,         L"Колір позначки",                L"Mark colour")                                \
+X(EdTipColorGroup,    L"Колір кружечка · подвійний клік — на всю групу",                                \
+                                                        L"Circle colour · double-click applies to the whole group") \
+X(EdTipSizeGroup,     L"Розмір кружечка · подвійний клік — на всю групу",                               \
+                                                        L"Circle size · double-click applies to the whole group")   \
+X(EdTipGroupEdit,     L"Редагування групи: колір, розмір і прозорість — усім кружечкам",                \
+                                                        L"Group editing: colour, size and opacity go to every circle") \
+X(EdTipGroupDel,      L"Видалити всю групу",            L"Delete the whole group")                     \
 X(EdTipThick,         L"Товщина лінії",                 L"Line width")                                 \
 X(EdTipSizeDn,        L"Менший кегль",                  L"Smaller type")                               \
 X(EdTipSizeUp,        L"Більший кегль",                 L"Larger type")                                \
@@ -7451,6 +7458,12 @@ struct EdObj {
 // Чіп називає вид однією назвою і для інструмента, і для вибраного. Префікс
 // «Вибрано: » з'їдав до шістдесяти точок смуги й нічого не додавав: що саме
 // вибрано, видно по рамці на полотні.
+// ⚠ Чіп рахують ДВА місця — розкладка й малювання, — тож назву віддає одна
+// функція. У лічильника чіпа немає навмисно: одразу за ним іде жирне «Група N»,
+// яке каже те саме, а смузі лічильника бракує сотні точок на мінімальній
+// ширині вікна — рівно стільки чіп і займав.
+const wchar_t* EdChipLabel();
+
 Str EdKindName(EdKind k)
 {
     switch (k) {
@@ -7619,7 +7632,7 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    NumStart, NumReset, StampPick, StampMore, NumGroup, NumNext,
                    Aspect, CropReset, CropOk, CropNo,
                    RotL, RotR, FlipH, FlipV, Exposure, Gamma, Contrast,
-                   ToneReset, Compare };
+                   ToneReset, Compare, GroupEdit, GroupDel };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7634,6 +7647,7 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoHide, IcoMark, IcoBlur, IcoPixels, IcoPlate, IcoStrength,
              IcoCounter, IcoStamp, IcoNewGroup, IcoMore, IcoCrop,
              IcoRotL, IcoRotR, IcoFlipH, IcoFlipV, IcoCompare,
+             IcoGroupEdit, IcoGroupDel,
              IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn };
 
 enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength, Crop, CropMove,
@@ -7665,6 +7679,9 @@ int      g_edRot      = 0;            // чверті оберту за годи
 bool     g_edMirror   = false;        // дзеркало по горизонталі ДО повороту
 bool     g_edCompare  = false;        // кнопку «Порівняти» тримають
 bool     g_edTonePushed = false;      // чи вже поклали знімок для Ctrl+Z
+// CAPS-40: поки ввімкнено, колір, розмір і прозорість ідуть усій групі
+// лічильника, а не одному кружечку. Подвійний клік робить те саме разово.
+bool     g_edGroupEdit  = false;
 
 void EdRebuildImage();                // тіло далеко нижче: йому потрібні плитки
 void EdFitView();                     // поворот міняє сторони — вид доводиться вписувати
@@ -7913,41 +7930,69 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
     // Приховати — око з рискою: те саме, чим позначають «не показувати».
     // Лічильник — кружечок із одиницею всередині; малюємо саму цифру шляхами,
     // бо тексту в піктограмах у нас немає.
-    // Поворот — три чверті кола зі стрілкою на кінці: видно і напрямок, і те,
-    // що це саме оберт, а не «повторити».
-    case IcoRotR:
-        g.DrawArc(&pen, 3.4f, 3.4f, 13.2f, 13.2f, -60.0f, 300.0f);
-        g.DrawLine(&pen, 13.2f, 2.2f, 16.6f, 5.4f);
-        g.DrawLine(&pen, 16.6f, 5.4f, 13.0f, 8.2f);
+    // Поворот — три чверті кола і СУЦІЛЬНИЙ наконечник на кінці дуги.
+    // ⚠ Наконечник із двох тонких ліній на 24 точках читався як обламаний хвіст,
+    // а не як стрілка (зауваження власника по 3.8.0). Дрібні деталі на цьому
+    // розмірі не виживають: або суцільна фігура, або нічого.
+    case IcoRotR: {
+        g.DrawArc(&pen, 3.0f, 3.4f, 14.0f, 14.0f, 290.0f, 320.0f);
+        Gdiplus::PointF a[3] = { { 10.8f, 2.7f }, { 7.4f, 6.9f }, { 5.5f, 1.6f } };
+        Gdiplus::SolidBrush b(c);
+        g.FillPolygon(&b, a, 3);
         break;
-    case IcoRotL:
-        g.DrawArc(&pen, 3.4f, 3.4f, 13.2f, 13.2f, -120.0f, -300.0f);
-        g.DrawLine(&pen, 6.8f, 2.2f, 3.4f, 5.4f);
-        g.DrawLine(&pen, 3.4f, 5.4f, 7.0f, 8.2f);
+    }
+    case IcoRotL: {
+        g.DrawArc(&pen, 3.0f, 3.4f, 14.0f, 14.0f, 250.0f, -320.0f);
+        Gdiplus::PointF a[3] = { { 9.2f, 2.7f }, { 12.6f, 6.9f }, { 14.5f, 1.6f } };
+        Gdiplus::SolidBrush b(c);
+        g.FillPolygon(&b, a, 3);
         break;
-    // Дзеркало — дві половинки, що дивляться одна на одну через пунктирну вісь.
+    }
+    // Дзеркало — плита і її відображення через вісь. Трикутники читались як
+    // «назад/вперед», а пунктир на 24 точках однаково зливався в суцільну лінію,
+    // тож вісь тепер чесно суцільна.
     case IcoFlipH: {
-        Gdiplus::Pen ax(c, 1.2f);
-        ax.SetDashStyle(Gdiplus::DashStyleDash);
-        g.DrawLine(&ax, 10.0f, 1.6f, 10.0f, 18.4f);
-        Gdiplus::PointF l[3] = { { 7.6f, 4.4f }, { 7.6f, 15.6f }, { 1.8f, 10.0f } };
-        Gdiplus::PointF r[3] = { { 12.4f, 4.4f }, { 12.4f, 15.6f }, { 18.2f, 10.0f } };
+        // Вісь — рукотворний пунктир чотирма рисками: DashStyle на 24 точках
+        // зливається в суцільну лінію, а суцільна лінія — це вже не вісь дзеркала.
+        for (int i = 0; i < 4; ++i) {
+            const float y0 = 2.4f + i * 4.0f;
+            g.DrawLine(&pen, 10.0f, y0, 10.0f, y0 + 2.4f);
+        }
+        // ⚠ Прямокутні трикутники, а не рівнобедрені: у рівнобедрених немає
+        // «верху й низу», і пара читається як «назад/вперед». Тут же кожен має
+        // свій прямий кут, тож видно, що це та сама фігура, відображена.
+        Gdiplus::PointF l[3] = { { 1.8f, 3.0f }, { 7.6f, 3.0f }, { 7.6f, 17.0f } };
+        Gdiplus::PointF r[3] = { { 18.2f, 3.0f }, { 12.4f, 3.0f }, { 12.4f, 17.0f } };
         Gdiplus::SolidBrush b(c);
         g.FillPolygon(&b, l, 3);
         g.DrawPolygon(&pen, r, 3);
         break;
     }
     case IcoFlipV: {
-        Gdiplus::Pen ax(c, 1.2f);
-        ax.SetDashStyle(Gdiplus::DashStyleDash);
-        g.DrawLine(&ax, 1.6f, 10.0f, 18.4f, 10.0f);
-        Gdiplus::PointF u[3] = { { 4.4f, 7.6f }, { 15.6f, 7.6f }, { 10.0f, 1.8f } };
-        Gdiplus::PointF d[3] = { { 4.4f, 12.4f }, { 15.6f, 12.4f }, { 10.0f, 18.2f } };
+        for (int i = 0; i < 4; ++i) {
+            const float x0 = 2.4f + i * 4.0f;
+            g.DrawLine(&pen, x0, 10.0f, x0 + 2.4f, 10.0f);
+        }
+        Gdiplus::PointF u[3] = { { 3.0f, 1.8f }, { 3.0f, 7.6f }, { 17.0f, 7.6f } };
+        Gdiplus::PointF d[3] = { { 3.0f, 18.2f }, { 3.0f, 12.4f }, { 17.0f, 12.4f } };
         Gdiplus::SolidBrush b(c);
         g.FillPolygon(&b, u, 3);
         g.DrawPolygon(&pen, d, 3);
         break;
     }
+    // Група лічильників: два кружечки — те саме, що ставить інструмент, але не
+    // один. Перекреслені — та сама група, але видалена.
+    // ⚠ Між кружечками потрібен зазор: дотичні читаються як знак нескінченності.
+    case IcoGroupEdit:
+        g.DrawEllipse(&pen, 1.2f, 6.0f, 7.6f, 7.6f);
+        g.DrawEllipse(&pen, 11.2f, 6.0f, 7.6f, 7.6f);
+        break;
+    // Видалення групи — мінус у кружечку, рівно пара до плюса «нової групи»
+    // (вимога власника). Дві дії над тим самим — двома дзеркальними знаками.
+    case IcoGroupDel:
+        g.DrawEllipse(&pen, 2.8f, 2.8f, 14.4f, 14.4f);
+        g.DrawLine(&pen, 6.2f, 10.0f, 13.8f, 10.0f);
+        break;
     // Порівняння — квадрат, розділений по діагоналі: до і після.
     case IcoCompare: {
         Gdiplus::PointF tri[3] = { { 2.6f, 17.4f }, { 17.4f, 17.4f }, { 17.4f, 2.6f } };
@@ -8559,8 +8604,7 @@ void EdLayout(HWND hwnd)
 
         const bool hasSel = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size());
         // Чіп із назвою: для вибраного — що саме вибрано, інакше — активний інструмент.
-        const wchar_t* chip = hasSel ? S(EdKindName(g_edObjs[g_edSel].kind))
-                                     : (g_edTool != EdTool::Select ? S(EdToolName(g_edTool)) : nullptr);
+        const wchar_t* chip = EdChipLabel();
         if (chip) {
             const int w = EdTextWidth(dc, chip, g_edFontBold) + EdPx(20);
             RECT r = EdPill(x, cy, w, EdPx(26));
@@ -8648,6 +8692,12 @@ void EdLayout(HWND hwnd)
                 RECT nt = EdPill(x, cy, EdTextWidth(dc, nx, g_edFont) + EdPx(4), EdPx(26));
                 EdAdd(nt, EdHit::NumNext, 0);
                 x = nt.right + gap;
+
+                // Тогл стоїть ПЕРЕД кольором — рівно там, де починається те,
+                // на що він впливає (колір, розмір, прозорість).
+                RECT ge = EdPill(x, cy, EdPx(32), EdPx(28));
+                EdAdd(ge, EdHit::GroupEdit, 0);
+                x = ge.right + gap;
             }
 
             const bool cropMode = (g_edTool == EdTool::Crop);
@@ -8729,7 +8779,10 @@ void EdLayout(HWND hwnd)
             if (kk == EdKind::Counter) {
                 RECT rb = EdPill(x, cy, EdPx(32), EdPx(28));
                 EdAdd(rb, EdHit::NumReset, 0);
-                x = rb.right + gap;
+                x = rb.right + EdPx(4);
+                RECT gd = EdPill(x, cy, EdPx(32), EdPx(28));
+                EdAdd(gd, EdHit::GroupDel, 0);
+                x = gd.right + gap;
             }
         }
 
@@ -9079,8 +9132,7 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     // прямі Str::EdKindRect і EdTool::Rect (спадок етапу, де фігура була одна),
     // чіп для всіх інструментів писав «прямокутник», та ще й іншої ширини.
     const bool hasSel = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size());
-    const wchar_t* chip = hasSel ? S(EdKindName(g_edObjs[g_edSel].kind))
-                                 : (g_edTool != EdTool::Select ? S(EdToolName(g_edTool)) : nullptr);
+    const wchar_t* chip = EdChipLabel();
     const int cy = (g_edRcStrip.top + g_edRcStrip.bottom) / 2;
 
     // Усе, що росте зліва, малюємо з клипом по межі правої групи. GDI і GDI+
@@ -9311,6 +9363,15 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         if (const RECT* rb = EdRegionRect(EdHit::NumReset, 0)) {
             EdPaintButton(g, *rb, t, false, g_edHotWhat == EdHit::NumReset, false);
             EdIcon(g, IcoNewGroup, EdIconBox(*rb), EdC(t.text), 1.5f);
+        }
+        if (const RECT* rg = EdRegionRect(EdHit::GroupEdit, 0)) {
+            EdPaintButton(g, *rg, t, g_edGroupEdit, g_edHotWhat == EdHit::GroupEdit, false);
+            EdIcon(g, IcoGroupEdit, EdIconBox(*rg),
+                   EdC(g_edGroupEdit ? t.accent : t.text), 1.6f);
+        }
+        if (const RECT* rd = EdRegionRect(EdHit::GroupDel, 0)) {
+            EdPaintButton(g, *rd, t, false, g_edHotWhat == EdHit::GroupDel, false, true);
+            EdIcon(g, IcoGroupDel, EdIconBox(*rd), EdC(t.dangerFg), 1.6f);
         }
     }
 
@@ -10102,6 +10163,91 @@ int EdGroupStart(int grp)
     return g_edStartNum;
 }
 
+const wchar_t* EdChipLabel()
+{
+    if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) {
+        const EdKind k = g_edObjs[g_edSel].kind;
+        return k == EdKind::Counter ? nullptr : S(EdKindName(k));
+    }
+    if (g_edTool == EdTool::Select || g_edTool == EdTool::Counter) return nullptr;
+    return S(EdToolName(g_edTool));
+}
+
+// Смуга зараз про лічильник? Питання те саме, що й для решти властивостей:
+// вибране важливіше за інструмент.
+bool EdCounterKind()
+{
+    if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())
+        return g_edObjs[g_edSel].kind == EdKind::Counter;
+    return EdToolKind(g_edTool) == EdKind::Counter;
+}
+
+// Правка всієї групи. Поле: 0 колір, 1 розмір, 2 прозорість — рівно те, що
+// «зовнішнє» в кружечку. Номер, порядок і початок групи це не чіпає: вони
+// рахуються з порядку, і міняти їх пачкою означало б ламати нумерацію.
+bool EdGroupWould(int field, int value)
+{
+    const int grp = EdCurGroup();
+    for (size_t i = 0; i < g_edObjs.size(); ++i) {
+        const EdObj& o = g_edObjs[i];
+        if (o.kind != EdKind::Counter || o.group != grp) continue;
+        if (field == 0)      { if (o.color != (COLORREF)value) return true; }
+        else if (field == 1) { if (o.thick != value)           return true; }
+        else                 { if (o.alpha != value)           return true; }
+    }
+    return false;
+}
+
+// Без знімка: потрібне повзунку прозорості, який кладе знімок один раз на
+// натискання, а потім сипле значеннями на кожен рух миші.
+bool EdGroupSet(int field, int value)
+{
+    const int grp = EdCurGroup();
+    if (!EdGroupWould(field, value)) return false;
+    for (size_t i = 0; i < g_edObjs.size(); ++i) {
+        EdObj& o = g_edObjs[i];
+        if (o.kind != EdKind::Counter || o.group != grp) continue;
+        if (field == 0) o.color = (COLORREF)value;
+        else if (field == 1) {
+            // Кружечок росте від СВОГО центра — інакше вся група поїхала б
+            // управо вниз, і розставлені кроки перестали б показувати на своє.
+            o.x += (o.w - value) / 2;
+            o.y += (o.h - value) / 2;
+            o.w = o.h = value;
+            o.thick = value;
+        }
+        else o.alpha = value;
+    }
+    if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
+    return true;
+}
+
+// ⚠ Знімок кладемо ЛИШЕ коли щось справді зміниться: клік по вже активному
+// зразку інакше плодив би порожні кроки, і Ctrl+Z переставав би працювати.
+bool EdGroupApply(int field, int value)
+{
+    if (!EdGroupWould(field, value)) return false;
+    EdPushUndo();
+    return EdGroupSet(field, value);
+}
+
+// Видалення групи одним кроком: десять окремих Ctrl+Z за одну дію — це не
+// скасування, а покарання.
+void EdGroupDelete()
+{
+    const int grp = EdCurGroup();
+    bool any = false;
+    for (size_t i = 0; i < g_edObjs.size(); ++i)
+        if (g_edObjs[i].kind == EdKind::Counter && g_edObjs[i].group == grp) { any = true; break; }
+    if (!any) return;
+    EdPushUndo();
+    for (size_t i = g_edObjs.size(); i-- > 0; )
+        if (g_edObjs[i].kind == EdKind::Counter && g_edObjs[i].group == grp)
+            g_edObjs.erase(g_edObjs.begin() + i);
+    g_edSel = -1;
+    if (g_edWnd) { EdLayout(g_edWnd); InvalidateRect(g_edWnd, nullptr, FALSE); }
+}
+
 int EdGroupCount(int grp)
 {
     int n = 0;
@@ -10642,7 +10788,10 @@ void EdSetAlphaAt(int mouseX)
     int p = 10 + (int)((mouseX - sl->left) * 90.0 / w + 0.5);
     if (p < 10) p = 10;
     if (p > 100) p = 100;
-    if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) g_edObjs[g_edSel].alpha = p;
+    // Тогл «Редагування групи» перехоплює повзунок: інакше довелося б пояснювати,
+    // чому колір і розмір ідуть усій групі, а прозорість — ні.
+    if (g_edGroupEdit && EdCounterKind()) { EdGroupSet(2, p); g_edAlpha = p; }
+    else if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) g_edObjs[g_edSel].alpha = p;
     else g_edAlpha = p;
     InvalidateRect(g_edWnd, nullptr, FALSE);
 }
@@ -11013,13 +11162,16 @@ Str EdTipFor(EdHit what, int idx)
         case 10: return Str::EdToolStamp;
         default: return Str::EdToolCrop;
         }
-    case EdHit::Swatch:  return Str::EdTipColor;
+    case EdHit::Swatch:  return EdCounterKind() ? Str::EdTipColorGroup : Str::EdTipColor;
+    case EdHit::GroupEdit: return Str::EdTipGroupEdit;
+    case EdHit::GroupDel:  return Str::EdTipGroupDel;
     case EdHit::Thick:
         {
             const EdKind kt = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())
                                   ? g_edObjs[g_edSel].kind : EdToolKind(g_edTool);
-            if (kt == EdKind::Mark) return Str::EdTipMarkH;
-            if (EdIsStamped(kt))    return Str::EdTipSize;
+            if (kt == EdKind::Mark)    return Str::EdTipMarkH;
+            if (kt == EdKind::Counter) return Str::EdTipSizeGroup;
+            if (EdIsStamped(kt))       return Str::EdTipSize;
             return Str::EdTipThick;
         }
     case EdHit::HideMode: return idx == 1 ? Str::EdTipPixels : idx == 2 ? Str::EdTipPlate : Str::EdTipBlur;
@@ -12035,7 +12187,15 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             const COLORREF* pl = EdPaletteFor(kk, np);
             if (r->idx < 0 || r->idx >= np) return 0;
             if (kk == EdKind::Mark) g_edMarkColor = pl[r->idx];
-            EdSetColor(pl[r->idx]);
+            // Тогл увімкнено — колір іде всій групі, і вибраний кружечок у ній
+            // теж. Робити і те, і те означало б два кроки скасування на один клік.
+            if (kk == EdKind::Counter && g_edGroupEdit) {
+                EdGroupApply(0, (int)pl[r->idx]);
+                g_edColor = pl[r->idx];
+                InvalidateRect(hwnd, nullptr, FALSE);
+            } else {
+                EdSetColor(pl[r->idx]);
+            }
             return 0;
         }
         case EdHit::StampPick: {
@@ -12129,6 +12289,12 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 const EdKind kk = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())
                                       ? g_edObjs[g_edSel].kind : EdToolKind(g_edTool);
                 const int val = EdThickSet(kk)[r->idx];
+                if (kk == EdKind::Counter && g_edGroupEdit) {
+                    EdGroupApply(1, val);
+                    g_edStampSize = val;
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                }
                 if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
                     g_edObjs[g_edSel].thick != val) {
                     EdPushUndo();
@@ -12205,10 +12371,18 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
         case EdHit::Opacity:
-            if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) EdPushUndo();
+            if ((g_edGroupEdit && EdCounterKind()) ||
+                (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())) EdPushUndo();
             g_edDrag = EdDrag::Slider;
             SetCapture(hwnd);
             EdSetAlphaAt(pt.x);
+            return 0;
+        case EdHit::GroupEdit:
+            g_edGroupEdit = !g_edGroupEdit;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case EdHit::GroupDel:
+            EdGroupDelete();
             return 0;
         case EdHit::RotL:  EdRotateBy(false); return 0;
         case EdHit::RotR:  EdRotateBy(true);  return 0;
@@ -12449,7 +12623,23 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_LBUTTONDBLCLK: {
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-        if (!PtInRect(&g_edRcCanvas, pt)) return 0;
+        if (!PtInRect(&g_edRcCanvas, pt)) {
+            // Подвійний клік по кольору чи розміру — на ВСЮ групу лічильника.
+            // Перший клік із пари вже застосувався до одного кружечка, тож цей
+            // лише добирає решту; окремий крок скасування для нього не потрібен,
+            // бо EdGroupApply кладе знімок сам і лише коли є що міняти.
+            const EdRegion* dr = EdFind(pt);
+            if (dr && EdCounterKind()) {
+                if (dr->what == EdHit::Swatch) {
+                    int np = 8;
+                    const COLORREF* pl = EdPaletteFor(EdKind::Counter, np);
+                    if (dr->idx >= 0 && dr->idx < np) EdGroupApply(0, (int)pl[dr->idx]);
+                } else if (dr->what == EdHit::Thick && dr->idx >= 0 && dr->idx < 3) {
+                    EdGroupApply(1, EdThickSet(EdKind::Counter)[dr->idx]);
+                }
+            }
+            return 0;
+        }
         const int hit = EdPick(pt);
         // Подвійний клік по напису відкриває його на правку — хоч через годину
         // після створення. По порожньому місцю — вписує зображення, як і було.
