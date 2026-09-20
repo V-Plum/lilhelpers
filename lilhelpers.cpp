@@ -465,6 +465,8 @@ X(CapCloseAfterCopy,  L"Закривати редактор після копі�
                       L"Close the editor after copying")                                               \
 X(EdCapScreen,        L"Знімок екрана",                 L"Screenshot")                                 \
 X(EdCapWindow,        L"Знімок вікна",                  L"Window shot")                                \
+X(EdFmtHdr,           L"HDR · біле SDR %d ніт · зведено",                                              \
+                      L"HDR · SDR white %d nits · mapped")                                            \
 X(EdHdrNote,          L"HDR · тон-мапінг застосовано",  L"HDR · tone-mapped")                          \
 X(EdErrCapture,       L"Не вдалося зробити знімок екрана.", L"Could not capture the screen.")          \
 X(EdMenu,             L"Редактор знімків…",             L"Screenshot editor…")                         \
@@ -6446,11 +6448,13 @@ void ApplyMode(HWND hwnd, Mode mode)
 // 8 біт). Вона написана за специфікаціями і чекає на живу перевірку власником.
 
 constexpr int   kCapBudgetMs   = 1200;   // скільки чекаємо непорожній кадр
-constexpr float kCapKnee       = 0.80f;  // де починається м'який спад у світлах
+constexpr float kCapHdrFallback = 200.0f; // типове біле SDR у Windows при HDR
 constexpr float kCapScrgbWhite = 80.0f;  // scRGB 1.0 = 80 ніт за визначенням
 
 struct CapShot {
     Gdiplus::Bitmap* bmp;
+    int   fmt;          // DXGI_FORMAT кадру — для рядка діагностики
+    int   cs;           // колірний простір виходу
     bool  hdr;          // джерело було HDR
     bool  toneMapped;   // і ми його звели в SDR
     float sdrWhite;     // ніт; -1 якщо система не сказала
@@ -6478,12 +6482,15 @@ float CapSdrWhiteNits(const wchar_t* gdiDeviceName)
             src.header.id = paths[i].sourceInfo.id;
             if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS) continue;
             if (lstrcmpiW(src.viewGdiDeviceName, gdiDeviceName)) continue;
-            // DISPLAYCONFIG_GET_SDR_WHITE_LEVEL = 26; структури немає в старих SDK
+            // ⚠ Тип запиту — 11 (DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL).
+            // Тут довго стояло 26, запит мовчки падав, і тон-мапінг брав
+            // запасні 80 ніт замість справжніх — звідси бліді HDR-знімки.
+            // Структури немає в старих SDK, тому оголошено на місці.
             struct {
                 DISPLAYCONFIG_DEVICE_INFO_HEADER header;
                 ULONG SDRWhiteLevel;
             } wl = {};
-            wl.header.type = (DISPLAYCONFIG_DEVICE_INFO_TYPE)26;
+            wl.header.type = (DISPLAYCONFIG_DEVICE_INFO_TYPE)11;
             wl.header.size = sizeof(wl);
             wl.header.adapterId = paths[i].targetInfo.adapterId;
             wl.header.id = paths[i].targetInfo.id;
@@ -6505,15 +6512,15 @@ float CapHalfToFloat(unsigned short h)
     return s ? -v : v;
 }
 
-// М'який спад у світлах. Усе до kCapKnee лишається як було — саме тому звичайний
-// інтерфейс на HDR-екрані виглядатиме так само, як бачить око, — а вище
-// асимптотично тиснеться до одиниці, щоб відблиски не зрізало в плоску пляму.
+// Усе до білого SDR проходить БЕЗ ЗМІН: знімок інтерфейсу на HDR-екрані має
+// виглядати рівно так, як він виглядає на екрані. Яскравіше за біле —
+// зрізається. Мати водночас «біле лишається білим» і «яскравіше за біле ще
+// розрізняється» у восьми бітах неможливо, і для знімків інтерфейсу вибір саме
+// такий; відблиски HDR-відео поверне ручний повзунок експозиції.
 float CapKnee(float n)
 {
     if (n <= 0.0f) return 0.0f;
-    if (n <= kCapKnee) return n;
-    const float t = (n - kCapKnee) / (1.0f - kCapKnee);
-    return kCapKnee + (1.0f - kCapKnee) * (1.0f - (float)exp(-t));
+    return n < 1.0f ? n : 1.0f;
 }
 
 BYTE CapToSrgb8(float lin)
@@ -6637,7 +6644,11 @@ Gdiplus::Bitmap* CapConvert(const BYTE* src, UINT srcPitch, UINT w, UINT h,
         return nullptr;
     }
 
-    const float white = (sdrWhite > 1.0f) ? sdrWhite : kCapScrgbWhite;
+    // Якщо система не сказала рівень білого, для HDR брати 80 ніт не можна:
+    // це зробить картинку блідою рівно так само, як робив хибний код запиту.
+    const bool hdrSrc = (cs != DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+    const float white = (sdrWhite > 1.0f) ? sdrWhite
+                                          : (hdrSrc ? kCapHdrFallback : kCapScrgbWhite);
 
     if (fmt == DXGI_FORMAT_R16G16B16A16_FLOAT) {
         // scRGB: лінійний, 1.0 = 80 ніт. Таблиця на всі 65536 півзначень одразу —
@@ -6721,6 +6732,7 @@ bool CapGrabMonitor(HMONITOR mon, CapShot* out)
 
     out->sdrWhite = CapSdrWhiteNits(co.device);
     out->hdr = (co.cs != DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+    out->cs  = (int)co.cs;
 
     ID3D11Device* dev = nullptr;
     ID3D11DeviceContext* ctx = nullptr;
@@ -6758,6 +6770,7 @@ bool CapGrabMonitor(HMONITOR mon, CapShot* out)
         if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&tex)) && tex) {
             D3D11_TEXTURE2D_DESC td = {};
             tex->GetDesc(&td);
+            out->fmt = (int)td.Format;
             D3D11_TEXTURE2D_DESC sd = td;
             sd.Usage = D3D11_USAGE_STAGING;
             sd.BindFlags = 0;
@@ -7294,6 +7307,7 @@ Gdiplus::Bitmap* g_edImg = nullptr;
 int      g_edImgW = 0, g_edImgH = 0;
 wchar_t  g_edSource[MAX_PATH] = {};
 bool     g_edHdr = false, g_edToneMapped = false;   // CAPS-21: звідки прийшов кадр
+float    g_edSdrWhite = -1.0f;                      // ніт; -1 = система не сказала
 // CAPS-22: стан виходів. Остання використана дія підсвічується як дія для Enter.
 int      g_edLastAction  = 0;      // 0 буфер, 1 файл
 bool     g_edCloseOnCopy = true;
@@ -8042,8 +8056,11 @@ void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 
     if (g_edHdr) {
+        wchar_t hb[128];
+        if (g_edSdrWhite > 1.0f) wsprintfW(hb, S(Str::EdFmtHdr), (int)(g_edSdrWhite + 0.5f));
+        else lstrcpynW(hb, S(Str::EdHdrNote), 128);
         RECT lh = { x, y, g_edRcPanel.right - EdPx(14), y + EdPx(20) };
-        EdDrawText(dc, lh, S(Str::EdHdrNote), g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        EdDrawText(dc, lh, hb, g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         y = lh.bottom + EdPx(6);
     }
 
@@ -8663,7 +8680,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 // шлях обслуговує і файл, і знімок екрана, і буфер обміну — жодне джерело не
 // має привілею.
 void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
-                  bool hdr, bool toneMapped)
+                  bool hdr, bool toneMapped, float sdrWhite = -1.0f)
 {
     if (!bmp) return;
 
@@ -8686,6 +8703,7 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edImgH = (int)bmp->GetHeight();
     g_edHdr        = hdr;
     g_edToneMapped = toneMapped;
+    g_edSdrWhite   = sdrWhite;
     g_edSaved      = false;
     g_edToast      = Str::Empty;
     lstrcpynW(g_edSource, label ? label : L"", MAX_PATH);
@@ -9284,7 +9302,7 @@ void CapTake(HINSTANCE hInst, HWND owner, CapMode mode, HWND target)
     if (mode == CapMode::Window)         label = Str::EdCapWindow;
     else if (mode == CapMode::Region)    label = Str::EdCapRegion;
     else if (mode == CapMode::Clipboard) label = Str::EdCapClip;
-    EdOpenBitmap(hInst, shot.bmp, S(label), shot.hdr, shot.toneMapped);
+    EdOpenBitmap(hInst, shot.bmp, S(label), shot.hdr, shot.toneMapped, shot.sdrWhite);
 }
 
 // =================== кінець редактора знімків (CAPS-20) ===================
