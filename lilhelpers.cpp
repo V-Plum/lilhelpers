@@ -361,8 +361,8 @@ X(PeekTypesImages,    L"Зображення: JPEG, PNG, GIF (анімовані
                       L"Images: JPEG, PNG, GIF (animated ones play), BMP, TIFF, ICO, WebP, SVG.")    \
 X(PeekTypesText,      L"Текст і код до 1 МБ — JSON форматується. Документи Word (docx) — текстом.",  \
                       L"Text and code up to 1 MB — JSON is reformatted. Word docs (docx) as text.")  \
-X(PeekTypesMedia,     L"PDF — перша сторінка. Відео — кадр і тривалість. STL — модель із габаритами.", \
-                      L"PDF — first page. Video — a frame and duration. STL — model with sizes.")    \
+X(PeekTypesMedia,     L"PDF — гортається коліщатком і стрілками. Відео — кадр. STL — із габаритами.", \
+                      L"PDF — flip by wheel or arrows. Video — a frame. STL — with its sizes.")      \
 X(PeekTypesOther,     L"Решта файлів, папки, ярлики та STEP — картка з відомостями про файл.",       \
                       L"Other files, folders, shortcuts and STEP — a card of file details.")         \
 X(PeekSecKeeps,       L"Що лишається за Провідником",   L"What stays with Explorer")                    \
@@ -381,6 +381,12 @@ X(PeekFmtStl,         L"%.0f × %.0f × %.0f · трикутників: %u · %s
 X(PeekFmtVideo,       L"%d × %d · %s · %s",                      L"%d × %d · %s · %s")               \
 X(PeekDocxText,       L"лише текст",                  L"text only")                                  \
 X(PeekFmtPdf,         L"%d × %d · сторінок: %u · %s",              L"%d × %d · pages: %u · %s")      \
+X(PeekFmtImageNote,   L"%d × %d · %s · %s",          L"%d × %d · %s · %s")                           \
+X(PeekSvgNoFx,        L"без ефектів",                L"no effects")                                  \
+X(PeekSvgNoMask,      L"без маски",                  L"no mask")                                     \
+X(PeekSvgNoText,      L"без тексту",                 L"no text")                                     \
+X(PeekSvgPartial,     L"намальовано не все",         L"partly drawn")                                \
+X(PeekFmtPdfPage,     L"%d × %d · сторінка %u з %u · %s",       L"%d × %d · page %u of %u · %s")     \
 X(PeekLblType,        L"Тип",                           L"Type")                                        \
 X(PeekLblSize,        L"Розмір",                        L"Size")                                        \
 X(PeekLblItems,       L"Елементів",                     L"Items")                                       \
@@ -3133,10 +3139,12 @@ std::vector<UINT> g_peekDelays;   // затримка кадру, мс
 HICON    g_peekIconBig = nullptr, g_peekIconSmall = nullptr;
 HFONT    g_peekFont = nullptr, g_peekFontBold = nullptr, g_peekFontMono = nullptr;
 bool     g_peekCloseHot = false;
+int      g_peekPagerHot = 0;   // 0 нічого, 1 «назад», 2 «вперед»
 bool     g_peekTracking = false;
 bool     g_peekDark     = false;
 bool     g_peekJsonFormatted = false;   // показуємо не байт-у-байт, і про це варто сказати
 bool     g_peekSvgAsCode     = false;   // SVG не намалювали — скажемо чому, а не промовчимо
+Str      g_peekSvgNote       = Str::Empty;  // намалювали, але не все — теж скажемо
 HWND     g_peekEnableCb = nullptr;
 
 int PeekPx(int v) { return MulDiv(v, (int)GetDpiForSystem(), 96); }
@@ -3698,16 +3706,48 @@ bool PeekLoadImage(const wchar_t* path)
 //  2. <use href="#id"> з SVG 2 D2D не бачить, а старий xlink:href — бачить.
 
 
-// Елементи, які D2D мовчки пропускає. Побачили хоч один — не малюємо нічого.
-bool IsSvgBeyondD2D(const std::wstring& s)
+// Що саме D2D пропустить. Раніше на будь-який такий елемент ми ВІДМОВЛЯЛИСЬ малювати;
+// перевірка на двох справжніх іконках показала, що це надто категорично: без <filter>
+// зникає лише тінь, без <mask> — лише відблиск, і зображення лишається впізнаваним.
+// Тому тепер малюємо, але кажемо в підписі, чого бракує. Мовчати про це не можна —
+// саме мовчання й робило б картинку брехливою.
+Str SvgSkippedNote(const std::wstring& s, bool& any)
 {
-    static const wchar_t* const k[] = {
-        L"<text", L"<tspan", L"<mask", L"<filter", L"<pattern",
-        L"<foreignObject", L"<switch", L"<marker", L"<animate", L"<image"
-    };
+    any = true;
+    if (s.find(L"<text") != std::wstring::npos || s.find(L"<tspan") != std::wstring::npos)
+        return Str::PeekSvgNoText;          // втрата змісту — називаємо найперше
+    if (s.find(L"<mask") != std::wstring::npos)
+        return Str::PeekSvgNoMask;
+    if (s.find(L"<filter") != std::wstring::npos)
+        return Str::PeekSvgNoFx;
+    static const wchar_t* const k[] = { L"<pattern", L"<foreignObject", L"<switch", L"<marker", L"<animate" };
     for (const wchar_t* t : k)
-        if (s.find(t) != std::wstring::npos) return true;
-    return false;
+        if (s.find(t) != std::wstring::npos) return Str::PeekSvgPartial;
+    any = false;
+    return Str::Empty;
+}
+
+// Чи вийшов рендер порожнім. Перевіряємо ВМІСТ, а не список елементів: так само
+// ловляться випадки, про які ми не здогадались. Поріг свідомо мізерний — тонка
+// лінія на 24-піксельній іконці має рахуватись як зображення.
+bool BitmapNearlyEmpty(Gdiplus::Bitmap* bmp)
+{
+    if (!bmp) return true;
+    const int w = (int)bmp->GetWidth(), h = (int)bmp->GetHeight();
+    if (w < 1 || h < 1) return true;
+    Gdiplus::BitmapData bd = {};
+    Gdiplus::Rect rc(0, 0, w, h);
+    if (bmp->LockBits(&rc, Gdiplus::ImageLockModeRead, PixelFormat32bppPARGB, &bd) != Gdiplus::Ok)
+        return false;                        // не змогли перевірити — вважаємо, що щось є
+    size_t solid = 0;
+    const size_t need = (size_t)w * h / 5000 + 1;   // 0.02 % площі
+    for (int y = 0; y < h && solid < need; ++y) {
+        const DWORD* p = (const DWORD*)((const BYTE*)bd.Scan0 + (size_t)y * bd.Stride);
+        for (int x = 0; x < w; ++x)
+            if ((p[x] >> 24) > 8 && ++solid >= need) break;
+    }
+    bmp->UnlockBits(&bd);
+    return solid < need;
 }
 
 struct SvgDecl { std::wstring prop, value; };
@@ -3950,7 +3990,8 @@ bool PeekLoadSvg(const wchar_t* path)
     if (!DecodeText(raw.data(), raw.size(), wide, true, false) || wide.empty()) return false;
     std::wstring s(wide.begin(), wide.end());
     if (s.find(L"<svg") == std::wstring::npos) return false;
-    if (IsSvgBeyondD2D(s)) return false;          // покажемо розмітку, і чесно скажемо чому
+    bool skipped = false;
+    const Str note = SvgSkippedNote(s, skipped);
 
     std::wstring css;
     SvgTakeStyles(s, css);
@@ -4030,6 +4071,9 @@ bool PeekLoadSvg(const wchar_t* path)
     stream->Release();
     if (!ok) return false;
 
+    // Рендер без вмісту — це не перегляд, а порожнє вікно: краще показати розмітку.
+    if (BitmapNearlyEmpty(bmp)) { delete bmp; return false; }
+    g_peekSvgNote = skipped ? note : Str::Empty;
     g_peekImg = bmp;
     g_peekInfo.imgW = w;                    // розмір бітмапа — ним малює PeekPaint
     g_peekInfo.imgH = h;
@@ -4705,24 +4749,74 @@ template <class T> HRESULT PdfAwait(T* op, int ms)
     return hr;
 }
 
-// Завдання живе на купі й належить обом сторонам: якщо UI не дочекався, потік
-// доробить і звільнить його сам — інакше він писав би в чужий стек.
-struct PdfJob {
+// Сесія живе, поки відкритий перегляд PDF: документ лишається завантаженим на
+// тому ж потоці, і гортання коштує лише рендеру сторінки. Переоткривати файл на
+// кожен гортак було б помітно повільно на 44-сторінковій інструкції.
+//
+// Належить обом сторонам через лічильник: якщо UI не дочекався відповіді й пішов,
+// потік доробить і звільнить сесію сам — інакше він писав би в чужу пам'ять.
+struct PdfSession {
     wchar_t path[MAX_PATH];
-    std::vector<BYTE> png;
-    UINT32 pages;
-    bool ok;
+    HANDLE  evRequest;          // UI -> потік: намалюй сторінку wantPage (або виходь)
+    HANDLE  evDone;             // потік -> UI: png готовий
+    volatile LONG quit;
+    volatile LONG wantPage;
+    std::vector<BYTE> png;      // читається UI лише після evDone
+    UINT32  pages;
+    bool    ok;
     volatile LONG refs;
 };
 
-void PdfJobRelease(PdfJob* j)
+PdfSession* g_pdf = nullptr;
+UINT32 g_peekPdfPage = 0;       // 0-based, показана зараз
+UINT32 g_peekPdfPages = 0;
+
+void PdfSessionRelease(PdfSession* s)
 {
-    if (InterlockedDecrement(&j->refs) == 0) delete j;
+    if (InterlockedDecrement(&s->refs) != 0) return;
+    if (s->evRequest) CloseHandle(s->evRequest);
+    if (s->evDone) CloseHandle(s->evDone);
+    delete s;
+}
+
+// Малює одну сторінку у png. Викликається ЛИШЕ з потоку сесії.
+bool PdfRenderPage(LhPdfDoc* doc, UINT32 index, HSTRING clsMem, std::vector<BYTE>& png)
+{
+    png.clear();
+    LhPdfPage* page = nullptr;
+    IInspectable* memInsp = nullptr;
+    void* outRas = nullptr;
+    LhAsyncAct* act = nullptr;
+    IStream* outStm = nullptr;
+    bool ok = false;
+
+    if (SUCCEEDED(doc->GetPage(index, &page)) && page &&
+        SUCCEEDED(RoActivateInstance(clsMem, &memInsp)) && memInsp &&
+        SUCCEEDED(memInsp->QueryInterface(kIID_IRandomAccessStreamLh, &outRas)) && outRas &&
+        SUCCEEDED(page->RenderToStreamAsync(outRas, &act)) && act &&
+        SUCCEEDED(PdfAwait(act, 20000)) &&
+        SUCCEEDED(CreateStreamOverRandomAccessStream((IUnknown*)outRas, IID_IStream, (void**)&outStm)) && outStm) {
+        LARGE_INTEGER zero = {};
+        outStm->Seek(zero, STREAM_SEEK_SET, nullptr);
+        BYTE buf[65536];
+        ULONG got = 0;
+        while (SUCCEEDED(outStm->Read(buf, sizeof(buf), &got)) && got) {
+            png.insert(png.end(), buf, buf + got);
+            if (png.size() > 96u * 1024 * 1024) break;
+        }
+        ok = !png.empty();
+    }
+    if (outStm) outStm->Release();
+    if (act) act->Release();
+    if (outRas) ((IUnknown*)outRas)->Release();
+    if (memInsp) memInsp->Release();
+    if (page) page->Release();
+    return ok;
 }
 
 DWORD WINAPI PdfWorker(LPVOID param)
 {
-    PdfJob* job = (PdfJob*)param;
+    PdfSession* s = (PdfSession*)param;
     const HRESULT hrRo = RoInitialize(RO_INIT_MULTITHREADED);
 
     HSTRING clsDoc = nullptr, clsMem = nullptr;
@@ -4734,41 +4828,26 @@ DWORD WINAPI PdfWorker(LPVOID param)
     void* inRas = nullptr;
     LhAsyncOp* op = nullptr;
     LhPdfDoc* doc = nullptr;
-    LhPdfPage* page = nullptr;
-    IInspectable* memInsp = nullptr;
-    void* outRas = nullptr;
-    LhAsyncAct* act = nullptr;
-    IStream* outStm = nullptr;
 
     if (SUCCEEDED(RoGetActivationFactory(clsDoc, kIID_IPdfDocumentStatics, (void**)&statics)) && statics &&
-        SUCCEEDED(SHCreateStreamOnFileEx(job->path, STGM_READ | STGM_SHARE_DENY_WRITE, 0, FALSE, nullptr, &file)) && file &&
+        SUCCEEDED(SHCreateStreamOnFileEx(s->path, STGM_READ | STGM_SHARE_DENY_WRITE, 0, FALSE, nullptr, &file)) && file &&
         SUCCEEDED(CreateRandomAccessStreamOverStream(file, BSOS_DEFAULT, kIID_IRandomAccessStreamLh, &inRas)) && inRas &&
         SUCCEEDED(statics->LoadFromStreamAsync(inRas, &op)) && op &&
         SUCCEEDED(PdfAwait(op, 20000)) &&
-        SUCCEEDED(op->GetResults((void**)&doc)) && doc &&
-        SUCCEEDED(doc->GetPage(0, &page)) && page &&
-        SUCCEEDED(RoActivateInstance(clsMem, &memInsp)) && memInsp &&
-        SUCCEEDED(memInsp->QueryInterface(kIID_IRandomAccessStreamLh, &outRas)) && outRas &&
-        SUCCEEDED(page->RenderToStreamAsync(outRas, &act)) && act &&
-        SUCCEEDED(PdfAwait(act, 20000)) &&
-        SUCCEEDED(CreateStreamOverRandomAccessStream((IUnknown*)outRas, IID_IStream, (void**)&outStm)) && outStm) {
-        doc->get_PageCount(&job->pages);
-        LARGE_INTEGER zero = {};
-        outStm->Seek(zero, STREAM_SEEK_SET, nullptr);
-        BYTE buf[65536];
-        ULONG got = 0;
-        while (SUCCEEDED(outStm->Read(buf, sizeof(buf), &got)) && got) {
-            job->png.insert(job->png.end(), buf, buf + got);
-            if (job->png.size() > 96u * 1024 * 1024) break;
-        }
-        job->ok = !job->png.empty();
+        SUCCEEDED(op->GetResults((void**)&doc)) && doc) {
+        doc->get_PageCount(&s->pages);
+        s->ok = PdfRenderPage(doc, 0, clsMem, s->png);
+    }
+    SetEvent(s->evDone);
+
+    while (doc && !s->quit) {
+        if (WaitForSingleObject(s->evRequest, INFINITE) != WAIT_OBJECT_0) break;
+        if (s->quit) break;
+        const UINT32 want = (UINT32)s->wantPage;
+        s->ok = (want < s->pages) && PdfRenderPage(doc, want, clsMem, s->png);
+        SetEvent(s->evDone);
     }
 
-    if (outStm) outStm->Release();
-    if (act) act->Release();
-    if (outRas) ((IUnknown*)outRas)->Release();
-    if (memInsp) memInsp->Release();
-    if (page) page->Release();
     if (doc) doc->Release();
     if (op) op->Release();
     if (inRas) ((IUnknown*)inRas)->Release();
@@ -4777,26 +4856,19 @@ DWORD WINAPI PdfWorker(LPVOID param)
     WindowsDeleteString(clsMem);
     WindowsDeleteString(clsDoc);
     if (SUCCEEDED(hrRo)) RoUninitialize();
-    PdfJobRelease(job);
+    PdfSessionRelease(s);
     return 0;
 }
 
-bool PeekLoadPdf(const wchar_t* path, UINT32& pagesOut)
+// Перетворює вже готовий png сесії на наш бітмап.
+bool PdfTakeBitmap(PdfSession* s)
 {
-    PdfJob* job = new PdfJob();
-    lstrcpynW(job->path, path, MAX_PATH);
-    job->pages = 0;
-    job->ok = false;
-    job->refs = 2;
+    if (!s->ok || s->png.empty()) return false;
+    delete g_peekScaled; g_peekScaled = nullptr;
+    delete g_peekImg;    g_peekImg = nullptr;
+    if (g_peekImgStream) { g_peekImgStream->Release(); g_peekImgStream = nullptr; }
 
-    HANDLE th = CreateThread(nullptr, 0, PdfWorker, job, 0, nullptr);
-    if (!th) { job->refs = 1; PdfJobRelease(job); return false; }
-    const DWORD waited = WaitForSingleObject(th, 25000);
-    CloseHandle(th);
-    if (waited != WAIT_OBJECT_0 || !job->ok) { PdfJobRelease(job); return false; }
-
-    // Рендер приходить як PNG — далі звичайний шлях зображення.
-    g_peekImgStream = SHCreateMemStream(job->png.data(), (UINT)job->png.size());
+    g_peekImgStream = SHCreateMemStream(s->png.data(), (UINT)s->png.size());
     Gdiplus::Bitmap* bmp = g_peekImgStream ? Gdiplus::Bitmap::FromStream(g_peekImgStream, FALSE) : nullptr;
     if (bmp && (bmp->GetLastStatus() != Gdiplus::Ok || !bmp->GetWidth() || !bmp->GetHeight())) {
         delete bmp;
@@ -4804,14 +4876,68 @@ bool PeekLoadPdf(const wchar_t* path, UINT32& pagesOut)
     }
     if (!bmp) {
         if (g_peekImgStream) { g_peekImgStream->Release(); g_peekImgStream = nullptr; }
-        PdfJobRelease(job);
         return false;
     }
     g_peekImg = bmp;
     g_peekInfo.imgW = (int)bmp->GetWidth();
     g_peekInfo.imgH = (int)bmp->GetHeight();
-    pagesOut = job->pages;
-    PdfJobRelease(job);
+    return true;
+}
+
+void PdfSessionClose()
+{
+    if (!g_pdf) return;
+    InterlockedExchange(&g_pdf->quit, 1);
+    SetEvent(g_pdf->evRequest);      // розбудити потік, щоб він побачив прапорець
+    PdfSessionRelease(g_pdf);
+    g_pdf = nullptr;
+    g_peekPdfPage = 0;
+    g_peekPdfPages = 0;
+}
+
+bool PeekLoadPdf(const wchar_t* path)
+{
+    PdfSessionClose();
+    PdfSession* s = new PdfSession();
+    lstrcpynW(s->path, path, MAX_PATH);
+    s->evRequest = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    s->evDone    = CreateEventW(nullptr, TRUE,  FALSE, nullptr);
+    s->quit = 0;
+    s->wantPage = 0;
+    s->pages = 0;
+    s->ok = false;
+    s->refs = 2;
+    if (!s->evRequest || !s->evDone) { s->refs = 1; PdfSessionRelease(s); return false; }
+
+    HANDLE th = CreateThread(nullptr, 0, PdfWorker, s, 0, nullptr);
+    if (!th) { s->refs = 1; PdfSessionRelease(s); return false; }
+    CloseHandle(th);
+
+    if (WaitForSingleObject(s->evDone, 25000) != WAIT_OBJECT_0 || !PdfTakeBitmap(s)) {
+        InterlockedExchange(&s->quit, 1);
+        SetEvent(s->evRequest);
+        PdfSessionRelease(s);
+        return false;
+    }
+    g_pdf = s;
+    g_peekPdfPage = 0;
+    g_peekPdfPages = s->pages;
+    return true;
+}
+
+// Гортання. Повертає true, якщо сторінка справді змінилась і треба перемалювати.
+bool PeekPdfGoto(int page)
+{
+    if (!g_pdf || g_peekPdfPages < 2) return false;
+    if (page < 0 || (UINT32)page >= g_peekPdfPages || (UINT32)page == g_peekPdfPage) return false;
+    InterlockedExchange(&g_pdf->wantPage, page);
+    ResetEvent(g_pdf->evDone);
+    SetEvent(g_pdf->evRequest);
+    if (WaitForSingleObject(g_pdf->evDone, 20000) != WAIT_OBJECT_0) return false;
+    if (!PdfTakeBitmap(g_pdf)) return false;
+    g_peekPdfPage = (UINT32)page;
+    swprintf(g_peekInfo.subtitle, 320, S(Str::PeekFmtPdfPage), g_peekInfo.imgW, g_peekInfo.imgH,
+             g_peekPdfPage + 1, g_peekPdfPages, g_peekInfo.size);
     return true;
 }
 
@@ -4819,6 +4945,7 @@ bool PeekLoadPdf(const wchar_t* path, UINT32& pagesOut)
 
 void PeekReset()
 {
+    PdfSessionClose();
     if (g_peekWnd) KillTimer(g_peekWnd, TIMER_PEEK_ANIM);
     delete g_peekScaled; g_peekScaled = nullptr;
     delete g_peekImg;    g_peekImg = nullptr;
@@ -4902,13 +5029,13 @@ void PeekLoad(const wchar_t* path)
         g_peekKind = PeekKind::Card;
         return;
     }
-    if (lstrcmpiW(ext, L".pdf") == 0) {
-        UINT32 pages = 0;
-        if (PeekLoadPdf(path, pages)) {
-            swprintf(I.subtitle, 320, S(Str::PeekFmtPdf), I.imgW, I.imgH, pages, I.size);
-            g_peekKind = PeekKind::Image;
-            return;
-        }
+    if (lstrcmpiW(ext, L".pdf") == 0 && PeekLoadPdf(path)) {
+        if (g_peekPdfPages > 1)
+            swprintf(I.subtitle, 320, S(Str::PeekFmtPdfPage), I.imgW, I.imgH, 1u, g_peekPdfPages, I.size);
+        else
+            swprintf(I.subtitle, 320, S(Str::PeekFmtPdf), I.imgW, I.imgH, g_peekPdfPages, I.size);
+        g_peekKind = PeekKind::Image;
+        return;
     }
     if (IsStepExt(ext) && PeekLoadStep(path, I)) {
         swprintf(I.subtitle, 320, S(Str::PeekFmtTwo), I.type, I.size);
@@ -4941,7 +5068,10 @@ void PeekLoad(const wchar_t* path)
     g_peekSvgAsCode = false;
     if (lstrcmpiW(ext, L".svg") == 0) {
         if (PeekLoadSvg(path)) {
-            swprintf(I.subtitle, 320, S(Str::PeekFmtImage), I.docW, I.docH, I.size);
+            if (g_peekSvgNote != Str::Empty)
+                swprintf(I.subtitle, 320, S(Str::PeekFmtImageNote), I.docW, I.docH, I.size, S(g_peekSvgNote));
+            else
+                swprintf(I.subtitle, 320, S(Str::PeekFmtImage), I.docW, I.docH, I.size);
             g_peekKind = PeekKind::Image;
             return;
         }
@@ -4992,6 +5122,21 @@ RECT PeekCloseRect(const RECT& rc)
 {
     const int s = PeekPx(kPeekHead);
     return { rc.right - s, rc.top, rc.right, rc.top + s };
+}
+
+// Стрілки гортання сторінок — ліворуч від хрестика й лише коли сторінок більше однієї.
+bool PeekHasPager() { return g_peekPdfPages > 1; }
+
+RECT PeekPrevRect(const RECT& rc)
+{
+    const int s = PeekPx(kPeekHead);
+    return { rc.right - s * 3, rc.top, rc.right - s * 2, rc.top + s };
+}
+
+RECT PeekNextRect(const RECT& rc)
+{
+    const int s = PeekPx(kPeekHead);
+    return { rc.right - s * 2, rc.top, rc.right - s, rc.top + s };
 }
 
 RECT PeekContentRect(HWND hwnd)
@@ -5143,6 +5288,29 @@ void PeekOnForeground()
     if (g_peekShown && GetForegroundWindow() != g_peekRoot) PeekClose();
 }
 
+void PeekPaintArrow(HDC dc, const RECT& r, COLORREF fg, COLORREF dim, bool left, bool hot, bool enabled)
+{
+    if (hot && enabled) {
+        HBRUSH b = CreateSolidBrush(g_peekDark ? RGB(64, 64, 64) : RGB(232, 232, 232));
+        FillRect(dc, &r, b);
+        DeleteObject(b);
+    }
+    Gdiplus::Graphics g(dc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    const COLORREF c = enabled ? fg : dim;
+    Gdiplus::Pen pen(Gdiplus::Color(enabled ? 255 : 110, GetRValue(c), GetGValue(c), GetBValue(c)),
+                     (Gdiplus::REAL)PeekPx(1) * 1.4f);
+    const float cx = (r.left + r.right) / 2.0f, cy = (r.top + r.bottom) / 2.0f;
+    const float dx = PeekPx(4) * 1.0f, dy = PeekPx(6) * 1.0f;
+    if (left) {
+        g.DrawLine(&pen, cx + dx / 2, cy - dy, cx - dx / 2, cy);
+        g.DrawLine(&pen, cx - dx / 2, cy, cx + dx / 2, cy + dy);
+    } else {
+        g.DrawLine(&pen, cx - dx / 2, cy - dy, cx + dx / 2, cy);
+        g.DrawLine(&pen, cx + dx / 2, cy, cx - dx / 2, cy + dy);
+    }
+}
+
 void PeekPaintClose(HDC dc, const RECT& r, COLORREF fg)
 {
     if (g_peekCloseHot) {
@@ -5179,14 +5347,20 @@ void PeekPaint(HDC dc, const RECT& rc)
         DrawIconEx(dc, x, rc.top + (head - s) / 2, g_peekIconSmall, s, s, 0, nullptr, DI_NORMAL);
         x += s + PeekPx(10);
     }
-    RECT nameR = { x, rc.top + PeekPx(7), closeR.left - PeekPx(8), rc.top + PeekPx(7) + PeekPx(20) };
+    const int textRight = (PeekHasPager() ? PeekPrevRect(rc).left : closeR.left) - PeekPx(8);
+    RECT nameR = { x, rc.top + PeekPx(7), textRight, rc.top + PeekPx(7) + PeekPx(20) };
     HGDIOBJ old = SelectObject(dc, g_peekFontBold);
     SetTextColor(dc, text);
     DrawTextW(dc, g_peekInfo.name, -1, &nameR, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-    RECT subR = { x, nameR.bottom, closeR.left - PeekPx(8), rc.top + head - PeekPx(4) };
+    RECT subR = { x, nameR.bottom, textRight, rc.top + head - PeekPx(4) };
     SelectObject(dc, g_peekFont);
     SetTextColor(dc, gray);
     DrawTextW(dc, g_peekInfo.subtitle, -1, &subR, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (PeekHasPager()) {
+        const RECT pr = PeekPrevRect(rc), nr = PeekNextRect(rc);
+        PeekPaintArrow(dc, pr, text, gray, true,  g_peekPagerHot == 1, g_peekPdfPage > 0);
+        PeekPaintArrow(dc, nr, text, gray, false, g_peekPagerHot == 2, g_peekPdfPage + 1 < g_peekPdfPages);
+    }
     PeekPaintClose(dc, closeR, text);
     {
         RECT sep = { rc.left, rc.top + head - 1, rc.right, rc.top + head };
@@ -5307,6 +5481,10 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (bt) return HTBOTTOM;
         const RECT closeR = PeekCloseRect(rc);
         if (PtInRect(&closeR, pt)) return HTCLIENT;
+        if (PeekHasPager()) {
+            const RECT pr = PeekPrevRect(rc), nr = PeekNextRect(rc);
+            if (PtInRect(&pr, pt) || PtInRect(&nr, pt)) return HTCLIENT;
+        }
         if (pt.y < PeekPx(kPeekHead)) return HTCAPTION;   // тягнути за смугу з назвою
         return HTCLIENT;
     }
@@ -5352,6 +5530,18 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         const bool hot = PtInRect(&closeR, pt) != FALSE;
         if (hot != g_peekCloseHot) { g_peekCloseHot = hot; InvalidateRect(hwnd, &closeR, FALSE); }
+        int pager = 0;
+        if (PeekHasPager()) {
+            const RECT pr = PeekPrevRect(rc), nr = PeekNextRect(rc);
+            if (PtInRect(&pr, pt)) pager = 1;
+            else if (PtInRect(&nr, pt)) pager = 2;
+        }
+        if (pager != g_peekPagerHot) {
+            g_peekPagerHot = pager;
+            RECT head = rc;
+            head.bottom = rc.top + PeekPx(kPeekHead);
+            InvalidateRect(hwnd, &head, FALSE);
+        }
         if (!g_peekTracking) {
             TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
             TrackMouseEvent(&tme);
@@ -5362,7 +5552,21 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_MOUSELEAVE:
         g_peekTracking = false;
-        if (g_peekCloseHot) { g_peekCloseHot = false; InvalidateRect(hwnd, nullptr, FALSE); }
+        if (g_peekCloseHot || g_peekPagerHot) {
+            g_peekCloseHot = false;
+            g_peekPagerHot = 0;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+
+    // Гортання коліщатком. Вікно не має фокуса, але Windows шле коліщатко вікну
+    // під курсором — саме тому це працює, а клавіші лишаються Провіднику.
+    case WM_MOUSEWHEEL:
+        if (PeekHasPager()) {
+            const int delta = GET_WHEEL_DELTA_WPARAM(wp);
+            const int to = (int)g_peekPdfPage + (delta < 0 ? 1 : -1);
+            if (PeekPdfGoto(to)) InvalidateRect(hwnd, nullptr, FALSE);
+        }
         return 0;
 
     case WM_LBUTTONUP: {
@@ -5370,7 +5574,14 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         GetClientRect(hwnd, &rc);
         const RECT closeR = PeekCloseRect(rc);
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-        if (PtInRect(&closeR, pt)) PeekClose();
+        if (PtInRect(&closeR, pt)) { PeekClose(); return 0; }
+        if (PeekHasPager()) {
+            const RECT pr = PeekPrevRect(rc), nr = PeekNextRect(rc);
+            int to = -1;
+            if (PtInRect(&pr, pt)) to = (int)g_peekPdfPage - 1;
+            else if (PtInRect(&nr, pt)) to = (int)g_peekPdfPage + 1;
+            if (to >= 0 && PeekPdfGoto(to)) InvalidateRect(hwnd, nullptr, FALSE);
+        }
         return 0;
     }
 
