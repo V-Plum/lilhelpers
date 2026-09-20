@@ -9878,6 +9878,13 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_edDpi = (int)GetDpiForWindow(hwnd);
         EdMakeFonts();
         EdApplyTheme(hwnd);
+        // ⚠ Без цього рядка власний заголовок НЕ з'являється, і вікно отримує
+        // два підписи — системний і наш. При створенні WM_NCCALCSIZE приходить
+        // рівно один раз і з wParam = FALSE, тобто повз нашу гілку; рамку
+        // рахують за звичайними правилами. SWP_FRAMECHANGED змушує систему
+        // перепитати з wParam = TRUE — і аж тоді підпис переходить клієнту.
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         return 0;
 
     // ---- власний заголовок: підпис віддаємо клієнту ----------------------
