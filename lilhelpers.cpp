@@ -590,6 +590,7 @@ X(EdHelpBody,         L"Інструменти: V вибір, R прямокут
                       L"Shift під час малювання — квадрат, коло, кут через 45°\n"                       \
                       L"Текст: Enter — готово, Shift+Enter — новий рядок,\n"                            \
                       L"подвійний клік по напису — відкрити на правку\n"                                \
+                      L"Стрілки — посунути вибране, з Shift — на 10 точок\n"                                  \
                       L"Delete — видалити вибране\nCtrl+Z, Ctrl+Y — скасувати й повторити\n"           \
                       L"Ctrl+O — відкрити, Ctrl+C — копіювати, Ctrl+S — зберегти\n"                                        \
                       L"Коліщатко — прокрутка, Ctrl — убік, Alt — масштаб\n"                                 \
@@ -600,6 +601,7 @@ X(EdHelpBody,         L"Інструменти: V вибір, R прямокут
                       L"Shift while drawing — square, circle, 45° steps\n"                              \
                       L"Text: Enter finishes, Shift+Enter adds a line,\n"                               \
                       L"double click a caption to edit it again\n"                                      \
+                      L"Arrows nudge the selection, with Shift by 10 points\n"                                \
                       L"Delete — remove the selection\nCtrl+Z, Ctrl+Y — undo and redo\n"               \
                       L"Ctrl+C — copy, Ctrl+S — save\n"                                                 \
                       L"Wheel scrolls, Ctrl sideways, Alt zooms\n"                                           \
@@ -7685,6 +7687,9 @@ bool     g_edTonePushed = false;      // чи вже поклали знімок
 // CAPS-40: поки ввімкнено, колір, розмір і прозорість ідуть усій групі
 // лічильника, а не одному кружечку. Подвійний клік робить те саме разово.
 bool     g_edGroupEdit  = false;
+// CAPS-47: серія натискань стрілки — ОДИН крок скасування. Прапорець тримає
+// серію відкритою, доки клавішу не відпустили.
+bool     g_edNudging    = false;
 
 void EdRebuildImage();                // тіло далеко нижче: йому потрібні плитки
 void EdFitView();                     // поворот міняє сторони — вид доводиться вписувати
@@ -10824,6 +10829,19 @@ void EdSetColor(COLORREF c)
     InvalidateRect(g_edWnd, nullptr, FALSE);
 }
 
+// Зсув вибраної позначки на крок у пікселях ЗНІМКА, а не екрана: інакше та
+// сама клавіша рухала б по-різному на різних масштабах.
+void EdNudgeSel(int dx, int dy)
+{
+    if (g_edSel < 0 || g_edSel >= (int)g_edObjs.size()) return;
+    if (!g_edNudging) { EdPushUndo(); g_edNudging = true; }
+    EdObj& o = g_edObjs[g_edSel];
+    o.x += dx;
+    o.y += dy;
+    for (size_t i = 0; i < o.pts.size(); ++i) { o.pts[i].x += dx; o.pts[i].y += dy; }
+    if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
+}
+
 void EdDeleteSel()
 {
     if (g_edSel < 0 || g_edSel >= (int)g_edObjs.size()) return;
@@ -11145,14 +11163,24 @@ Gdiplus::Bitmap* EdBitmapFromFile(const wchar_t* path)
 
     IStream* st = SHCreateMemStream(data.data(), (UINT)data.size());
     if (!st) return nullptr;
-    Gdiplus::Bitmap* src = Gdiplus::Bitmap::FromStream(st);
-    Gdiplus::Bitmap* out = nullptr;
-    if (src && src->GetLastStatus() == Gdiplus::Ok && src->GetWidth() && src->GetHeight()) {
-        // Копія у власну пам'ять: далі потік можна відпустити.
-        out = src->Clone(0, 0, (INT)src->GetWidth(), (INT)src->GetHeight(), PixelFormat32bppPARGB);
-        if (out && out->GetLastStatus() != Gdiplus::Ok) { delete out; out = nullptr; }
+
+    // ⚠ Спершу WIC, і лише потім GDI+. Фільтр діалогу обіцяє WebP, а GDI+ його
+    // не вміє — користувач вибирав зі СВОГО ж списку й отримував «не вдалося
+    // відкрити». WIC той самий, що в перегляді (CAPS-16), і віддає рівно той
+    // 32bppPARGB, який нам потрібен; заразом підхоплює HEIC і AVIF, якщо в
+    // системі стоять кодеки. GDI+ лишається запасним шляхом.
+    Gdiplus::Bitmap* out = ImageDecodeWic(st);
+    if (!out) {
+        LARGE_INTEGER zero = {};
+        st->Seek(zero, STREAM_SEEK_SET, nullptr);
+        Gdiplus::Bitmap* src = Gdiplus::Bitmap::FromStream(st);
+        if (src && src->GetLastStatus() == Gdiplus::Ok && src->GetWidth() && src->GetHeight()) {
+            // Копія у власну пам'ять: далі потік можна відпустити.
+            out = src->Clone(0, 0, (INT)src->GetWidth(), (INT)src->GetHeight(), PixelFormat32bppPARGB);
+            if (out && out->GetLastStatus() != Gdiplus::Ok) { delete out; out = nullptr; }
+        }
+        delete src;
     }
-    delete src;
     st->Release();
     return out;
 }
@@ -12256,6 +12284,13 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
 
+    case WM_KEYUP:
+        // Клавішу відпустили — серія скінчилась, наступна почне новий крок
+        // скасування. Без цього двадцять натискань дали б двадцять кроків.
+        if (wp == VK_LEFT || wp == VK_RIGHT || wp == VK_UP || wp == VK_DOWN)
+            g_edNudging = false;
+        return 0;
+
     case WM_MOUSELEAVE:
         g_edTracking = false;
         EdTipHide();
@@ -12800,6 +12835,18 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_KEYDOWN: {
         const bool ctrl = GetKeyState(VK_CONTROL) < 0;
         switch (wp) {
+        case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN: {
+            // Стрілки належать ПОЗНАЧЦІ, а не полотну: полотно рухають
+            // коліщатко й середня кнопка (CAPS-46), і ділити з ними клавіші
+            // означало б два різні рухи на тих самих кнопках.
+            if (g_edCropping || g_edEdit) return 0;
+            if (g_edSel < 0 || g_edSel >= (int)g_edObjs.size()) return 0;
+            const int step = (GetKeyState(VK_SHIFT) < 0) ? 10 : 1;
+            const int dx = (wp == VK_LEFT) ? -step : (wp == VK_RIGHT) ? step : 0;
+            const int dy = (wp == VK_UP)   ? -step : (wp == VK_DOWN)  ? step : 0;
+            EdNudgeSel(dx, dy);
+            return 0;
+        }
         case 'Z': if (ctrl) EdUndoAction(); return 0;
         case 'Y': if (ctrl) EdRedoAction(); return 0;
         case 'D': if (ctrl) EdDuplicateSel(); return 0;
