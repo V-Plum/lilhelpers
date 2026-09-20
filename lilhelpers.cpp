@@ -484,6 +484,13 @@ X(EdToolHide,         L"Приховати",                     L"Hide")       
 X(EdToolMark,         L"Маркер",                        L"Marker")                                     \
 X(EdToolCounter,      L"Лічильник",                     L"Counter")                                    \
 X(EdToolStamp,        L"Штамп",                         L"Stamp")                                      \
+X(EdToolCrop,         L"Кадр",                          L"Crop")                                       \
+X(EdCropApply,        L"Застосувати",                   L"Apply")                                      \
+X(EdCropCancel,       L"Скасувати",                     L"Cancel")                                     \
+X(EdCropReset,        L"Скинути кадр",                  L"Reset the frame")                            \
+X(EdAspectFree,       L"Вільно",                        L"Free")                                       \
+X(EdFmtOutside,       L"Поза кадром: %d",               L"Outside the frame: %d")                      \
+X(EdTipAspect,        L"Пропорції кадру",               L"Frame proportions")                          \
 X(EdOutline,          L"Контур",                        L"Outline")                                    \
 X(EdFilled,           L"Заливка",                       L"Filled")                                     \
 X(CapKeepTool,        L"Лишати інструмент активним після малювання",                                   \
@@ -537,8 +544,8 @@ X(EdTipStrength,      L"Сила приховування",             L"Hiding
 X(EdTipMarkH,         L"Висота смуги",                  L"Band height")                                \
 X(EdTipSize,          L"Розмір",                        L"Size")                                       \
 X(EdFmtGroupOnly,     L"Група %d",                      L"Group %d")                                   \
-X(EdNumStartLabel,    L"Початковий номер",              L"Starting number")                            \
-X(EdFmtNext,          L"Наступний номер: %d",           L"Next number: %d")                            \
+X(EdNumStartLabel,    L"Початок",                       L"Start")                                      \
+X(EdFmtNext,          L"Наступний: %d",                 L"Next: %d")                                   \
 X(EdTipGroup,         L"Виберіть вже вставлений елемент для вибору іншої групи",                       \
                       L"Pick an already placed circle to switch to its group")                        \
 X(EdTipNumStart,      L"Початковий номер",              L"Starting number")                            \
@@ -553,7 +560,7 @@ X(EdOpenFilter,       L"Зображення",                    L"Images")    
 X(EdErrOpen,          L"Не вдалося відкрити зображення.", L"Could not open the image.")                \
 X(EdHelpTitle,        L"Редактор знімків",              L"Screenshot editor")                          \
 X(EdHelpBody,         L"Інструменти: V вибір, R прямокутник, O овал, A стрілка, L лінія,\n"            \
-                      L"P олівець, T текст, B приховати, H маркер,\nN лічильник, S штамп.\n\n"          \
+                      L"P олівець, T текст, B приховати, H маркер,\nN лічильник, S штамп, C кадр.\n\n"   \
                       L"Shift під час малювання — квадрат, коло, кут через 45°\n"                       \
                       L"Текст: Enter — готово, Shift+Enter — новий рядок,\n"                            \
                       L"подвійний клік по напису — відкрити на правку\n"                                \
@@ -562,7 +569,7 @@ X(EdHelpBody,         L"Інструменти: V вибір, R прямокут
                       L"Коліщатко — масштаб, подвійний клік — вписати\n"                                \
                       L"Пробіл або середня кнопка — рухати полотно",                                    \
                       L"Tools: V select, R rectangle, O oval, A arrow, L line,\n"                       \
-                      L"P pencil, T text, B hide, H marker,\nN counter, S stamp.\n\n"                   \
+                      L"P pencil, T text, B hide, H marker,\nN counter, S stamp, C crop.\n\n"            \
                       L"Shift while drawing — square, circle, 45° steps\n"                              \
                       L"Text: Enter finishes, Shift+Enter adds a line,\n"                               \
                       L"double click a caption to edit it again\n"                                      \
@@ -7335,10 +7342,11 @@ constexpr int kEdRail    = 52;    // панель інструментів
 constexpr int kEdPanel   = 260;   // права панель
 constexpr int kEdPanelLo = 30;    // вона ж згорнута
 constexpr int kEdStatus  = 48;
-// Смуга лічильника — найдовша з усіх: чіп, група, початковий номер зі
-// степером, наступний номер, кольори, розміри, прозорість і кнопка нової
-// групи. Разом із діями над вибраним це 1270 точок, звідси й мінімум.
-constexpr int kEdMinW    = 1280;
+// Смуга лічильника — найдовша з усіх: чіп, група, початок зі степером,
+// наступний номер, кольори, розміри, прозорість і кнопка нової групи. Разом із
+// діями над вибраним це близько 1170 точок — короткі підписи «Початок» і
+// «Наступний» (зауваження власника) звільнили тут майже сотню.
+constexpr int kEdMinW    = 1200;
 // 11 інструментів займають 8 + 7 + 11*(40+4) = 499 точок. Плюс заголовок,
 // смуга властивостей і рядок стану — ось звідки цей мінімум: у нижчому вікні
 // останній інструмент просто не вміщався б у панель.
@@ -7381,7 +7389,7 @@ const COLORREF kEdPalette[8] = {
     RGB(0, 120, 212), RGB(123, 63, 228), RGB(27, 27, 31), RGB(255, 255, 255)
 };
 
-enum class EdTool { Select, Rect, Ellipse, Arrow, Line, Pen, Text, Hide, Mark, Counter, Stamp };
+enum class EdTool { Select, Rect, Ellipse, Arrow, Line, Pen, Text, Hide, Mark, Counter, Stamp, Crop };
 enum class EdKind { Rect, Ellipse, Arrow, Line, Pen, Text, Hide, Mark, Counter, Stamp };
 
 struct EdObj {
@@ -7453,6 +7461,7 @@ Str EdToolName(EdTool t)
     case EdTool::Mark:    return Str::EdToolMark;
     case EdTool::Counter: return Str::EdToolCounter;
     case EdTool::Stamp:   return Str::EdToolStamp;
+    case EdTool::Crop:    return Str::EdToolCrop;
     case EdTool::Rect:    return Str::EdToolRect;
     default:              return Str::Empty;
     }
@@ -7567,6 +7576,7 @@ double EdDistToSeg(double px, double py, double ax, double ay, double bx, double
 struct EdSnap {
     std::vector<EdObj> objs;
     int sel;
+    RECT crop;        // кадр — теж частина стану, інакше Ctrl+Z повертав би не все
 };
 
 struct EdTile {
@@ -7583,7 +7593,8 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Front, Back, Del, ZoomOut, ZoomIn, Fit, Panel, Copy, Save,
                    Thick, Fill, Size, Bold, Italic, Align, Stroke, Dup, Open,
                    OpenMenu, Min, Max, Close, HideMode, Strength,
-                   NumStart, NumReset, StampPick, StampMore, NumGroup, NumNext };
+                   NumStart, NumReset, StampPick, StampMore, NumGroup, NumNext,
+                   Aspect, CropReset, CropOk, CropNo };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7594,10 +7605,10 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoDup, IcoOpen, IcoChevD, IcoSave, IcoCopy,
              IcoWinMin, IcoWinMax, IcoWinRestore, IcoWinClose,
              IcoHide, IcoMark, IcoBlur, IcoPixels, IcoPlate, IcoStrength,
-             IcoCounter, IcoStamp, IcoNewGroup, IcoMore,
+             IcoCounter, IcoStamp, IcoNewGroup, IcoMore, IcoCrop,
              IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn };
 
-enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength };
+enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength, Crop, CropMove };
 
 HWND  g_edWnd = nullptr;
 HFONT g_edFont = nullptr, g_edFontBold = nullptr, g_edFontSmall = nullptr;
@@ -7626,6 +7637,26 @@ void EdDuplicateSel();
 
 std::vector<EdObj> g_edObjs;
 int      g_edSel = -1;
+
+// ---- CAPS-27: кадр ------------------------------------------------------
+// Кроп — ВЛАСТИВІСТЬ кадру, а не дія над пікселями. Знімок лишається цілим,
+// позначки за межами кадру нікуди не діваються, і «Скинути кадр» повертає все
+// на місце навіть через десяток інших дій. Ціна — всі координати екрана тепер
+// рахуються від видимої ділянки, а не від нуля зображення.
+RECT     g_edCrop = {};           // у координатах ЗОБРАЖЕННЯ; порожній = без кадру
+bool     g_edCropping = false;    // режим редагування кадру
+RECT     g_edCropEdit = {};       // кадр, який зараз тягнуть
+int      g_edCropAspect = 0;      // 0 вільно, 1 — 16:9, 2 — 4:3, 3 — 1:1
+// Геометрія кадру визначена нижче, а розкладка потребує її вже тут.
+bool EdHasCrop();
+RECT EdCropScreen(const RECT& c);
+int  EdCropHandles(RECT out[8]);
+void EdCropClamp(RECT& r);
+void EdCropAspect(RECT& r, int anchorRight, int anchorBottom);
+int  EdOutsideCount();
+void EdCropBegin();
+void EdCropFinish(bool apply);
+void EdCropReset();
 std::vector<EdSnap> g_edUndo, g_edRedo;
 
 EdTool   g_edTool  = EdTool::Select;
@@ -7686,6 +7717,7 @@ int    g_edHandle = -1;
 POINT  g_edDragFrom = {};
 EdObj  g_edDragOrig = {};
 EdObj  g_edNew = {};
+RECT   g_edCropOrig = {};    // кадр на початку тягнення
 POINT  g_edNewOrigin = {};   // точка натиску в координатах знімка: маркер тягнеться від неї
 
 int EdPx(int v) { return MulDiv(v, g_edDpi, 96); }
@@ -7834,6 +7866,13 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
     // Приховати — око з рискою: те саме, чим позначають «не показувати».
     // Лічильник — кружечок із одиницею всередині; малюємо саму цифру шляхами,
     // бо тексту в піктограмах у нас немає.
+    // Кадр — дві кутові дужки, як позначають обрізання у фоторедакторах.
+    case IcoCrop:
+        g.DrawLine(&pen, 5.6f, 1.8f, 5.6f, 14.4f);
+        g.DrawLine(&pen, 5.6f, 14.4f, 18.2f, 14.4f);
+        g.DrawLine(&pen, 1.8f, 5.6f, 14.4f, 5.6f);
+        g.DrawLine(&pen, 14.4f, 5.6f, 14.4f, 18.2f);
+        break;
     case IcoCounter:
         g.DrawEllipse(&pen, 2.6f, 2.6f, 14.8f, 14.8f);
         g.DrawLine(&pen, 8.4f, 7.6f, 10.2f, 6.0f);
@@ -8094,6 +8133,7 @@ void EdPushUndo()
     EdSnap s;
     s.objs = g_edObjs;
     s.sel  = g_edSel;
+    s.crop = g_edCrop;
     g_edUndo.push_back(s);
     if ((int)g_edUndo.size() > kEdUndoMax) g_edUndo.erase(g_edUndo.begin());
     g_edRedo.clear();
@@ -8103,6 +8143,7 @@ void EdApply(const EdSnap& s)
 {
     g_edObjs = s.objs;
     g_edSel  = s.sel;
+    g_edCrop = s.crop;
     if (g_edSel >= (int)g_edObjs.size()) g_edSel = -1;
 }
 
@@ -8112,6 +8153,7 @@ void EdUndoAction()
     EdSnap cur;
     cur.objs = g_edObjs;
     cur.sel  = g_edSel;
+    cur.crop = g_edCrop;
     g_edRedo.push_back(cur);
     EdApply(g_edUndo.back());
     g_edUndo.pop_back();
@@ -8124,6 +8166,7 @@ void EdRedoAction()
     EdSnap cur;
     cur.objs = g_edObjs;
     cur.sel  = g_edSel;
+    cur.crop = g_edCrop;
     g_edUndo.push_back(cur);
     EdApply(g_edRedo.back());
     g_edRedo.pop_back();
@@ -8132,14 +8175,28 @@ void EdRedoAction()
 
 // ---- геометрія полотна --------------------------------------------------
 
+bool EdHasCrop()
+{
+    return g_edCrop.right > g_edCrop.left && g_edCrop.bottom > g_edCrop.top;
+}
+
+// Видима ділянка: кадр, якщо він є, інакше весь знімок. Через ці чотири
+// функції проходить уся геометрія полотна — тому кадр і не довелося
+// розмазувати по всьому редактору.
+int EdViewX() { return EdHasCrop() ? g_edCrop.left : 0; }
+int EdViewY() { return EdHasCrop() ? g_edCrop.top  : 0; }
+int EdViewW() { return EdHasCrop() ? g_edCrop.right - g_edCrop.left : g_edImgW; }
+int EdViewH() { return EdHasCrop() ? g_edCrop.bottom - g_edCrop.top : g_edImgH; }
+
 double EdFitScale()
 {
     const int cw = g_edRcCanvas.right - g_edRcCanvas.left - EdPx(24);
     const int ch = g_edRcCanvas.bottom - g_edRcCanvas.top - EdPx(24);
-    if (!g_edImgW || !g_edImgH || cw <= 0 || ch <= 0) return 1.0;
+    const int vw = EdViewW(), vh = EdViewH();
+    if (!vw || !vh || cw <= 0 || ch <= 0) return 1.0;
     double fit = 1.0;
-    if (g_edImgW > cw) fit = (double)cw / g_edImgW;
-    if (g_edImgH * fit > ch) fit = (double)ch / g_edImgH;
+    if (vw > cw) fit = (double)cw / vw;
+    if (vh * fit > ch) fit = (double)ch / vh;
     return fit;
 }
 
@@ -8160,7 +8217,7 @@ double EdScale() { return EdFitScale() * g_edZoom; }
 RECT EdImageRect()
 {
     const double s = EdScale();
-    int dw = (int)(g_edImgW * s + 0.5), dh = (int)(g_edImgH * s + 0.5);
+    int dw = (int)(EdViewW() * s + 0.5), dh = (int)(EdViewH() * s + 0.5);
     if (dw < 1) dw = 1;
     if (dh < 1) dh = 1;
     EdClampPan(dw, dh);
@@ -8176,9 +8233,11 @@ POINT EdToImage(POINT scr)
 {
     const RECT ir = EdImageRect();
     const double s = EdScale();
+    // Повертаємо АБСОЛЮТНУ координату знімка: позначки живуть у ній, тож кадр
+    // їх не зачіпає — ні тих, що вже стоять, ні тих, які ставлять у кадрі.
     POINT p;
-    p.x = (s > 0) ? (int)((scr.x - ir.left) / s + 0.5) : 0;
-    p.y = (s > 0) ? (int)((scr.y - ir.top) / s + 0.5) : 0;
+    p.x = (s > 0) ? EdViewX() + (int)((scr.x - ir.left) / s + 0.5) : 0;
+    p.y = (s > 0) ? EdViewY() + (int)((scr.y - ir.top) / s + 0.5) : 0;
     return p;
 }
 
@@ -8187,10 +8246,10 @@ RECT EdObjScreen(const EdObj& o)
     const RECT ir = EdImageRect();
     const double s = EdScale();
     RECT r;
-    r.left   = ir.left + (int)(o.x * s + 0.5);
-    r.top    = ir.top + (int)(o.y * s + 0.5);
-    r.right  = ir.left + (int)((o.x + o.w) * s + 0.5);
-    r.bottom = ir.top + (int)((o.y + o.h) * s + 0.5);
+    r.left   = ir.left + (int)((o.x - EdViewX()) * s + 0.5);
+    r.top    = ir.top + (int)((o.y - EdViewY()) * s + 0.5);
+    r.right  = ir.left + (int)((o.x + o.w - EdViewX()) * s + 0.5);
+    r.bottom = ir.top + (int)((o.y + o.h - EdViewY()) * s + 0.5);
     return r;
 }
 
@@ -8259,7 +8318,7 @@ void EdZoomAt(POINT cur, bool in)
     const float oldZoom = g_edZoom;
     float z = in ? g_edZoom * 1.25f : g_edZoom / 1.25f;
     if (z < 1.0f) z = 1.0f;
-    const double longSide = (g_edImgW > g_edImgH ? g_edImgW : g_edImgH) * fit;
+    const double longSide = (EdViewW() > EdViewH() ? EdViewW() : EdViewH()) * fit;
     if (longSide > 0 && longSide * z > 20000.0) z = (float)(20000.0 / longSide);
     if (z == oldZoom) return;
 
@@ -8270,7 +8329,7 @@ void EdZoomAt(POINT cur, bool in)
 
     g_edZoom = z;
     const double sNew = fit * z;
-    const int dw = (int)(g_edImgW * sNew + 0.5), dh = (int)(g_edImgH * sNew + 0.5);
+    const int dw = (int)(EdViewW() * sNew + 0.5), dh = (int)(EdViewH() * sNew + 0.5);
     const int cw = g_edRcCanvas.right - g_edRcCanvas.left;
     const int ch = g_edRcCanvas.bottom - g_edRcCanvas.top;
     g_edPanX = (int)(cur.x - ix * sNew - g_edRcCanvas.left - (cw - dw) / 2.0 + 0.5);
@@ -8337,12 +8396,32 @@ void EdLayout(HWND hwnd)
 
     EdAdd(g_edRcCanvas, EdHit::Canvas, 0);   // найнижчий пріоритет: перевіряємо останнім
 
+    // Підтвердження кадру живе на самому кадрі. Якщо під ним немає місця —
+    // піднімаємо всередину: кнопки, що вилізли за полотно, не натиснути.
+    if (g_edCropping) {
+        HDC dc0 = GetDC(hwnd);
+        const RECT cr0 = EdCropScreen(g_edCropEdit);
+        const int bh = EdPx(30);
+        const int wOk = EdTextWidth(dc0, S(Str::EdCropApply), g_edFont) + EdPx(28);
+        const int wNo = EdTextWidth(dc0, S(Str::EdCropCancel), g_edFont) + EdPx(24);
+        int by = cr0.bottom + EdPx(12);
+        if (by + bh > g_edRcCanvas.bottom - EdPx(6)) by = cr0.bottom - bh - EdPx(12);
+        if (by < g_edRcCanvas.top + EdPx(6)) by = g_edRcCanvas.top + EdPx(6);
+        int bx = cr0.right - wOk;
+        if (bx < g_edRcCanvas.left + EdPx(6)) bx = g_edRcCanvas.left + EdPx(6);
+        RECT rOk = { bx, by, bx + wOk, by + bh };
+        EdAdd(rOk, EdHit::CropOk, 0);
+        RECT rNo = { bx - EdPx(6) - wNo, by, bx - EdPx(6), by + bh };
+        EdAdd(rNo, EdHit::CropNo, 0);
+        ReleaseDC(hwnd, dc0);
+    }
+
     // панель інструментів
     {
         const int b = EdPx(40), gap = EdPx(4);
         int y = g_edRcRail.top + EdPx(8);
         const int x = g_edRcRail.left + (rail - b) / 2;
-        for (int i = 0; i < 11; ++i) {
+        for (int i = 0; i < 12; ++i) {
             if (i == 1) y += EdPx(7);      // вказівник відділено від фігур
             RECT r = { x, y, x + b, y + b };
             EdAdd(r, EdHit::Tool, i);
@@ -8394,6 +8473,22 @@ void EdLayout(HWND hwnd)
                 }
             }
 
+            // Кадр: пропорції й скидання. Підтвердження — на самому кадрі.
+            if (kk == EdKind::Rect && g_edTool == EdTool::Crop) {
+                for (int i = 0; i < 4; ++i) {
+                    const wchar_t* lab = i == 0 ? S(Str::EdAspectFree)
+                                       : i == 1 ? L"16:9" : i == 2 ? L"4:3" : L"1:1";
+                    RECT r = EdPill(x, cy, EdTextWidth(dc, lab, g_edFont) + EdPx(18), EdPx(28));
+                    EdAdd(r, EdHit::Aspect, i);
+                    x = r.right + EdPx(4);
+                }
+                x += gap - EdPx(4);
+                RECT rr = EdPill(x, cy, EdTextWidth(dc, S(Str::EdCropReset), g_edFont) + EdPx(20),
+                                 EdPx(28));
+                EdAdd(rr, EdHit::CropReset, 0);
+                x = rr.right + gap;
+            }
+
             // Штампи: шість контурів, чотири швидкі емодзі й «…» на решту.
             if (kk == EdKind::Stamp) {
                 for (int i = 0; i < kEdVectorStamps + kEdEmojiQuick; ++i) {
@@ -8434,12 +8529,13 @@ void EdLayout(HWND hwnd)
                 x = nt.right + gap;
             }
 
+            const bool cropMode = (g_edTool == EdTool::Crop);
             int npal = 8;
             const COLORREF* pal = EdPaletteFor(kk, npal);
             // Емодзі мають власний колір, палітра на них не діє.
             const bool emojiStamp = (kk == EdKind::Stamp) &&
                 ((hasSel ? g_edObjs[g_edSel].stamp : g_edStamp) >= kEdEmojiBase);
-            const bool showPal = ((kk != EdKind::Hide) || (curMode == 2)) && !emojiStamp;
+            const bool showPal = ((kk != EdKind::Hide) || (curMode == 2)) && !emojiStamp && !cropMode;
             if (showPal) {
                 const int sw = EdPx(22), sg = EdPx(5);
                 for (int i = 0; i < npal; ++i) {
@@ -8451,7 +8547,7 @@ void EdLayout(HWND hwnd)
             }
             (void)pal;
 
-            if (EdHasThick(kk)) {
+            if (EdHasThick(kk) && !cropMode) {
                 for (int i = 0; i < 3; ++i) {
                     RECT r = EdPill(x, cy, EdPx(34), EdPx(26));
                     EdAdd(r, EdHit::Thick, i);
@@ -8491,7 +8587,8 @@ void EdLayout(HWND hwnd)
             }
 
             // Заливка має сенс лише для замкнених фігур: у лінії заливати нічого.
-            if (EdCanFill(kk)) {
+            // Кадр — узагалі не фігура, хоч його вид і рахується прямокутником.
+            if (EdCanFill(kk) && !cropMode) {
                 const int w1 = EdTextWidth(dc, S(Str::EdOutline), g_edFont) + EdPx(24);
                 const int w2 = EdTextWidth(dc, S(Str::EdFilled), g_edFont) + EdPx(24);
                 RECT a = EdPill(x, cy, w1, EdPx(28)); EdAdd(a, EdHit::Fill, 0);
@@ -8501,11 +8598,11 @@ void EdLayout(HWND hwnd)
                 x = b2.right + gap;
             }
 
-            RECT ic = EdPill(x, cy, EdPx(18), EdPx(18));
-            EdAdd(ic, EdHit::None, 0);
-            x = ic.right + EdPx(8);
-            RECT sl = EdPill(x, cy, EdPx(76), EdPx(20));
-            EdAdd(sl, EdHit::Opacity, 0);
+            RECT ic = EdPill(x, cy, cropMode ? 0 : EdPx(18), EdPx(18));
+            if (!cropMode) EdAdd(ic, EdHit::None, 0);
+            x = ic.right + (cropMode ? 0 : EdPx(8));
+            RECT sl = EdPill(x, cy, cropMode ? 0 : EdPx(76), EdPx(20));
+            if (!cropMode) EdAdd(sl, EdHit::Opacity, 0);
             x = sl.right + EdPx(8) + EdPx(44) + gap;
 
             if (kk == EdKind::Counter) {
@@ -8710,6 +8807,84 @@ void EdPaintCaption(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 }
 
+// Кадр малюється ПОВЕРХ полотна: затемнення поза ним, лінії третин усередині,
+// вісім ручок і підтвердження просто на кадрі — щоб не шукати його в смузі.
+void EdPaintCrop(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
+{
+    if (!g_edCropping) return;
+    RECT r = EdCropScreen(g_edCropEdit);
+    const RECT& cv = g_edRcCanvas;
+
+    // Затемнення чотирма смугами, а не одним шляхом із діркою: так само чесно,
+    // але без GraphicsPath і його режимів заповнення.
+    Gdiplus::SolidBrush dim(Gdiplus::Color(140, 0, 0, 0));
+    const RECT parts[4] = {
+        { cv.left, cv.top, cv.right, r.top },
+        { cv.left, r.bottom, cv.right, cv.bottom },
+        { cv.left, r.top, r.left, r.bottom },
+        { r.right, r.top, cv.right, r.bottom }
+    };
+    for (int i = 0; i < 4; ++i) {
+        const RECT& p = parts[i];
+        if (p.right > p.left && p.bottom > p.top)
+            // ⚠ Каст обов'язковий: у GDI+ FillRectangle є і в INT, і в REAL,
+            // а LONG однаково добре підходить обом.
+            g.FillRectangle(&dim, (INT)p.left, (INT)p.top,
+                            (INT)(p.right - p.left), (INT)(p.bottom - p.top));
+    }
+
+    Gdiplus::Pen thirds(Gdiplus::Color(120, 255, 255, 255), 1.0f);
+    for (int i = 1; i <= 2; ++i) {
+        const int x = r.left + (r.right - r.left) * i / 3;
+        const int y = r.top + (r.bottom - r.top) * i / 3;
+        g.DrawLine(&thirds, (float)x, (float)r.top, (float)x, (float)r.bottom);
+        g.DrawLine(&thirds, (float)r.left, (float)y, (float)r.right, (float)y);
+    }
+
+    Gdiplus::Pen edge(Gdiplus::Color(230, 255, 255, 255), 1.0f);
+    g.DrawRectangle(&edge, (float)r.left, (float)r.top,
+                    (float)(r.right - r.left), (float)(r.bottom - r.top));
+
+    RECT hs[8];
+    const int hn = EdCropHandles(hs);
+    Gdiplus::SolidBrush wb(EdC(RGB(255, 255, 255)));
+    Gdiplus::Pen hp(EdC(t.accent), 2.0f);
+    for (int i = 0; i < hn; ++i) {
+        g.FillRectangle(&wb, (INT)hs[i].left, (INT)hs[i].top,
+                        (INT)(hs[i].right - hs[i].left), (INT)(hs[i].bottom - hs[i].top));
+        g.DrawRectangle(&hp, (float)hs[i].left, (float)hs[i].top,
+                        (float)(hs[i].right - hs[i].left), (float)(hs[i].bottom - hs[i].top));
+    }
+
+    // Розмір і дві кнопки — біля кадру, а не в смузі (вимога тікета).
+    wchar_t sz[64];
+    wsprintfW(sz, L"%d × %d", g_edCropEdit.right - g_edCropEdit.left,
+              g_edCropEdit.bottom - g_edCropEdit.top);
+    if (const RECT* ok = EdRegionRect(EdHit::CropOk, 0)) {
+        const RECT* no = EdRegionRect(EdHit::CropNo, 0);
+        RECT bar = *ok;
+        if (no) { bar.left = no->left; }
+        RECT plate = { bar.left - EdPx(10) - EdTextWidth(dc, sz, g_edFontBold) - EdPx(12),
+                       bar.top - EdPx(5), bar.right + EdPx(6), bar.bottom + EdPx(5) };
+        Gdiplus::Color pb(220, 24, 24, 28);
+        EdFillRound(g, plate, (float)EdPx(7), &pb, nullptr);
+        RECT tv = { plate.left + EdPx(10), plate.top, bar.left - EdPx(8), plate.bottom };
+        EdDrawText(dc, tv, sz, g_edFontBold, RGB(255, 255, 255),
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        if (no) {
+            EdPaintButton(g, *no, t, false, g_edHotWhat == EdHit::CropNo, false);
+            EdDrawText(dc, *no, S(Str::EdCropCancel), g_edFont, t.text,
+                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        Gdiplus::Color fill = EdC(t.accent, g_edHotWhat == EdHit::CropOk ? 225 : 255);
+        Gdiplus::Color bd = EdC(t.accent);
+        EdFillRound(g, *ok, (float)EdPx(6), &fill, &bd);
+        EdDrawText(dc, *ok, S(Str::EdCropApply), g_edFont,
+                   g_edDark ? RGB(0, 52, 79) : RGB(255, 255, 255),
+                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
 void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     HBRUSH b = CreateSolidBrush(t.surface);
@@ -8869,6 +9044,23 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         }
     }
 
+    // Кадр: пропорції й скидання.
+    for (int i = 0; i < 4; ++i) {
+        const RECT* r = EdRegionRect(EdHit::Aspect, i);
+        if (!r) break;
+        const bool on = (i == g_edCropAspect);
+        const wchar_t* lab = i == 0 ? S(Str::EdAspectFree)
+                           : i == 1 ? L"16:9" : i == 2 ? L"4:3" : L"1:1";
+        EdPaintButton(g, *r, t, on, g_edHotWhat == EdHit::Aspect && g_edHotIdx == i, false);
+        EdDrawText(dc, *r, lab, on ? g_edFontBold : g_edFont, on ? t.accent : t.text,
+                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    if (const RECT* rr = EdRegionRect(EdHit::CropReset, 0)) {
+        EdPaintButton(g, *rr, t, false, g_edHotWhat == EdHit::CropReset, false);
+        EdDrawText(dc, *rr, S(Str::EdCropReset), g_edFont,
+                   EdHasCrop() ? t.text : t.text2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
     // Штампи: кнопка показує сам штамп. Емодзі малюємо тією самою плиткою, що й
     // на полотні, — інакше в смузі вони були б чорно-білими.
     {
@@ -9007,9 +9199,9 @@ void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     FillRect(dc, &line, b);
     DeleteObject(b);
 
-    const int icos[11] = { IcoSelect, IcoRect, IcoEllipse, IcoArrow, IcoLine, IcoPen, IcoText,
-                           IcoHide, IcoMark, IcoCounter, IcoStamp };
-    for (int i = 0; i < 11; ++i) {
+    const int icos[12] = { IcoSelect, IcoRect, IcoEllipse, IcoArrow, IcoLine, IcoPen, IcoText,
+                           IcoHide, IcoMark, IcoCounter, IcoStamp, IcoCrop };
+    for (int i = 0; i < 12; ++i) {
         const RECT* r = EdRegionRect(EdHit::Tool, i);
         if (!r) break;
         if (i == 1) {                       // лінія-розділювач над фігурами
@@ -9732,20 +9924,22 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
                                            : Gdiplus::InterpolationModeNearestNeighbor);
     g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
     g.DrawImage(g_edImg, Gdiplus::Rect(ir.left, ir.top, ir.right - ir.left, ir.bottom - ir.top),
-                0, 0, g_edImgW, g_edImgH, Gdiplus::UnitPixel);
+                EdViewX(), EdViewY(), EdViewW(), EdViewH(), Gdiplus::UnitPixel);
 
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     const double s = EdScale();
+    // Зсув на початок кадру: позначки носять абсолютні координати знімка.
+    const double ox = ir.left - EdViewX() * s, oy = ir.top - EdViewY() * s;
     for (size_t i = 0; i < g_edObjs.size(); ++i) {
         // Напис, який саме зараз правлять, показує поле введення — інакше під
         // ним просвічував би його ж старий текст.
         if (g_edEdit && (int)i == g_edEditIdx) continue;
-        EdDrawObject(g, g_edObjs[i], s, ir.left, ir.top);
+        EdDrawObject(g, g_edObjs[i], s, ox, oy);
     }
 
     // Те, що зараз тягнуть мишею, ще не в списку — малюємо окремо.
     if (g_edDrag == EdDrag::New)
-        EdDrawObject(g, g_edNew, s, ir.left, ir.top);
+        EdDrawObject(g, g_edNew, s, ox, oy);
 
     if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() && !(g_edEdit && g_edSel == g_edEditIdx)) {
         const RECT r = EdObjScreen(g_edObjs[g_edSel]);
@@ -9850,7 +10044,7 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     wchar_t buf[128];
     int x = EdPx(14);
     if (const RECT* om = EdRegionRect(EdHit::OpenMenu, 0)) x = om->right + EdPx(12) + 1 + EdPx(12);
-    wsprintfW(buf, L"%d × %d", g_edImgW, g_edImgH);
+    wsprintfW(buf, L"%d × %d", EdViewW(), EdViewH());
     RECT r1 = { x, g_edRcStatus.top, x + EdTextWidth(dc, L"8888 × 8888", g_edFont), g_edRcStatus.bottom };
     EdDrawText(dc, r1, buf, g_edFont, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     x = r1.right + EdPx(12);
@@ -9866,6 +10060,8 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         lstrcpynW(buf, S(g_edToast), 128);
     else if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())
         wsprintfW(buf, S(Str::EdFmtSel), g_edObjs[g_edSel].w, g_edObjs[g_edSel].h);
+    else if (EdOutsideCount() > 0)
+        wsprintfW(buf, S(Str::EdFmtOutside), EdOutsideCount());
     else
         lstrcpynW(buf, S(Str::EdNoSel), 128);
     RECT r2 = { x, g_edRcStatus.top, x + EdPx(190), g_edRcStatus.bottom };
@@ -9926,6 +10122,7 @@ void EdPaint(HWND hwnd, HDC dc)
     Gdiplus::Graphics g(dc);
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     EdPaintCanvas(dc, g, t);
+    EdPaintCrop(dc, g, t);
     EdPaintCaption(dc, g, t);
     EdPaintRail(dc, g, t);
     EdPaintPanel(dc, g, t);
@@ -10341,7 +10538,8 @@ Str EdTipFor(EdHit what, int idx)
         case 7: return Str::EdToolHide;
         case 8: return Str::EdToolMark;
         case 9: return Str::EdToolCounter;
-        default: return Str::EdToolStamp;
+        case 10: return Str::EdToolStamp;
+        default: return Str::EdToolCrop;
         }
     case EdHit::Swatch:  return Str::EdTipColor;
     case EdHit::Thick:
@@ -10355,6 +10553,10 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::HideMode: return idx == 1 ? Str::EdTipPixels : idx == 2 ? Str::EdTipPlate : Str::EdTipBlur;
     case EdHit::NumStart: return Str::EdTipNumStart;
     case EdHit::NumGroup: return Str::EdTipGroup;
+    case EdHit::Aspect:   return Str::EdTipAspect;
+    case EdHit::CropReset:return Str::EdCropReset;
+    case EdHit::CropOk:   return Str::EdCropApply;
+    case EdHit::CropNo:   return Str::EdCropCancel;
     case EdHit::NumReset: return Str::EdTipNumReset;
     case EdHit::StampMore: return Str::EdTipStampMore;
     case EdHit::Strength: return Str::EdTipStrength;
@@ -10388,8 +10590,8 @@ Str EdTipFor(EdHit what, int idx)
 
 // Клавіша інструмента — та сама, що в довідці. Один масив на обидва місця:
 // якби їх було два, вони розійшлися б за перший же новий інструмент.
-const wchar_t* const kEdToolKeys[11] = { L"V", L"R", L"O", L"A", L"L", L"P", L"T", L"B", L"H",
-                                        L"N", L"S" };
+const wchar_t* const kEdToolKeys[12] = { L"V", L"R", L"O", L"A", L"L", L"P", L"T", L"B", L"H",
+                                        L"N", L"S", L"C" };
 
 void EdTipText(EdHit what, int idx, wchar_t* out, int cch)
 {
@@ -10397,7 +10599,7 @@ void EdTipText(EdHit what, int idx, wchar_t* out, int cch)
     const Str st = EdTipFor(what, idx);
     if (st == Str::Empty) return;
     const wchar_t* key = nullptr;
-    if (what == EdHit::Tool && idx >= 0 && idx < 11) key = kEdToolKeys[idx];
+    if (what == EdHit::Tool && idx >= 0 && idx < 12) key = kEdToolKeys[idx];
     else if (what == EdHit::Copy) key = L"Ctrl+C";
     else if (what == EdHit::Save) key = L"Ctrl+S";
     if (key) {
@@ -10734,6 +10936,127 @@ void EdTextBegin(HWND hwnd, POINT img, int idx)
     SetFocus(g_edEdit);
     SendMessageW(g_edEdit, EM_SETSEL, 0, -1);
     InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+// ---- CAPS-27: кадрування -------------------------------------------------
+
+const double kEdAspects[4] = { 0.0, 16.0 / 9.0, 4.0 / 3.0, 1.0 };
+
+// Кадр не виходить за знімок і не буває меншим за двадцять пікселів: із
+// меншого ручки вже не витягнеш.
+void EdCropClamp(RECT& r)
+{
+    if (r.right - r.left < 20) r.right = r.left + 20;
+    if (r.bottom - r.top < 20) r.bottom = r.top + 20;
+    if (r.left < 0) { r.right -= r.left; r.left = 0; }
+    if (r.top < 0)  { r.bottom -= r.top; r.top = 0; }
+    if (r.right > g_edImgW)  { r.left -= r.right - g_edImgW;  r.right = g_edImgW; }
+    if (r.bottom > g_edImgH) { r.top -= r.bottom - g_edImgH; r.bottom = g_edImgH; }
+    if (r.left < 0) r.left = 0;
+    if (r.top < 0)  r.top = 0;
+}
+
+// ⚠ Пропорції ВПИСУЄМО в наявний прямокутник, а не розтягуємо під нього.
+// Інакше кадр вилазить за знімок, обмеження тягне його назад — і пропорція,
+// заради якої все робилося, губиться: 1:1 на повному кадрі давало 1200×800.
+void EdCropAspect(RECT& r, int anchorRight, int anchorBottom)
+{
+    const double a = kEdAspects[g_edCropAspect];
+    if (a <= 0.0) return;
+    const int w = r.right - r.left, h = r.bottom - r.top;
+    int nw = w, nh = (int)(w / a + 0.5);
+    if (nh > h) { nh = h; nw = (int)(h * a + 0.5); }
+    if (nw < 20) { nw = 20; nh = (int)(nw / a + 0.5); }
+    if (nh < 20) { nh = 20; nw = (int)(nh * a + 0.5); }
+    if (anchorRight)  r.left = r.right - nw; else r.right = r.left + nw;
+    if (anchorBottom) r.top = r.bottom - nh; else r.bottom = r.top + nh;
+}
+
+int EdOutsideCount()
+{
+    if (!EdHasCrop()) return 0;
+    int n = 0;
+    for (size_t i = 0; i < g_edObjs.size(); ++i) {
+        const EdObj& o = g_edObjs[i];
+        RECT b = { o.x, o.y, o.x + o.w, o.y + o.h };
+        if (b.right < g_edCrop.left || b.left > g_edCrop.right ||
+            b.bottom < g_edCrop.top || b.top > g_edCrop.bottom) ++n;
+    }
+    return n;
+}
+
+// Прямокутник кадру на екрані. Під час редагування — той, що тягнуть;
+// координати ті самі, абсолютні по знімку.
+RECT EdCropScreen(const RECT& c)
+{
+    const RECT ir = EdImageRect();
+    const double s = EdScale();
+    RECT r;
+    r.left   = ir.left + (int)((c.left - EdViewX()) * s + 0.5);
+    r.top    = ir.top  + (int)((c.top - EdViewY()) * s + 0.5);
+    r.right  = ir.left + (int)((c.right - EdViewX()) * s + 0.5);
+    r.bottom = ir.top  + (int)((c.bottom - EdViewY()) * s + 0.5);
+    return r;
+}
+
+int EdCropHandles(RECT out[8])
+{
+    const RECT r = EdCropScreen(g_edCropEdit);
+    const int h = EdPx(11), k = h / 2;
+    const int xs[3] = { r.left, (r.left + r.right) / 2, r.right };
+    const int ys[3] = { r.top, (r.top + r.bottom) / 2, r.bottom };
+    const int ix[8] = { 0, 1, 2, 2, 2, 1, 0, 0 };
+    const int iy[8] = { 0, 0, 0, 1, 2, 2, 2, 1 };
+    for (int i = 0; i < 8; ++i) {
+        out[i].left   = xs[ix[i]] - k;
+        out[i].top    = ys[iy[i]] - k;
+        out[i].right  = out[i].left + h;
+        out[i].bottom = out[i].top + h;
+    }
+    return 8;
+}
+
+void EdCropBegin()
+{
+    g_edCropping = true;
+    g_edCropEdit = EdHasCrop() ? g_edCrop
+                               : RECT{ 0, 0, g_edImgW, g_edImgH };
+    g_edSel = -1;
+}
+
+void EdCropFinish(bool apply)
+{
+    if (apply) {
+        RECT n = g_edCropEdit;
+        EdCropClamp(n);
+        // Кадр на весь знімок — це відсутність кадру, а не кадр «як є»:
+        // інакше «Скинути» мусив би вміти два різні порожні стани.
+        const bool whole = (n.left <= 0 && n.top <= 0 &&
+                            n.right >= g_edImgW && n.bottom >= g_edImgH);
+        if (!EqualRect(&n, &g_edCrop) || (whole && EdHasCrop())) {
+            EdPushUndo();
+            g_edCrop = whole ? RECT{ 0, 0, 0, 0 } : n;
+        }
+    }
+    g_edCropping = false;
+    g_edTool = EdTool::Select;
+    if (g_edWnd) {
+        EdFitView();
+        EdLayout(g_edWnd);
+        InvalidateRect(g_edWnd, nullptr, FALSE);
+    }
+}
+
+void EdCropReset()
+{
+    if (!EdHasCrop()) return;
+    EdPushUndo();
+    g_edCrop = RECT{ 0, 0, 0, 0 };
+    if (g_edWnd) {
+        EdFitView();
+        EdLayout(g_edWnd);
+        InvalidateRect(g_edWnd, nullptr, FALSE);
+    }
 }
 
 // ---- CAPS-26: сітка емодзі ------------------------------------------------
@@ -11099,6 +11422,41 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
+        if (g_edDrag == EdDrag::Crop) {
+            const POINT img = EdToImage(pt);
+            RECT n = g_edCropOrig;
+            switch (g_edHandle) {
+            case 0: n.left = img.x; n.top = img.y; break;
+            case 1: n.top = img.y; break;
+            case 2: n.right = img.x; n.top = img.y; break;
+            case 3: n.right = img.x; break;
+            case 4: n.right = img.x; n.bottom = img.y; break;
+            case 5: n.bottom = img.y; break;
+            case 6: n.left = img.x; n.bottom = img.y; break;
+            default: n.left = img.x; break;
+            }
+            if (n.right < n.left) { const LONG v = n.left; n.left = n.right; n.right = v; }
+            if (n.bottom < n.top) { const LONG v = n.top; n.top = n.bottom; n.bottom = v; }
+            EdCropAspect(n, g_edHandle == 0 || g_edHandle == 6 || g_edHandle == 7,
+                            g_edHandle == 0 || g_edHandle == 1 || g_edHandle == 2);
+            EdCropClamp(n);
+            g_edCropEdit = n;
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        if (g_edDrag == EdDrag::CropMove) {
+            const double sc = EdScale();
+            const int dx = (int)((pt.x - g_edDragFrom.x) / sc + (pt.x > g_edDragFrom.x ? 0.5 : -0.5));
+            const int dy = (int)((pt.y - g_edDragFrom.y) / sc + (pt.y > g_edDragFrom.y ? 0.5 : -0.5));
+            RECT n = g_edCropOrig;
+            OffsetRect(&n, dx, dy);
+            EdCropClamp(n);
+            g_edCropEdit = n;
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         if (g_edDrag == EdDrag::Resize && g_edSel >= 0) {
             EdResizeSel(g_edHandle, EdToImage(pt));
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -11126,6 +11484,21 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // Курсор: над ручкою — стрілка розміру, над полотном з прямокутником — хрест.
         if (r && r->what == EdHit::Canvas) {
             LPCWSTR cur = IDC_ARROW;
+            if (g_edCropping) {
+                static const LPCWSTR ccur[8] = { IDC_SIZENWSE, IDC_SIZENS, IDC_SIZENESW, IDC_SIZEWE,
+                                                 IDC_SIZENWSE, IDC_SIZENS, IDC_SIZENESW, IDC_SIZEWE };
+                RECT hs[8];
+                const int hn = EdCropHandles(hs);
+                cur = IDC_ARROW;
+                for (int i = 0; i < hn; ++i)
+                    if (PtInRect(&hs[i], pt)) { cur = ccur[i]; break; }
+                if (cur == IDC_ARROW) {
+                    const RECT cr = EdCropScreen(g_edCropEdit);
+                    if (PtInRect(&cr, pt)) cur = IDC_SIZEALL;
+                }
+                SetCursor(LoadCursorW(nullptr, cur));
+                return 0;
+            }
             if (g_edTool != EdTool::Select) cur = IDC_CROSS;
             if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) {
                 RECT hs[8];
@@ -11165,7 +11538,9 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (!r) return 0;
         switch (r->what) {
         case EdHit::Tool:
+            if (g_edCropping && (EdTool)r->idx != EdTool::Crop) EdCropFinish(false);
             g_edTool = (EdTool)r->idx;
+            if (g_edTool == EdTool::Crop) EdCropBegin();
             if (g_edTool != EdTool::Select) g_edSel = -1;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -11195,6 +11570,25 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case EdHit::StampMore:
             EdEmojiPick(hwnd, r->r);
             return 0;
+        case EdHit::Aspect:
+            g_edCropAspect = r->idx;
+            if (g_edCropping) {
+                RECT n = g_edCropEdit;
+                EdCropAspect(n, 0, 0);
+                EdCropClamp(n);
+                g_edCropEdit = n;
+            }
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case EdHit::CropReset:
+            EdCropReset();
+            if (g_edCropping) g_edCropEdit = RECT{ 0, 0, g_edImgW, g_edImgH };
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case EdHit::CropOk:  EdCropFinish(true);  return 0;
+        case EdHit::CropNo:  EdCropFinish(false); return 0;
         case EdHit::NumGroup:
         case EdHit::NumNext:
             return 0;                      // самі лише підписи, з підказкою
@@ -11350,14 +11744,17 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                                            (g_edRcCanvas.top + g_edRcCanvas.bottom) / 2 };
                                EdZoomAt(c, true); return 0; }
         case EdHit::Fit:   EdFitView(); return 0;
-        case EdHit::Copy:  EdDoCopy();  return 0;
-        case EdHit::Open:  EdOpenFileHere(hwnd); return 0;
+        // Доки кадр не підтверджено, виходи мовчать: незрозуміло, що саме вони
+        // мали б віддати — кадр чи весь знімок.
+        case EdHit::Copy:  if (!g_edCropping) EdDoCopy();  return 0;
+        case EdHit::Open:  if (!g_edCropping) EdOpenFileHere(hwnd); return 0;
         case EdHit::OpenMenu: {
+            if (g_edCropping) return 0;
             const RECT* ob = EdRegionRect(EdHit::Open, 0);
             if (ob) EdOpenMenu(hwnd, *ob);
             return 0;
         }
-        case EdHit::Save:  EdDoSave();  return 0;
+        case EdHit::Save:  if (!g_edCropping) EdDoSave();  return 0;
         case EdHit::Panel:
             g_edPanelOpen = !g_edPanelOpen;
             EdLayout(hwnd);
@@ -11368,6 +11765,31 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
 
         if (!g_edImg) return 0;
+
+        // Режим кадру забирає полотно собі: ручки, тягнення рамки, і нічого
+        // більше — жодних нових позначок, доки кадр не підтверджено.
+        if (g_edCropping) {
+            RECT hs[8];
+            const int hn = EdCropHandles(hs);
+            for (int i = 0; i < hn; ++i) {
+                if (PtInRect(&hs[i], pt)) {
+                    g_edDrag = EdDrag::Crop;
+                    g_edHandle = i;
+                    g_edCropOrig = g_edCropEdit;
+                    SetCapture(hwnd);
+                    return 0;
+                }
+            }
+            const RECT cr = EdCropScreen(g_edCropEdit);
+            if (PtInRect(&cr, pt)) {
+                g_edDrag = EdDrag::CropMove;
+                g_edDragFrom = pt;
+                g_edCropOrig = g_edCropEdit;
+                SetCapture(hwnd);
+            }
+            return 0;
+        }
+
         if (GetKeyState(VK_SPACE) < 0) {
             g_edDrag = EdDrag::Pan;
             g_edDragFrom = pt;
@@ -11547,21 +11969,38 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         switch (wp) {
         case 'Z': if (ctrl) EdUndoAction(); return 0;
         case 'Y': if (ctrl) EdRedoAction(); return 0;
-        case 'C': if (ctrl) EdDoCopy(); return 0;
         case 'D': if (ctrl) EdDuplicateSel(); return 0;
         case VK_RETURN:
+            if (g_edCropping) { EdCropFinish(true); return 0; }
             if (g_edLastAction == 1) EdDoSave(); else EdDoCopy();
             return 0;
-        case 'V': if (!ctrl) { g_edTool = EdTool::Select; InvalidateRect(hwnd, nullptr, FALSE); } return 0;
+        case 'V':
+            if (!ctrl) {
+                if (g_edCropping) EdCropFinish(false);
+                g_edTool = EdTool::Select;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        case 'C':
+            // ⚠ Як і 'S', літера носить дві ролі: сама по собі — кадр, із Ctrl —
+            // копіювання. Окремий case для Ctrl дав би «duplicate case value».
+            if (ctrl) { if (!g_edCropping) EdDoCopy(); return 0; }
+            g_edTool = EdTool::Crop;
+            EdCropBegin();
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        // ⚠ Мітки й тіло мають лишатися разом. Коли між ними вклинився ще один
+        // case, КОЖНА літера інструмента почала відкривати кадр — і помітно це
+        // стало лише на знімку харнеса.
         case 'R': case 'O': case 'A': case 'L': case 'P': case 'T': case 'B': case 'H':
         case 'N': case 'S':
             // ⚠ 'S' носить дві ролі: сам по собі — штамп, із Ctrl — збереження.
-            // Тримати для нього окремий case не можна, компілятор скаже
-            // «duplicate case value», тож розводимо їх тут.
             if (ctrl) {
                 if (wp == 'S') EdDoSave();
                 return 0;
             }
+            if (g_edCropping) EdCropFinish(false);
             {
                 g_edTool = (wp == 'R') ? EdTool::Rect : (wp == 'O') ? EdTool::Ellipse
                          : (wp == 'A') ? EdTool::Arrow : (wp == 'L') ? EdTool::Line
@@ -11574,6 +12013,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case VK_DELETE: EdDeleteSel(); return 0;
         case VK_ESCAPE:
+            if (g_edCropping) { EdCropFinish(false); return 0; }
             if (g_edSel >= 0) { g_edSel = -1; InvalidateRect(hwnd, nullptr, FALSE); }
             else if (g_edTool != EdTool::Select) { g_edTool = EdTool::Select; InvalidateRect(hwnd, nullptr, FALSE); }
             else if (EdConfirmClose()) DestroyWindow(hwnd);
@@ -11666,6 +12106,8 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edZoom = 1.0f;
     g_edPanX = g_edPanY = 0;
     g_edPanelOpen = true;
+    g_edCrop = RECT{ 0, 0, 0, 0 };      // новий знімок приходить без кадру
+    g_edCropping = false;
     g_edCounterGroup = 0;               // новий знімок — нумерація з початку сама
     g_edSeq = 0;
 
@@ -11687,7 +12129,7 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     wsprintfW(caption, L"%s — %s", S(Str::EdTitle), kAppName);
 
     const int dpi = (int)GetDpiForSystem();
-    const int want = MulDiv(1400, dpi, 96), wantH = MulDiv(760, dpi, 96);
+    const int want = MulDiv(1320, dpi, 96), wantH = MulDiv(760, dpi, 96);
     RECT work = {};
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
     const int maxW = (work.right - work.left) - MulDiv(80, dpi, 96);
@@ -11773,16 +12215,18 @@ bool EdEncoderClsid(const wchar_t* mime, CLSID* out)
 Gdiplus::Bitmap* EdRender()
 {
     if (!g_edImg) return nullptr;
-    Gdiplus::Bitmap* out = new Gdiplus::Bitmap(g_edImgW, g_edImgH, PixelFormat32bppPARGB);
+    // У файл іде КАДР, а не весь знімок — і рівно те, що видно на полотні.
+    const int vw = EdViewW(), vh = EdViewH();
+    Gdiplus::Bitmap* out = new Gdiplus::Bitmap(vw, vh, PixelFormat32bppPARGB);
     if (!out || out->GetLastStatus() != Gdiplus::Ok) { delete out; return nullptr; }
     Gdiplus::Graphics g(out);
     g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
     g.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
-    g.DrawImage(g_edImg, Gdiplus::Rect(0, 0, g_edImgW, g_edImgH),
-                0, 0, g_edImgW, g_edImgH, Gdiplus::UnitPixel);
+    g.DrawImage(g_edImg, Gdiplus::Rect(0, 0, vw, vh),
+                EdViewX(), EdViewY(), vw, vh, Gdiplus::UnitPixel);
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     for (size_t i = 0; i < g_edObjs.size(); ++i)
-        EdDrawObject(g, g_edObjs[i], 1.0, 0, 0);
+        EdDrawObject(g, g_edObjs[i], 1.0, -EdViewX(), -EdViewY());
     return out;
 }
 
