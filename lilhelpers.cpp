@@ -162,6 +162,8 @@ constexpr UINT IDM_EXIT        = 2;
 constexpr UINT IDM_EDITOR      = 3;   // CAPS-20: редактор знімків
 constexpr UINT IDM_CAPSCREEN   = 4;   // CAPS-21: знімок екрана
 constexpr UINT IDM_CAPWINDOW   = 5;   // CAPS-21: знімок активного вікна
+constexpr UINT IDM_CAPREGION   = 6;   // CAPS-21: знімок ділянки
+constexpr UINT IDM_CAPCLIP     = 7;   // CAPS-21: з буфера обміну
 constexpr UINT TIMER_MAG_HOLD   = 1;
 constexpr UINT TIMER_MAG_FRAME  = 2;   // кадр оверлейної анімації
 constexpr UINT TIMER_THEME      = 3;   // CAPS-7: перевірка теми раз на хвилину
@@ -423,6 +425,12 @@ X(MsgAutostartFailed, L"Не вдалося змінити задачу авто
 X(MsgRollbackConfirm, L"Повернути попередню версію і перезапустити Little Helpers?",                   \
                       L"Roll back to the previous version and restart Little Helpers?")                \
 X(MenuSettings,       L"Налаштування…",                 L"Settings…")                                  \
+X(EdCapRegion,        L"Знімок ділянки",                L"Region shot")                                \
+X(EdCapClip,          L"З буфера обміну",               L"From clipboard")                             \
+X(EdErrClip,          L"У буфері обміну немає зображення.", L"No image in the clipboard.")             \
+X(CapHkNone,          L"не задано",                     L"not set")                                    \
+X(CapHkBusy,          L"Частину гарячих клавіш тримає інша програма — знімки по них не працюватимуть.", \
+                      L"Another program holds some hotkeys; those shortcuts will not work.")           \
 X(EdCapScreen,        L"Знімок екрана",                 L"Screenshot")                                 \
 X(EdCapWindow,        L"Знімок вікна",                  L"Window shot")                                \
 X(EdHdrNote,          L"HDR · тон-мапінг застосовано",  L"HDR · tone-mapped")                          \
@@ -6817,6 +6825,338 @@ bool CapWindow(HWND target, CapShot* out)
     return true;
 }
 
+Gdiplus::Bitmap* EdBitmapFromFile(const wchar_t* path);   // визначено в блоці редактора
+
+bool g_capCancelled = false;   // вибір ділянки скасовано — це не помилка
+
+// ---- CAPS-21: вхід із буфера обміну ------------------------------------
+// PNG читаємо ПЕРШИМ і лише потім DIB. Причина в CF_DIBV5: від'ємна висота
+// означає порядок рядків згори вниз, а альфа буває премультиплікованою — це
+// класичне джерело перевернутих і чорних картинок. PNG такої двозначності не
+// має взагалі.
+
+UINT CapClipboardPngFormat()
+{
+    static UINT fmt = 0;
+    if (!fmt) fmt = RegisterClipboardFormatW(L"PNG");
+    return fmt;
+}
+
+// Якщо в бітмапі геть уся альфа нульова, це не «повністю прозоре зображення»,
+// а джерело, яке про альфу не думало. Робимо непрозорим, інакше редактор
+// показуватиме порожнечу.
+void CapFixOpacity(Gdiplus::Bitmap* bmp)
+{
+    if (!bmp) return;
+    const int w = (int)bmp->GetWidth(), h = (int)bmp->GetHeight();
+    Gdiplus::BitmapData bd;
+    Gdiplus::Rect all(0, 0, w, h);
+    if (bmp->LockBits(&all, Gdiplus::ImageLockModeRead | Gdiplus::ImageLockModeWrite,
+                      PixelFormat32bppPARGB, &bd) != Gdiplus::Ok)
+        return;
+    bool any = false;
+    for (int y = 0; y < h && !any; ++y) {
+        const BYTE* row = (const BYTE*)bd.Scan0 + (size_t)y * bd.Stride;
+        for (int x = 0; x < w; ++x)
+            if (row[x * 4 + 3]) { any = true; break; }
+    }
+    if (!any) {
+        for (int y = 0; y < h; ++y) {
+            BYTE* row = (BYTE*)bd.Scan0 + (size_t)y * bd.Stride;
+            for (int x = 0; x < w; ++x) row[x * 4 + 3] = 255;
+        }
+    }
+    bmp->UnlockBits(&bd);
+}
+
+Gdiplus::Bitmap* CapCloneParg(Gdiplus::Bitmap* src)
+{
+    if (!src || src->GetLastStatus() != Gdiplus::Ok) return nullptr;
+    const int w = (int)src->GetWidth(), h = (int)src->GetHeight();
+    if (w <= 0 || h <= 0) return nullptr;
+    Gdiplus::Bitmap* out = src->Clone(0, 0, w, h, PixelFormat32bppPARGB);
+    if (out && out->GetLastStatus() != Gdiplus::Ok) { delete out; out = nullptr; }
+    return out;
+}
+
+Gdiplus::Bitmap* CapFromClipboard()
+{
+    if (!OpenClipboard(nullptr)) return nullptr;
+    Gdiplus::Bitmap* out = nullptr;
+
+    const UINT png = CapClipboardPngFormat();
+    if (png && IsClipboardFormatAvailable(png)) {
+        if (HANDLE h = GetClipboardData(png)) {
+            const SIZE_T n = GlobalSize(h);
+            if (const void* p = GlobalLock(h)) {
+                if (IStream* st = SHCreateMemStream((const BYTE*)p, (UINT)n)) {
+                    Gdiplus::Bitmap* src = Gdiplus::Bitmap::FromStream(st);
+                    out = CapCloneParg(src);
+                    delete src;
+                    st->Release();
+                }
+                GlobalUnlock(h);
+            }
+        }
+    }
+
+    if (!out) {
+        for (UINT fmt : { (UINT)CF_DIBV5, (UINT)CF_DIB }) {
+            if (!IsClipboardFormatAvailable(fmt)) continue;
+            HANDLE h = GetClipboardData(fmt);
+            if (!h) continue;
+            if (const void* p = GlobalLock(h)) {
+                const BITMAPINFO* bi = (const BITMAPINFO*)p;
+                const DWORD hdr = bi->bmiHeader.biSize;
+                DWORD palette = 0;
+                if (bi->bmiHeader.biBitCount <= 8)
+                    palette = (bi->bmiHeader.biClrUsed ? bi->bmiHeader.biClrUsed
+                                                       : (1u << bi->bmiHeader.biBitCount)) * sizeof(RGBQUAD);
+                else if (bi->bmiHeader.biCompression == BI_BITFIELDS && hdr == sizeof(BITMAPINFOHEADER))
+                    palette = 3 * sizeof(DWORD);
+                const BYTE* bits = (const BYTE*)p + hdr + palette;
+                Gdiplus::Bitmap src(bi, (void*)bits);
+                out = CapCloneParg(&src);
+                GlobalUnlock(h);
+            }
+            if (out) break;
+        }
+    }
+
+    if (!out && IsClipboardFormatAvailable(CF_BITMAP)) {
+        if (HBITMAP hb = (HBITMAP)GetClipboardData(CF_BITMAP)) {
+            Gdiplus::Bitmap* src = Gdiplus::Bitmap::FromHBITMAP(hb, nullptr);
+            out = CapCloneParg(src);
+            delete src;
+        }
+    }
+
+    wchar_t dropped[MAX_PATH] = {};
+    if (!out && IsClipboardFormatAvailable(CF_HDROP)) {
+        if (HDROP drop = (HDROP)GetClipboardData(CF_HDROP))
+            DragQueryFileW(drop, 0, dropped, MAX_PATH);
+    }
+    CloseClipboard();
+
+    if (!out && dropped[0]) out = EdBitmapFromFile(dropped);   // визначено нижче за текстом
+    CapFixOpacity(out);
+    return out;
+}
+
+// ---- CAPS-21: вибір ділянки рамкою -------------------------------------
+// Екран спершу ЗАМОРОЖУЄМО, а вже потім показуємо поверх нього вікно вибору.
+// Так рамка й притемнення не потрапляють у результат, вибір виходить точний до
+// пікселя, і ніщо на екрані не встигне змінитись між вибором і знімком.
+
+HWND  g_rgnWnd = nullptr;
+Gdiplus::Bitmap* g_rgnImg = nullptr;   // заморожений кадр; НЕ власність цього коду
+RECT  g_rgnMon = {};
+POINT g_rgnFrom = {}, g_rgnTo = {};
+bool  g_rgnDragging = false, g_rgnDone = false, g_rgnOk = false;
+bool  g_rgnHadFocus = false;   // фокус справді був, а не «ніколи не приходив»
+HFONT g_rgnFont = nullptr;
+
+RECT RgnSelRect()
+{
+    RECT r;
+    r.left   = g_rgnFrom.x < g_rgnTo.x ? g_rgnFrom.x : g_rgnTo.x;
+    r.top    = g_rgnFrom.y < g_rgnTo.y ? g_rgnFrom.y : g_rgnTo.y;
+    r.right  = g_rgnFrom.x > g_rgnTo.x ? g_rgnFrom.x : g_rgnTo.x;
+    r.bottom = g_rgnFrom.y > g_rgnTo.y ? g_rgnFrom.y : g_rgnTo.y;
+    return r;
+}
+
+void RgnPaint(HDC dc, int w, int h)
+{
+    Gdiplus::Graphics g(dc);
+    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    if (g_rgnImg) g.DrawImage(g_rgnImg, 0, 0, w, h);
+
+    const RECT s = g_rgnDragging ? RgnSelRect() : RECT{ 0, 0, 0, 0 };
+    Gdiplus::SolidBrush scrim(Gdiplus::Color(120, 8, 8, 12));
+    if (!g_rgnDragging || s.right <= s.left || s.bottom <= s.top) {
+        g.FillRectangle(&scrim, 0, 0, w, h);
+    } else {
+        // Притемнюємо все, крім вибраного, чотирма прямокутниками: так вибрана
+        // ділянка лишається саме такою, якою піде в редактор.
+        g.FillRectangle(&scrim, 0, 0, w, (INT)s.top);
+        g.FillRectangle(&scrim, 0, (INT)s.bottom, w, h - (INT)s.bottom);
+        g.FillRectangle(&scrim, 0, (INT)s.top, (INT)s.left, (INT)(s.bottom - s.top));
+        g.FillRectangle(&scrim, (INT)s.right, (INT)s.top, w - (INT)s.right, (INT)(s.bottom - s.top));
+
+        Gdiplus::Pen white(Gdiplus::Color(235, 255, 255, 255), 1.0f);
+        g.DrawRectangle(&white, (INT)s.left, (INT)s.top,
+                        (INT)(s.right - s.left) - 1, (INT)(s.bottom - s.top) - 1);
+
+        wchar_t buf[64];
+        wsprintfW(buf, L"%d × %d", (int)(s.right - s.left), (int)(s.bottom - s.top));
+        HGDIOBJ oldF = SelectObject(dc, g_rgnFont);
+        RECT m = { 0, 0, 0, 0 };
+        DrawTextW(dc, buf, -1, &m, DT_CALCRECT | DT_SINGLELINE);
+        const int bw = (m.right - m.left) + 16, bh = (m.bottom - m.top) + 10;
+        int bx = (int)s.left, by = (int)s.top - bh - 6;
+        if (by < 0) by = (int)s.top + 6;
+        if (bx + bw > w) bx = w - bw;
+        if (bx < 0) bx = 0;
+        Gdiplus::SolidBrush back(Gdiplus::Color(220, 20, 20, 24));
+        g.FillRectangle(&back, bx, by, bw, bh);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(255, 255, 255));
+        RECT tr = { bx, by, bx + bw, by + bh };
+        DrawTextW(dc, buf, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(dc, oldF);
+    }
+}
+
+LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HDC mem = CreateCompatibleDC(dc);
+        HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+        HGDIOBJ old = SelectObject(mem, bmp);
+        RgnPaint(mem, rc.right, rc.bottom);
+        BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+        SelectObject(mem, old);
+        DeleteObject(bmp);
+        DeleteDC(mem);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_LBUTTONDOWN:
+        g_rgnFrom.x = GET_X_LPARAM(lp);
+        g_rgnFrom.y = GET_Y_LPARAM(lp);
+        g_rgnTo = g_rgnFrom;
+        g_rgnDragging = true;
+        SetCapture(hwnd);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case WM_MOUSEMOVE:
+        if (g_rgnDragging) {
+            g_rgnTo.x = GET_X_LPARAM(lp);
+            g_rgnTo.y = GET_Y_LPARAM(lp);
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+    case WM_LBUTTONUP: {
+        if (!g_rgnDragging) return 0;
+        g_rgnTo.x = GET_X_LPARAM(lp);
+        g_rgnTo.y = GET_Y_LPARAM(lp);
+        ReleaseCapture();
+        const RECT s = RgnSelRect();
+        g_rgnOk = (s.right - s.left >= 4 && s.bottom - s.top >= 4);   // клік без тягання = скасування
+        g_rgnDone = true;
+        return 0;
+    }
+    case WM_RBUTTONDOWN:
+        g_rgnOk = false;
+        g_rgnDone = true;
+        return 0;
+    case WM_KEYDOWN:
+        if (wp == VK_ESCAPE) { g_rgnOk = false; g_rgnDone = true; }
+        return 0;
+    case WM_SETFOCUS:
+        g_rgnHadFocus = true;
+        return 0;
+
+    // Фокус забрали — вибір скасовано, щоб притемнене вікно не висіло поверх
+    // усього. Але лише якщо фокус справді був: SetForegroundWindow інколи не
+    // спрацьовує, і тоді KILLFOCUS прилітає одразу після показу.
+    case WM_KILLFOCUS:
+        if (g_rgnHadFocus && !g_rgnDone) { g_rgnOk = false; g_rgnDone = true; }
+        return 0;
+    default: break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out)
+{
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc   = RgnWndProc;
+        wc.hInstance     = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"lilhelpers_region";
+        wc.hCursor       = LoadCursorW(nullptr, IDC_CROSS);
+        RegisterClassW(&wc);
+        registered = true;
+    }
+    if (!g_rgnFont) g_rgnFont = CreateUIFont(105, FW_SEMIBOLD);
+
+    g_rgnImg = frozen;
+    g_rgnMon = monRc;
+    g_rgnDragging = g_rgnDone = g_rgnOk = g_rgnHadFocus = false;
+    g_rgnFrom = g_rgnTo = POINT{ 0, 0 };
+
+    g_rgnWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"lilhelpers_region", L"",
+                               WS_POPUP, monRc.left, monRc.top,
+                               monRc.right - monRc.left, monRc.bottom - monRc.top,
+                               nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!g_rgnWnd) { g_rgnImg = nullptr; return false; }
+    ShowWindow(g_rgnWnd, SW_SHOW);
+    SetForegroundWindow(g_rgnWnd);
+    SetFocus(g_rgnWnd);
+
+    // Власний цикл повідомлень: вибір ділянки модальний за суттю.
+    MSG msg;
+    while (!g_rgnDone) {
+        const BOOL got = GetMessageW(&msg, nullptr, 0, 0);
+        if (got <= 0) { PostQuitMessage(0); break; }   // WM_QUIT віддаємо назад головному циклу
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    // Результат забираємо ДО руйнування вікна: DestroyWindow шле сфокусованому
+    // вікну WM_KILLFOCUS, і обробник «фокус забрали — скасовано» інакше затирає
+    // щойно зроблений вибір.
+    const RECT s = RgnSelRect();
+    const bool okLocal = g_rgnOk;
+    DestroyWindow(g_rgnWnd);
+    g_rgnWnd = nullptr;
+    g_rgnImg = nullptr;
+    if (!okLocal) return false;
+    out->left   = monRc.left + s.left;
+    out->top    = monRc.top + s.top;
+    out->right  = monRc.left + s.right;
+    out->bottom = monRc.top + s.bottom;
+    return true;
+}
+
+bool CapRegion(CapShot* out)
+{
+    POINT pt = {};
+    GetCursorPos(&pt);
+    HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi = { sizeof(mi) };
+    if (!GetMonitorInfoW(mon, &mi)) return false;
+
+    CapShot whole = {};
+    if (!CapGrabMonitor(mon, &whole)) {
+        whole = CapShot{};
+        whole.bmp = CapBitBlt(mi.rcMonitor);
+        if (!whole.bmp) return false;
+    }
+    RECT sel = {};
+    const bool picked = CapRegionPick(whole.bmp, mi.rcMonitor, &sel);
+    if (!picked) { delete whole.bmp; g_capCancelled = true; return false; }
+
+    Gdiplus::Bitmap* part = CapCrop(whole.bmp, mi.rcMonitor, sel);
+    delete whole.bmp;
+    if (!part) return false;
+    *out = whole;
+    out->bmp = part;
+    out->w = (int)part->GetWidth();
+    out->h = (int)part->GetHeight();
+    return true;
+}
+
 // ===================== CAPS-20: редактор знімків =====================
 // Три зони за макетом CAPS-19: ліворуч чим малюю, зверху властивості ВИБРАНОЇ
 // позначки, праворуч сам знімок. Правило просте настільки, що його не треба
@@ -8294,19 +8634,166 @@ HWND CapForegroundTarget()
     return nullptr;
 }
 
-// target != nullptr — знімаємо саме це вікно. Нуль означає «активне»: так
-// приходить і з меню, і з гарячої клавіші.
-void CapTake(HINSTANCE hInst, HWND owner, bool wholeScreen, HWND target)
+// ---- CAPS-21: гарячі клавіші -------------------------------------------
+// Значення зберігаємо як модифікатори у старшому слові й VK у молодшому. Саме
+// VK, а не символ: VK не залежить від розкладки, а програма про розкладки й є.
+// Нуль означає «клавішу вимкнено».
+//
+// Дефолти виміряно RegisterHotKey на PLUM-MEDIA 20.09.2026 — усі три вільні.
+// Уся родина Win+модифікатор+цифра належить оболонці (помилка 1409) і для нас
+// недоступна в принципі.
+
+constexpr int kHkIdClip = 11, kHkIdRegion = 12, kHkIdScreen = 13;
+const wchar_t* kRegHkClip   = L"CapHotkeyClipboard";
+const wchar_t* kRegHkRegion = L"CapHotkeyRegion";
+const wchar_t* kRegHkScreen = L"CapHotkeyScreen";
+
+constexpr int kHkDefClip   = (int)(((MOD_CONTROL | MOD_ALT) << 16) | '4');
+constexpr int kHkDefRegion = (int)(((MOD_ALT | MOD_SHIFT) << 16) | '4');
+constexpr int kHkDefScreen = (int)(((MOD_ALT | MOD_SHIFT) << 16) | '3');
+
+int  g_hk[3]   = { kHkDefClip, kHkDefRegion, kHkDefScreen };
+bool g_hkOk[3] = { false, false, false };
+
+void CapLoadHotkeys()
+{
+    g_hk[0] = RegLoadInt(kRegHkClip,   kHkDefClip,   0, 0x7FFFFFFF);
+    g_hk[1] = RegLoadInt(kRegHkRegion, kHkDefRegion, 0, 0x7FFFFFFF);
+    g_hk[2] = RegLoadInt(kRegHkScreen, kHkDefScreen, 0, 0x7FFFFFFF);
+}
+
+void CapSaveHotkeys()
+{
+    RegSaveInt(kRegHkClip,   g_hk[0]);
+    RegSaveInt(kRegHkRegion, g_hk[1]);
+    RegSaveInt(kRegHkScreen, g_hk[2]);
+}
+
+// Повертає true, якщо всі ввімкнені клавіші зайнялись. Мовчазна невдача тут
+// найгірша з можливих: користувач натискає й нічого не відбувається, а
+// програма вдає, що все гаразд.
+bool CapApplyHotkeys(HWND hwnd)
+{
+    const int ids[3] = { kHkIdClip, kHkIdRegion, kHkIdScreen };
+    bool all = true;
+    for (int i = 0; i < 3; ++i) {
+        UnregisterHotKey(hwnd, ids[i]);
+        g_hkOk[i] = false;
+        if (!g_hk[i]) continue;
+        const UINT mods = (UINT)(((unsigned)g_hk[i] >> 16) & 0xFFFF) | MOD_NOREPEAT;
+        const UINT vk   = (UINT)(g_hk[i] & 0xFFFF);
+        g_hkOk[i] = RegisterHotKey(hwnd, ids[i], mods, vk) != 0;
+        if (!g_hkOk[i]) all = false;
+    }
+    return all;
+}
+
+// Чи вільна комбінація просто зараз. Використовує окреме приховане вікно, щоб
+// не зачепити вже зареєстровані клавіші самої програми.
+bool CapHotkeyFree(int packed)
+{
+    if (!packed) return true;
+    static HWND probe = nullptr;
+    if (!probe) {
+        static bool reg = false;
+        if (!reg) {
+            WNDCLASSW wc = {};
+            wc.lpfnWndProc = DefWindowProcW;
+            wc.hInstance = GetModuleHandleW(nullptr);
+            wc.lpszClassName = L"lilhelpers_hkprobe";
+            RegisterClassW(&wc);
+            reg = true;
+        }
+        probe = CreateWindowExW(0, L"lilhelpers_hkprobe", L"", 0, 0, 0, 0, 0,
+                                HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+    }
+    if (!probe) return true;
+    const UINT mods = (UINT)(((unsigned)packed >> 16) & 0xFFFF) | MOD_NOREPEAT;
+    const UINT vk   = (UINT)(packed & 0xFFFF);
+    if (!RegisterHotKey(probe, 99, mods, vk)) return false;
+    UnregisterHotKey(probe, 99);
+    return true;
+}
+
+// Людський підпис комбінації для поля налаштувань.
+void CapHotkeyText(int packed, wchar_t* out, int cch)
+{
+    if (!packed) { lstrcpynW(out, S(Str::CapHkNone), cch); return; }
+    const UINT mods = (UINT)(((unsigned)packed >> 16) & 0xFFFF);
+    const UINT vk   = (UINT)(packed & 0xFFFF);
+    wchar_t buf[128] = {};
+    if (mods & MOD_CONTROL) lstrcatW(buf, L"Ctrl + ");
+    if (mods & MOD_ALT)     lstrcatW(buf, L"Alt + ");
+    if (mods & MOD_SHIFT)   lstrcatW(buf, L"Shift + ");
+    if (mods & MOD_WIN)     lstrcatW(buf, L"Win + ");
+    wchar_t key[64] = {};
+    // Ім'я клавіші беремо в системи: воно вже локалізоване й правильне для
+    // не-символьних клавіш. Для цифр і літер GetKeyNameText теж дає своє.
+    const UINT sc = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    LONG lp = (LONG)(sc << 16);
+    if (vk == VK_INSERT || vk == VK_DELETE || vk == VK_HOME || vk == VK_END ||
+        vk == VK_PRIOR || vk == VK_NEXT || vk == VK_LEFT || vk == VK_RIGHT ||
+        vk == VK_UP || vk == VK_DOWN || vk == VK_SNAPSHOT)
+        lp |= (1L << 24);
+    if (!GetKeyNameTextW(lp, key, 64) || !key[0])
+        wsprintfW(key, L"0x%02X", vk);
+    lstrcatW(buf, key);
+    lstrcpynW(out, buf, cch);
+}
+
+// ---- CAPS-21: одна точка входу для всіх способів знімка ------------------
+
+enum class CapMode { Screen, Window, Region, Clipboard };
+
+// Захоплення міряє екран у ФІЗИЧНИХ пікселях, а сама програма оголошена лише
+// system-DPI-aware. На однаковому DPI різниці немає, на змішаному координати
+// монітора віртуалізуються і знімок поїхав би. Перемикаємо усвідомленість
+// НА ЧАС захвату й повертаємо назад: так решта вікон програми лишається в тому
+// самому режимі, у якому працювала завжди.
+#ifndef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+#define DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 ((DPI_AWARENESS_CONTEXT)-4)
+#endif
+struct CapDpiScope {
+    DPI_AWARENESS_CONTEXT prev;
+    CapDpiScope()  { prev = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
+    ~CapDpiScope() { if (prev) SetThreadDpiAwarenessContext(prev); }
+};
+
+void CapTake(HINSTANCE hInst, HWND owner, CapMode mode, HWND target)
 {
     CapShot shot = {};
-    const bool ok = wholeScreen ? CapScreen(&shot)
-                                : CapWindow(target ? target : CapForegroundTarget(), &shot);
+    bool ok = false;
+    g_capCancelled = false;
+
+    if (mode == CapMode::Clipboard) {
+        shot.bmp = CapFromClipboard();
+        if (shot.bmp) {
+            shot.w = (int)shot.bmp->GetWidth();
+            shot.h = (int)shot.bmp->GetHeight();
+            ok = true;
+        }
+    } else {
+        CapDpiScope dpi;
+        switch (mode) {
+        case CapMode::Screen: ok = CapScreen(&shot); break;
+        case CapMode::Window: ok = CapWindow(target ? target : CapForegroundTarget(), &shot); break;
+        case CapMode::Region: ok = CapRegion(&shot); break;
+        default: break;
+        }
+    }
+
+    if (g_capCancelled) return;          // користувач передумав, мовчимо
     if (!ok || !shot.bmp) {
-        MessageBoxW(owner, S(Str::EdErrCapture), kAppName, MB_OK | MB_ICONWARNING);
+        MessageBoxW(owner, S(mode == CapMode::Clipboard ? Str::EdErrClip : Str::EdErrCapture),
+                    kAppName, MB_OK | MB_ICONWARNING);
         return;
     }
-    EdOpenBitmap(hInst, shot.bmp, S(wholeScreen ? Str::EdCapScreen : Str::EdCapWindow),
-                 shot.hdr, shot.toneMapped);
+
+    Str label = Str::EdCapScreen;
+    if (mode == CapMode::Window)         label = Str::EdCapWindow;
+    else if (mode == CapMode::Region)    label = Str::EdCapRegion;
+    else if (mode == CapMode::Clipboard) label = Str::EdCapClip;
+    EdOpenBitmap(hInst, shot.bmp, S(label), shot.hdr, shot.toneMapped);
 }
 
 // =================== кінець редактора знімків (CAPS-20) ===================
@@ -8319,6 +8806,8 @@ void ShowTrayMenu(HWND hwnd)
     AppendMenuW(menu, MF_STRING, IDM_SETTINGS, S(Str::MenuSettings));
     AppendMenuW(menu, MF_STRING, IDM_CAPSCREEN, S(Str::EdCapScreen));
     AppendMenuW(menu, MF_STRING, IDM_CAPWINDOW, S(Str::EdCapWindow));
+    AppendMenuW(menu, MF_STRING, IDM_CAPREGION, S(Str::EdCapRegion));
+    AppendMenuW(menu, MF_STRING, IDM_CAPCLIP, S(Str::EdCapClip));
     AppendMenuW(menu, MF_STRING, IDM_EDITOR, S(Str::EdMenu));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, IDM_EXIT, S(Str::MenuExit));
@@ -8339,8 +8828,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     switch (msg) {
     case WMAPP_SWITCH:   // від хука
-    case WM_HOTKEY:      // від системної реєстрації клавіші
         SwitchLayout();
+        return 0;
+
+    case WM_HOTKEY:      // від системної реєстрації клавіші
+        switch ((int)wp) {
+        case kHkIdClip:   CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Clipboard, nullptr); return 0;
+        case kHkIdRegion: CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Region,    nullptr); return 0;
+        case kHkIdScreen: CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Screen,    nullptr); return 0;
+        default: break;
+        }
+        SwitchLayout();   // запасний режим розкладки (HOTKEY_ID)
         return 0;
 
     case WMAPP_SHOWSETTINGS:
@@ -8677,10 +9175,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             EdOpen(GetModuleHandleW(nullptr), hwnd);
             break;
         case IDM_CAPSCREEN:
-            CapTake(GetModuleHandleW(nullptr), hwnd, true, nullptr);
+            CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Screen, nullptr);
             break;
         case IDM_CAPWINDOW:
-            CapTake(GetModuleHandleW(nullptr), hwnd, false, (HWND)lp);
+            CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Window, (HWND)lp);
+            break;
+        case IDM_CAPREGION:
+            CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Region, nullptr);
+            break;
+        case IDM_CAPCLIP:
+            CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Clipboard, nullptr);
             break;
         case IDM_EXIT:
             DestroyWindow(hwnd);
@@ -9177,6 +9681,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 
     StartHookThread();  // має бути до StartInterception у режимі Hook
     ApplyPeekFeature(); // CAPS-16: хук потрібен і перегляду, навіть без розкладки
+
+    // CAPS-21: гарячі клавіші знімків. Якщо котрась зайнята — кажемо про це
+    // вголос: мовчазна невдача виглядає як «програма зламалась».
+    CapLoadHotkeys();
+    if (!CapApplyHotkeys(hwnd)) TrayBalloon(kAppName, S(Str::CapHkBusy));
     ApplyCursorFeature();  // CAPS-2: мишачий хук на тому ж потоці
     g_mode = LoadMode();
     // CAPS-9: перехоплення лише якщо перемикання ввімкнено; інакше програма живе
