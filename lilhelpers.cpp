@@ -7005,6 +7005,7 @@ RECT  g_rgnMon = {};
 POINT g_rgnFrom = {}, g_rgnTo = {};
 bool  g_rgnDragging = false, g_rgnDone = false, g_rgnOk = false;
 bool  g_rgnHadFocus = false;   // фокус справді був, а не «ніколи не приходив»
+POINT g_rgnCur = {};           // курсор у клієнтських координатах — для напрямних
 HFONT g_rgnFont = nullptr;
 
 RECT RgnSelRect()
@@ -7015,6 +7016,27 @@ RECT RgnSelRect()
     r.right  = g_rgnFrom.x > g_rgnTo.x ? g_rgnFrom.x : g_rgnTo.x;
     r.bottom = g_rgnFrom.y > g_rgnTo.y ? g_rgnFrom.y : g_rgnTo.y;
     return r;
+}
+
+// Підпис у темній плашці біля точки. Використовується і для розміру рамки,
+// і для координат першого кута.
+void RgnLabel(HDC dc, Gdiplus::Graphics& g, int w, int h, int ax, int ay, const wchar_t* text)
+{
+    HGDIOBJ oldF = SelectObject(dc, g_rgnFont);
+    RECT m = { 0, 0, 0, 0 };
+    DrawTextW(dc, text, -1, &m, DT_CALCRECT | DT_SINGLELINE);
+    const int bw = (m.right - m.left) + 16, bh = (m.bottom - m.top) + 10;
+    int bx = ax, by = ay - bh - 6;
+    if (by < 0) by = ay + 6;
+    if (bx + bw > w) bx = w - bw;
+    if (bx < 0) bx = 0;
+    Gdiplus::SolidBrush back(Gdiplus::Color(220, 20, 20, 24));
+    g.FillRectangle(&back, bx, by, bw, bh);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(255, 255, 255));
+    RECT tr = { bx, by, bx + bw, by + bh };
+    DrawTextW(dc, text, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(dc, oldF);
 }
 
 void RgnPaint(HDC dc, int w, int h)
@@ -7041,21 +7063,21 @@ void RgnPaint(HDC dc, int w, int h)
 
         wchar_t buf[64];
         wsprintfW(buf, L"%d × %d", (int)(s.right - s.left), (int)(s.bottom - s.top));
-        HGDIOBJ oldF = SelectObject(dc, g_rgnFont);
-        RECT m = { 0, 0, 0, 0 };
-        DrawTextW(dc, buf, -1, &m, DT_CALCRECT | DT_SINGLELINE);
-        const int bw = (m.right - m.left) + 16, bh = (m.bottom - m.top) + 10;
-        int bx = (int)s.left, by = (int)s.top - bh - 6;
-        if (by < 0) by = (int)s.top + 6;
-        if (bx + bw > w) bx = w - bw;
-        if (bx < 0) bx = 0;
-        Gdiplus::SolidBrush back(Gdiplus::Color(220, 20, 20, 24));
-        g.FillRectangle(&back, bx, by, bw, bh);
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(255, 255, 255));
-        RECT tr = { bx, by, bx + bw, by + bh };
-        DrawTextW(dc, buf, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        SelectObject(dc, oldF);
+        RgnLabel(dc, g, w, h, (int)s.left, (int)s.top, buf);
+    }
+
+    // Напрямні від курсора через увесь екран: ще до першого натискання видно,
+    // де саме ляже кут майбутньої рамки. Малюються поверх притемнення й
+    // лишаються під час тягання — тоді вони показують другий кут.
+    {
+        Gdiplus::Pen guide(Gdiplus::Color(150, 255, 255, 255), 1.0f);
+        g.DrawLine(&guide, 0, (INT)g_rgnCur.y, w, (INT)g_rgnCur.y);
+        g.DrawLine(&guide, (INT)g_rgnCur.x, 0, (INT)g_rgnCur.x, h);
+    }
+    if (!g_rgnDragging) {
+        wchar_t c[64];
+        wsprintfW(c, L"%d, %d", (int)g_rgnCur.x, (int)g_rgnCur.y);
+        RgnLabel(dc, g, w, h, (int)g_rgnCur.x + 12, (int)g_rgnCur.y + 34, c);
     }
 }
 
@@ -7089,11 +7111,10 @@ LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     case WM_MOUSEMOVE:
-        if (g_rgnDragging) {
-            g_rgnTo.x = GET_X_LPARAM(lp);
-            g_rgnTo.y = GET_Y_LPARAM(lp);
-            InvalidateRect(hwnd, nullptr, FALSE);
-        }
+        g_rgnCur.x = GET_X_LPARAM(lp);
+        g_rgnCur.y = GET_Y_LPARAM(lp);
+        if (g_rgnDragging) g_rgnTo = g_rgnCur;
+        InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     case WM_LBUTTONUP: {
         if (!g_rgnDragging) return 0;
@@ -7145,6 +7166,9 @@ bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out)
     g_rgnMon = monRc;
     g_rgnDragging = g_rgnDone = g_rgnOk = g_rgnHadFocus = false;
     g_rgnFrom = g_rgnTo = POINT{ 0, 0 };
+    GetCursorPos(&g_rgnCur);                     // напрямні одразу під курсором
+    g_rgnCur.x -= monRc.left;
+    g_rgnCur.y -= monRc.top;
 
     g_rgnWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"lilhelpers_region", L"",
                                WS_POPUP, monRc.left, monRc.top,
@@ -7310,7 +7334,6 @@ bool     g_edHdr = false, g_edToneMapped = false;   // CAPS-21: звідки п�
 float    g_edSdrWhite = -1.0f;                      // ніт; -1 = система не сказала
 // CAPS-22: стан виходів. Остання використана дія підсвічується як дія для Enter.
 int      g_edLastAction  = 0;      // 0 буфер, 1 файл
-bool     g_edCloseOnCopy = true;
 bool     g_edSaved       = false;  // уже кудись пішло — Esc не питає
 DWORD    g_edToastUntil  = 0;
 Str      g_edToast       = Str::Empty;
@@ -8794,7 +8817,6 @@ HWND CapForegroundTarget()
 // як дію для Enter.
 
 const wchar_t* kRegEdLast     = L"EditorLastAction";     // 0 буфер, 1 файл
-const wchar_t* kRegEdCloseCopy = L"EditorCloseAfterCopy";
 const wchar_t* kRegEdSaveDir  = L"EditorSaveDir";
 
 bool EdEncoderClsid(const wchar_t* mime, CLSID* out)
@@ -9033,7 +9055,8 @@ void EdDoCopy()
     g_edSaved = true;
     g_edLastAction = 0;
     RegSaveInt(kRegEdLast, 0);
-    if (g_edCloseOnCopy) { DestroyWindow(g_edWnd); return; }
+    // Вікно НЕ закриваємо: скопіювати — не означає закінчити. Часто далі
+    // домальовують ще одну позначку й копіюють знову.
     EdToast(Str::EdCopied);
 }
 
@@ -9313,11 +9336,16 @@ void ShowTrayMenu(HWND hwnd)
     GetCursorPos(&pt);
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, IDM_SETTINGS, S(Str::MenuSettings));
-    AppendMenuW(menu, MF_STRING, IDM_CAPSCREEN, S(Str::EdCapScreen));
-    AppendMenuW(menu, MF_STRING, IDM_CAPWINDOW, S(Str::EdCapWindow));
-    AppendMenuW(menu, MF_STRING, IDM_CAPREGION, S(Str::EdCapRegion));
-    AppendMenuW(menu, MF_STRING, IDM_CAPCLIP, S(Str::EdCapClip));
-    AppendMenuW(menu, MF_STRING, IDM_EDITOR, S(Str::EdMenu));
+    // Знімки — окремим підменю: у головному списку вони перекривали решту
+    // програми, хоч це лише одна з її функцій.
+    HMENU shots = CreatePopupMenu();
+    AppendMenuW(shots, MF_STRING, IDM_CAPSCREEN, S(Str::EdCapScreen));
+    AppendMenuW(shots, MF_STRING, IDM_CAPWINDOW, S(Str::EdCapWindow));
+    AppendMenuW(shots, MF_STRING, IDM_CAPREGION, S(Str::EdCapRegion));
+    AppendMenuW(shots, MF_STRING, IDM_CAPCLIP, S(Str::EdCapClip));
+    AppendMenuW(shots, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(shots, MF_STRING, IDM_EDITOR, S(Str::EdMenu));
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)shots, S(Str::TabShots));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, IDM_EXIT, S(Str::MenuExit));
     SetForegroundWindow(hwnd); // інакше меню не закриється кліком повз
@@ -9682,10 +9710,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case IDM_EDITOR:
             EdOpen(GetModuleHandleW(nullptr), hwnd);
-            break;
-        case IDC_CAP_CLOSECOPY:
-            g_edCloseOnCopy = SendMessageW(GetDlgItem(hwnd, IDC_CAP_CLOSECOPY), BM_GETCHECK, 0, 0) == BST_CHECKED;
-            RegSaveInt(kRegEdCloseCopy, g_edCloseOnCopy ? 1 : 0);
             break;
         case IDC_CAP_HKRESET:
             g_hk[0] = kHkDefClip;
@@ -10137,8 +10161,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     y += 42;
     button(addK, Str::CapHkDefaults, PX, 170, IDC_CAP_HKRESET);
     y += 38;
-    sec(addK, Str::CapSecOutput);
-    check(addK, Str::CapCloseAfterCopy, IDC_CAP_CLOSECOPY, g_edCloseOnCopy);
 
     // ---- вкладка «Налаштування» (CAPS-9) ----
     y = PY;
@@ -10229,7 +10251,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // CAPS-21: гарячі клавіші знімків. Якщо котрась зайнята — кажемо про це
     // вголос: мовчазна невдача виглядає як «програма зламалась».
     g_edLastAction  = RegLoadInt(kRegEdLast, 0, 0, 1);
-    g_edCloseOnCopy = RegLoadInt(kRegEdCloseCopy, 1, 0, 1) != 0;
     CapLoadHotkeys();
     if (!CapApplyHotkeys(hwnd)) TrayBalloon(kAppName, S(Str::CapHkBusy));
     CapHkRefresh();
