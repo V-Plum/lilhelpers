@@ -504,6 +504,24 @@ X(EdFit,              L"Вписати",                       L"Fit")          
 X(EdSecShot,          L"ЗНІМОК",                        L"IMAGE")                                      \
 X(EdFmtSource,        L"Зображення · %d × %d",          L"Image · %d × %d")                            \
 X(EdFmtMarks,         L"Позначок: %d",                  L"Marks: %d")                                  \
+X(EdSecTone,          L"ТОН",                           L"TONE")                                       \
+X(EdExposure,         L"Експозиція",                    L"Exposure")                                   \
+X(EdGamma,            L"Гама",                          L"Gamma")                                      \
+X(EdContrast,         L"Контраст",                      L"Contrast")                                   \
+X(EdToneReset,        L"Скинути",                       L"Reset")                                      \
+X(EdCompare,          L"Порівняти",                     L"Compare")                                    \
+X(EdOriginal,         L"вихідний кадр",                 L"original frame")                             \
+X(EdTipRotL,          L"Повернути ліворуч",             L"Rotate left")                                \
+X(EdTipRotR,          L"Повернути праворуч",            L"Rotate right")                               \
+X(EdTipFlipH,         L"Дзеркало по горизонталі",       L"Mirror horizontally")                        \
+X(EdTipFlipV,         L"Дзеркало по вертикалі",         L"Mirror vertically")                          \
+X(EdTipExposure,      L"Експозиція, EV",                L"Exposure, EV")                               \
+X(EdTipGamma,         L"Гама: середні тони",            L"Gamma: midtones")                            \
+X(EdTipContrast,      L"Контраст",                      L"Contrast")                                   \
+X(EdTipToneReset,     L"Повернути тон, як було при захопленні",                                        \
+                                                        L"Back to the tone as captured")               \
+X(EdTipCompare,       L"Тримайте, щоб побачити вихідний кадр",                                         \
+                                                        L"Hold to see the original frame")             \
 X(EdOpenTitle,        L"Відкрити зображення",           L"Open image")                                 \
 X(EdOpenBtn,          L"Відкрити",                      L"Open")                                       \
 X(EdToolSelect,       L"Вибір",                         L"Select")                                     \
@@ -7577,6 +7595,11 @@ struct EdSnap {
     std::vector<EdObj> objs;
     int sel;
     RECT crop;        // кадр — теж частина стану, інакше Ctrl+Z повертав би не все
+    // Тон і геометрія — так само стан, а не «налаштування»: поворот зсуває
+    // кожну позначку, і повернути самі позначки без нього означало б покласти
+    // їх не туди.
+    int exposure, gamma, contrast, rot;
+    bool mirror;
 };
 
 struct EdTile {
@@ -7594,9 +7617,13 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Thick, Fill, Size, Bold, Italic, Align, Stroke, Dup, Open,
                    OpenMenu, Min, Max, Close, HideMode, Strength,
                    NumStart, NumReset, StampPick, StampMore, NumGroup, NumNext,
-                   Aspect, CropReset, CropOk, CropNo };
+                   Aspect, CropReset, CropOk, CropNo,
+                   RotL, RotR, FlipH, FlipV, Exposure, Gamma, Contrast,
+                   ToneReset, Compare };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
+
+EdHit g_edToneWhat = EdHit::Exposure;   // який саме повзунок тону зараз тягнуть
 
 enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoDel, IcoOpacity, IcoChevR, IcoChevL, IcoMinus, IcoPlus,
@@ -7606,9 +7633,11 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoWinMin, IcoWinMax, IcoWinRestore, IcoWinClose,
              IcoHide, IcoMark, IcoBlur, IcoPixels, IcoPlate, IcoStrength,
              IcoCounter, IcoStamp, IcoNewGroup, IcoMore, IcoCrop,
+             IcoRotL, IcoRotR, IcoFlipH, IcoFlipV, IcoCompare,
              IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn };
 
-enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength, Crop, CropMove };
+enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength, Crop, CropMove,
+                    Tone, Compare };
 
 HWND  g_edWnd = nullptr;
 HFONT g_edFont = nullptr, g_edFontBold = nullptr, g_edFontSmall = nullptr;
@@ -7622,6 +7651,24 @@ int      g_edImgW = 0, g_edImgH = 0;
 wchar_t  g_edSource[MAX_PATH] = {};
 bool     g_edHdr = false, g_edToneMapped = false;   // CAPS-21: звідки прийшов кадр
 float    g_edSdrWhite = -1.0f;                      // ніт; -1 = система не сказала
+
+// CAPS-28. Оригінал лишається недоторканим, а все, що робить права панель, —
+// РЕЦЕПТ поверх нього: поворот, дзеркало, три повзунки тону. g_edImg — результат
+// цього рецепта, і саме він іде в буфер, у файл і в плитки ефектів. Через це
+// «Порівняти» нічого не коштує, а двічі застосований тон не накопичується.
+Gdiplus::Bitmap* g_edSrc = nullptr;   // як прийшло; ніколи не змінюється
+Gdiplus::Bitmap* g_edCmp = nullptr;   // той самий рецепт БЕЗ тону, лише поки порівнюють
+int      g_edExposure = 0;            // -20..+20 = -2,0…+2,0 EV кроком 0,1
+int      g_edGamma    = 100;          // 50..200 = 0,50…2,00
+int      g_edContrast = 0;            // -50..+50
+int      g_edRot      = 0;            // чверті оберту за годинниковою
+bool     g_edMirror   = false;        // дзеркало по горизонталі ДО повороту
+bool     g_edCompare  = false;        // кнопку «Порівняти» тримають
+bool     g_edTonePushed = false;      // чи вже поклали знімок для Ctrl+Z
+
+void EdRebuildImage();                // тіло далеко нижче: йому потрібні плитки
+void EdFitView();                     // поворот міняє сторони — вид доводиться вписувати
+void EdLayout(HWND hwnd);
 // CAPS-22: стан виходів. Остання використана дія підсвічується як дія для Enter.
 int      g_edLastAction  = 0;      // 0 буфер, 1 файл
 bool     g_edSaved       = false;  // уже кудись пішло — Esc не питає
@@ -7866,6 +7913,49 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
     // Приховати — око з рискою: те саме, чим позначають «не показувати».
     // Лічильник — кружечок із одиницею всередині; малюємо саму цифру шляхами,
     // бо тексту в піктограмах у нас немає.
+    // Поворот — три чверті кола зі стрілкою на кінці: видно і напрямок, і те,
+    // що це саме оберт, а не «повторити».
+    case IcoRotR:
+        g.DrawArc(&pen, 3.4f, 3.4f, 13.2f, 13.2f, -60.0f, 300.0f);
+        g.DrawLine(&pen, 13.2f, 2.2f, 16.6f, 5.4f);
+        g.DrawLine(&pen, 16.6f, 5.4f, 13.0f, 8.2f);
+        break;
+    case IcoRotL:
+        g.DrawArc(&pen, 3.4f, 3.4f, 13.2f, 13.2f, -120.0f, -300.0f);
+        g.DrawLine(&pen, 6.8f, 2.2f, 3.4f, 5.4f);
+        g.DrawLine(&pen, 3.4f, 5.4f, 7.0f, 8.2f);
+        break;
+    // Дзеркало — дві половинки, що дивляться одна на одну через пунктирну вісь.
+    case IcoFlipH: {
+        Gdiplus::Pen ax(c, 1.2f);
+        ax.SetDashStyle(Gdiplus::DashStyleDash);
+        g.DrawLine(&ax, 10.0f, 1.6f, 10.0f, 18.4f);
+        Gdiplus::PointF l[3] = { { 7.6f, 4.4f }, { 7.6f, 15.6f }, { 1.8f, 10.0f } };
+        Gdiplus::PointF r[3] = { { 12.4f, 4.4f }, { 12.4f, 15.6f }, { 18.2f, 10.0f } };
+        Gdiplus::SolidBrush b(c);
+        g.FillPolygon(&b, l, 3);
+        g.DrawPolygon(&pen, r, 3);
+        break;
+    }
+    case IcoFlipV: {
+        Gdiplus::Pen ax(c, 1.2f);
+        ax.SetDashStyle(Gdiplus::DashStyleDash);
+        g.DrawLine(&ax, 1.6f, 10.0f, 18.4f, 10.0f);
+        Gdiplus::PointF u[3] = { { 4.4f, 7.6f }, { 15.6f, 7.6f }, { 10.0f, 1.8f } };
+        Gdiplus::PointF d[3] = { { 4.4f, 12.4f }, { 15.6f, 12.4f }, { 10.0f, 18.2f } };
+        Gdiplus::SolidBrush b(c);
+        g.FillPolygon(&b, u, 3);
+        g.DrawPolygon(&pen, d, 3);
+        break;
+    }
+    // Порівняння — квадрат, розділений по діагоналі: до і після.
+    case IcoCompare: {
+        Gdiplus::PointF tri[3] = { { 2.6f, 17.4f }, { 17.4f, 17.4f }, { 17.4f, 2.6f } };
+        Gdiplus::SolidBrush b(c);
+        g.FillPolygon(&b, tri, 3);
+        g.DrawRectangle(&pen, 2.6f, 2.6f, 14.8f, 14.8f);
+        break;
+    }
     // Кадр — дві кутові дужки, як позначають обрізання у фоторедакторах.
     case IcoCrop:
         g.DrawLine(&pen, 5.6f, 1.8f, 5.6f, 14.4f);
@@ -8128,12 +8218,21 @@ int EdTextWidth(HDC dc, const wchar_t* s, HFONT f)
 
 // ---- модель: знімки для скасування -------------------------------------
 
+// Одне місце, де знімок дізнається про тон і геометрію: три копії цього
+// присвоєння вже встигли б розійтися.
+void EdSnapTone(EdSnap& s)
+{
+    s.exposure = g_edExposure; s.gamma = g_edGamma; s.contrast = g_edContrast;
+    s.rot = g_edRot;           s.mirror = g_edMirror;
+}
+
 void EdPushUndo()
 {
     EdSnap s;
     s.objs = g_edObjs;
     s.sel  = g_edSel;
     s.crop = g_edCrop;
+    EdSnapTone(s);
     g_edUndo.push_back(s);
     if ((int)g_edUndo.size() > kEdUndoMax) g_edUndo.erase(g_edUndo.begin());
     g_edRedo.clear();
@@ -8145,6 +8244,14 @@ void EdApply(const EdSnap& s)
     g_edSel  = s.sel;
     g_edCrop = s.crop;
     if (g_edSel >= (int)g_edObjs.size()) g_edSel = -1;
+
+    const bool geom = (s.rot != g_edRot || s.mirror != g_edMirror);
+    const bool tone = (s.exposure != g_edExposure || s.gamma != g_edGamma ||
+                       s.contrast != g_edContrast);
+    g_edExposure = s.exposure; g_edGamma = s.gamma; g_edContrast = s.contrast;
+    g_edRot = s.rot; g_edMirror = s.mirror;
+    if (geom || tone) EdRebuildImage();
+    if (geom && g_edWnd) { EdFitView(); EdLayout(g_edWnd); }
 }
 
 void EdUndoAction()
@@ -8154,6 +8261,7 @@ void EdUndoAction()
     cur.objs = g_edObjs;
     cur.sel  = g_edSel;
     cur.crop = g_edCrop;
+    EdSnapTone(cur);
     g_edRedo.push_back(cur);
     EdApply(g_edUndo.back());
     g_edUndo.pop_back();
@@ -8167,6 +8275,7 @@ void EdRedoAction()
     cur.objs = g_edObjs;
     cur.sel  = g_edSel;
     cur.crop = g_edCrop;
+    EdSnapTone(cur);
     g_edUndo.push_back(cur);
     EdApply(g_edRedo.back());
     g_edRedo.pop_back();
@@ -8350,6 +8459,18 @@ void EdFitView()
 void EdAdd(const RECT& r, EdHit what, int idx) { g_edRegions.push_back({ r, what, idx }); }
 
 RECT EdPill(int x, int cy, int w, int h) { RECT r = { x, cy - h / 2, x + w, cy + h / 2 }; return r; }
+
+// ⚠ Висоту секції «ЗНІМОК» рахує ОДНА функція: розкладка ставить по ній
+// кнопки, малювання — рядки. Дві копії цієї арифметики розійшлися б на першому
+// ж рядку, який з'являється не завжди (джерело, HDR).
+int EdPanelInfoBottom()
+{
+    int y = g_edRcPanel.top + EdPx(14) + EdPx(18) + EdPx(12);
+    y += EdPx(20) + EdPx(6);                       // «Зображення · Ш × В»
+    if (g_edSource[0]) y += EdPx(20) + EdPx(6);
+    if (g_edHdr)       y += EdPx(20) + EdPx(6);
+    return y + EdPx(20);                           // «Позначок: N»
+}
 
 void EdLayout(HWND hwnd)
 {
@@ -8682,6 +8803,38 @@ void EdLayout(HWND hwnd)
         }
         EdAdd(r, EdHit::Panel, 0);
     }
+
+    // CAPS-28: геометрія знімка і тон. Живуть у правій панелі, бо стосуються
+    // САМОГО ЗНІМКА, а не позначки — це і є межа між панеллю і смугою.
+    if (g_edPanelOpen) {
+        const int px = g_edRcPanel.left + EdPx(14);
+        const int pr = g_edRcPanel.right - EdPx(14);
+        int y = EdPanelInfoBottom() + EdPx(16);
+
+        const int gb = EdPx(34), gh = EdPx(32);
+        const int step = ((pr - px) - gb) / 3;
+        const EdHit geo[4] = { EdHit::RotL, EdHit::RotR, EdHit::FlipH, EdHit::FlipV };
+        for (int i = 0; i < 4; ++i) {
+            RECT r = { px + i * step, y, px + i * step + gb, y + gh };
+            EdAdd(r, geo[i], 0);
+        }
+        y += gh + EdPx(20) + EdPx(18) + EdPx(10);   // + заголовок «ТОН»
+
+        const EdHit sl[3] = { EdHit::Exposure, EdHit::Gamma, EdHit::Contrast };
+        for (int i = 0; i < 3; ++i) {
+            y += EdPx(18) + EdPx(4);                // підпис і значення над смугою
+            RECT r = { px, y, pr, y + EdPx(20) };
+            EdAdd(r, sl[i], 0);
+            y += EdPx(20) + EdPx(12);
+        }
+
+        y += EdPx(6);
+        const int bw = (pr - px - EdPx(8)) / 2, bh2 = EdPx(30);
+        RECT rt = { px, y, px + bw, y + bh2 };
+        EdAdd(rt, EdHit::ToneReset, 0);
+        RECT rc2 = { pr - bw, y, pr, y + bh2 };
+        EdAdd(rc2, EdHit::Compare, 0);
+    }
 }
 
 const EdRegion* EdFind(POINT pt)
@@ -8711,6 +8864,33 @@ void EdPaintButton(Gdiplus::Graphics& g, const RECT& r, const EdTheme& t,
     else if (flat)   { fill = EdC(t.hot, hot ? 255 : 0); bd = EdC(t.btnBd, 0); }
     else             { fill = EdC(hot ? t.hot : t.btn); bd = EdC(t.btnBd); }
     EdFillRound(g, r, (float)EdPx(6), &fill, (bd.GetAlpha() ? &bd : nullptr));
+}
+
+// Повзунок із власним діапазоном. Прозорість і сила живуть у 10…100, тон —
+// у трьох різних шкалах, тож діапазон став параметром, а не константою.
+void EdPaintSliderRange(Gdiplus::Graphics& g, const RECT& r, const EdTheme& t,
+                        int value, int lo, int hi, int zero)
+{
+    const int cy = (r.top + r.bottom) / 2;
+    RECT track = { r.left, cy - EdPx(2), r.right, cy + EdPx(2) };
+    Gdiplus::Color bg = EdC(t.border);
+    EdFillRound(g, track, (float)EdPx(2), &bg, nullptr);
+    const int w = r.right - r.left;
+    const int span = (hi > lo) ? (hi - lo) : 1;
+    const int fx = r.left + (int)((double)(value - lo) / span * w + 0.5);
+    // Заливка йде від ТИПОВОГО значення, а не від лівого краю: у тону нуль
+    // посередині, і смужка вліво від нього має означати «темніше», а не «мало».
+    const int zx = r.left + (int)((double)(zero - lo) / span * w + 0.5);
+    RECT fill = { fx < zx ? fx : zx, track.top, fx < zx ? zx : fx, track.bottom };
+    if (fill.right > fill.left) {
+        Gdiplus::Color ac = EdC(t.accent);
+        EdFillRound(g, fill, (float)EdPx(2), &ac, nullptr);
+    }
+    const int k = EdPx(14);
+    RECT knob = { fx - k / 2, cy - k / 2, fx + k / 2, cy + k / 2 };
+    Gdiplus::Color kf = EdC(g_edDark ? RGB(230, 230, 230) : RGB(255, 255, 255));
+    Gdiplus::Color kb = EdC(t.btnBd);
+    EdFillRound(g, knob, k / 2.0f, &kf, &kb);
 }
 
 void EdPaintSlider(Gdiplus::Graphics& g, const RECT& r, const EdTheme& t, int percent)
@@ -9329,6 +9509,193 @@ void EdTilesClear()
     g_edTiles.clear();
 }
 
+// ---- CAPS-28: тон і геометрія -------------------------------------------
+//
+// Ручна правка тону — паліатив там, де автоматичний тон-мапінг не допоміг або
+// оригіналу вже нема: чужа програма поклала в буфер биту 8-бітну картинку, і
+// повернути з неї втрачене нічим, крім повзунків.
+
+bool EdToneDefault()
+{
+    return g_edExposure == 0 && g_edGamma == 100 && g_edContrast == 0;
+}
+
+bool EdGeomDefault()
+{
+    return g_edRot == 0 && !g_edMirror;
+}
+
+// Уся арифметика тону вміщується в таблицю на 256 значень: канал 8-бітний, тож
+// більше варіантів просто не буває. Завдяки цьому повзунок рухається по 4K так
+// само легко, як по мініатюрі.
+void EdBuildLut(BYTE lut[256])
+{
+    const double mul = pow(2.0, g_edExposure / 10.0);
+    const double gam = g_edGamma / 100.0;
+    // Контраст як нахил навколо середини сірого. Коефіцієнт — класична формула
+    // (259*(C+255)) / (255*(259-C)): на C = 0 дає рівно одиницю.
+    const double cc = g_edContrast * 255.0 / 100.0;
+    const double k  = (259.0 * (cc + 255.0)) / (255.0 * (259.0 - cc));
+    for (int i = 0; i < 256; ++i) {
+        double v = i / 255.0;
+        v *= mul;
+        if (v > 1.0) v = 1.0;
+        if (gam != 1.0) v = pow(v, 1.0 / gam);
+        v = k * (v - 0.5) + 0.5;
+        if (v < 0.0) v = 0.0;
+        if (v > 1.0) v = 1.0;
+        lut[i] = (BYTE)(v * 255.0 + 0.5);
+    }
+}
+
+// Поворот і дзеркало віддаємо GDI+: RotateFlip переставляє пікселі без жодної
+// інтерполяції, піксель у піксель. Наші «поворот + дзеркало» складаються рівно
+// в одне з восьми його значень, бо M(R(a)) = R(-a)(M).
+Gdiplus::Bitmap* EdBuildWorking(bool withTone)
+{
+    if (!g_edSrc) return nullptr;
+    const int sw = (int)g_edSrc->GetWidth(), sh = (int)g_edSrc->GetHeight();
+    Gdiplus::Bitmap* w = g_edSrc->Clone(0, 0, sw, sh, PixelFormat32bppPARGB);
+    if (!w || w->GetLastStatus() != Gdiplus::Ok) { delete w; return nullptr; }
+
+    const int idx = g_edMirror ? 4 + (4 - g_edRot) % 4 : g_edRot;
+    if (idx != 0) w->RotateFlip((Gdiplus::RotateFlipType)idx);
+
+    if (withTone && !EdToneDefault()) {
+        BYTE lut[256];
+        EdBuildLut(lut);
+        const int ww = (int)w->GetWidth(), hh = (int)w->GetHeight();
+        Gdiplus::BitmapData bd = {};
+        Gdiplus::Rect all(0, 0, ww, hh);
+        if (w->LockBits(&all, Gdiplus::ImageLockModeRead | Gdiplus::ImageLockModeWrite,
+                        PixelFormat32bppPARGB, &bd) == Gdiplus::Ok) {
+            BYTE* px = (BYTE*)bd.Scan0;
+            if (bd.Stride > 0) {
+                for (int y = 0; y < hh; ++y) {
+                    BYTE* row = px + (size_t)y * bd.Stride;
+                    for (int x = 0; x < ww; ++x) {
+                        BYTE* p = row + x * 4;
+                        const BYTE a = p[3];
+                        for (int c = 0; c < 3; ++c) {
+                            // Канали ПРЕМНОЖЕНІ на альфу: піднятись вище за неї
+                            // їм не можна, інакше піксель перестає бути дійсним.
+                            const BYTE v = lut[p[c]];
+                            p[c] = v > a ? a : v;
+                        }
+                    }
+                }
+            }
+            w->UnlockBits(&bd);
+        }
+    }
+    return w;
+}
+
+void EdRebuildImage()
+{
+    Gdiplus::Bitmap* w = EdBuildWorking(true);
+    if (!w) return;
+    delete g_edImg;
+    g_edImg  = w;
+    g_edImgW = (int)w->GetWidth();
+    g_edImgH = (int)w->GetHeight();
+    // Плитки розмиття й маркера зроблені з ПІКСЕЛІВ знімка. Щойно пікселі інші —
+    // плитки брешуть, і жоден ключ кешу цього не помітить.
+    EdTilesClear();
+}
+
+// Поворот і дзеркало переставляють позначки разом зі знімком: стрілка має
+// лишитись на тому самому місці картинки, а не поїхати за край. Альтернатива —
+// тримати матрицю і мапити на льоту — протягла б другу систему координат крізь
+// влучання, кадр, плитки й експорт.
+POINT EdMapPt(int step, int W, int H, POINT p)
+{
+    POINT q;
+    switch (step) {
+    case 0: q.x = H - p.y; q.y = p.x;     break;   // за годинниковою
+    case 1: q.x = p.y;     q.y = W - p.x; break;   // проти годинникової
+    case 2: q.x = W - p.x; q.y = p.y;     break;   // дзеркало по горизонталі
+    default: q.x = p.x;    q.y = H - p.y; break;   // дзеркало по вертикалі
+    }
+    return q;
+}
+
+void EdTransformAll(int step, int W, int H)
+{
+    for (size_t i = 0; i < g_edObjs.size(); ++i) {
+        EdObj& o = g_edObjs[i];
+        if (!o.pts.empty()) {
+            for (size_t k = 0; k < o.pts.size(); ++k) o.pts[k] = EdMapPt(step, W, H, o.pts[k]);
+            EdPenBounds(o);
+            continue;
+        }
+        if (EdIsSegment(o.kind)) {
+            POINT a = { o.x, o.y }, b = { o.x + o.w, o.y + o.h };
+            a = EdMapPt(step, W, H, a);
+            b = EdMapPt(step, W, H, b);
+            o.x = a.x; o.y = a.y; o.w = b.x - a.x; o.h = b.y - a.y;
+            continue;
+        }
+        // Напис, кружечок і штамп на бік не лягають: у них переїздить місце, а
+        // сам блок лишається того самого розміру й тієї самої орієнтації.
+        const bool upright = (o.kind == EdKind::Text || o.kind == EdKind::Counter ||
+                              o.kind == EdKind::Stamp);
+        POINT c = { o.x + o.w / 2, o.y + o.h / 2 };
+        c = EdMapPt(step, W, H, c);
+        const bool swap = (step <= 1) && !upright;
+        const int nw = swap ? o.h : o.w, nh = swap ? o.w : o.h;
+        o.x = c.x - nw / 2; o.y = c.y - nh / 2; o.w = nw; o.h = nh;
+    }
+    if (EdHasCrop()) {
+        POINT a = { g_edCrop.left, g_edCrop.top }, b = { g_edCrop.right, g_edCrop.bottom };
+        a = EdMapPt(step, W, H, a);
+        b = EdMapPt(step, W, H, b);
+        g_edCrop.left   = a.x < b.x ? a.x : b.x;
+        g_edCrop.right  = a.x < b.x ? b.x : a.x;
+        g_edCrop.top    = a.y < b.y ? a.y : b.y;
+        g_edCrop.bottom = a.y < b.y ? b.y : a.y;
+    }
+}
+
+void EdGeomDone()
+{
+    EdRebuildImage();
+    if (g_edWnd) {
+        EdFitView();
+        EdLayout(g_edWnd);
+        InvalidateRect(g_edWnd, nullptr, TRUE);
+    }
+}
+
+void EdRotateBy(bool cw)
+{
+    if (!g_edSrc) return;
+    EdPushUndo();
+    EdTransformAll(cw ? 0 : 1, g_edImgW, g_edImgH);
+    g_edRot = (g_edRot + (cw ? 1 : 3)) % 4;
+    EdGeomDone();
+}
+
+void EdMirrorBy(bool horizontal)
+{
+    if (!g_edSrc) return;
+    EdPushUndo();
+    EdTransformAll(horizontal ? 2 : 3, g_edImgW, g_edImgH);
+    // Дзеркало не додається до повороту, а «перевертає» його: M(R(a)) = R(-a)(M).
+    g_edRot = horizontal ? (4 - g_edRot) % 4 : (6 - g_edRot) % 4;
+    g_edMirror = !g_edMirror;
+    EdGeomDone();
+}
+
+void EdToneReset()
+{
+    if (EdToneDefault()) return;
+    EdPushUndo();
+    g_edExposure = 0; g_edGamma = 100; g_edContrast = 0;
+    EdRebuildImage();
+    if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
+}
+
 std::wstring EdTileKey(const EdObj& o, double s)
 {
     wchar_t head[96];
@@ -9923,8 +10290,27 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     g.SetInterpolationMode(EdScale() < 1.0 ? Gdiplus::InterpolationModeHighQualityBicubic
                                            : Gdiplus::InterpolationModeNearestNeighbor);
     g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-    g.DrawImage(g_edImg, Gdiplus::Rect(ir.left, ir.top, ir.right - ir.left, ir.bottom - ir.top),
+    // Поки тримають «Порівняти», полотно показує кадр без тону і БЕЗ позначок:
+    // це вихідний кадр, а не «те саме, тільки блідіше». Позначки ще й розійшлися
+    // б із плитками розмиття, зробленими вже з виправлених пікселів.
+    const bool orig = (g_edCompare && g_edCmp);
+    g.DrawImage(orig ? g_edCmp : g_edImg,
+                Gdiplus::Rect(ir.left, ir.top, ir.right - ir.left, ir.bottom - ir.top),
                 EdViewX(), EdViewY(), EdViewW(), EdViewH(), Gdiplus::UnitPixel);
+    if (orig) {
+        wchar_t ob[64];
+        lstrcpynW(ob, S(Str::EdOriginal), 64);
+        const int tw = EdTextWidth(dc, ob, g_edFontBold);
+        RECT plate = { g_edRcCanvas.left + EdPx(14), g_edRcCanvas.top + EdPx(14),
+                       g_edRcCanvas.left + EdPx(14) + tw + EdPx(20),
+                       g_edRcCanvas.top + EdPx(14) + EdPx(28) };
+        Gdiplus::Color pb(220, 24, 24, 28);
+        EdFillRound(g, plate, (float)EdPx(7), &pb, nullptr);
+        EdDrawText(dc, plate, ob, g_edFontBold, RGB(255, 255, 255),
+                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        g.Restore(st);
+        return;
+    }
 
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     const double s = EdScale();
@@ -10009,6 +10395,68 @@ void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     wsprintfW(buf, S(Str::EdFmtMarks), (int)g_edObjs.size());
     RECT l3 = { x, y, g_edRcPanel.right - EdPx(14), y + EdPx(20) };
     EdDrawText(dc, l3, buf, g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    // Далі — CAPS-28. Жодної власної арифметики: усі прямокутники вже пораховані
+    // в розкладці, тут їх лише впізнають. Саме через це панель не роз'їжджається
+    // з тим, у що клікають.
+    const int pr = g_edRcPanel.right - EdPx(14);
+    const EdHit geo[4] = { EdHit::RotL, EdHit::RotR, EdHit::FlipH, EdHit::FlipV };
+    const int gico[4]  = { IcoRotL, IcoRotR, IcoFlipH, IcoFlipV };
+    for (int i = 0; i < 4; ++i) {
+        const RECT* r = EdRegionRect(geo[i], 0);
+        if (!r) return;
+        EdPaintButton(g, *r, t, false, g_edHotWhat == geo[i], false);
+        EdIcon(g, gico[i], EdIconBox(*r), EdC(t.text), 1.5f);
+    }
+    if (const RECT* r0 = EdRegionRect(EdHit::RotL, 0)) {
+        RECT th = { x, r0->bottom + EdPx(20), pr, r0->bottom + EdPx(20) + EdPx(18) };
+        EdDrawText(dc, th, S(Str::EdSecTone), g_edFontSmall, t.text2,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    const EdHit sls[3] = { EdHit::Exposure, EdHit::Gamma, EdHit::Contrast };
+    const Str   labs[3] = { Str::EdExposure, Str::EdGamma, Str::EdContrast };
+    for (int i = 0; i < 3; ++i) {
+        const RECT* r = EdRegionRect(sls[i], 0);
+        if (!r) return;
+        RECT lr = { x, r->top - EdPx(4) - EdPx(18), pr, r->top - EdPx(4) };
+        EdDrawText(dc, lr, S(labs[i]), g_edFont, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        // Значення поруч із підписом: інакше дізнатися, на скільки саме зсунуто,
+        // можна хіба що на око.
+        wchar_t vb[32];
+        if (i == 0) {
+            const int a = g_edExposure < 0 ? -g_edExposure : g_edExposure;
+            wsprintfW(vb, L"%s%d,%d EV", g_edExposure < 0 ? L"-" : (g_edExposure > 0 ? L"+" : L""),
+                      a / 10, a % 10);
+        } else if (i == 1) {
+            wsprintfW(vb, L"%d,%02d", g_edGamma / 100, g_edGamma % 100);
+        } else {
+            wsprintfW(vb, L"%s%d", g_edContrast > 0 ? L"+" : L"",
+                      g_edContrast);
+        }
+        EdDrawText(dc, lr, vb, g_edFont, t.text2, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        const int val  = i == 0 ? g_edExposure : i == 1 ? g_edGamma : g_edContrast;
+        const int lo   = i == 0 ? -20 : i == 1 ?  50 : -50;
+        const int hi   = i == 0 ?  20 : i == 1 ? 200 :  50;
+        const int zero = i == 1 ? 100 : 0;
+        EdPaintSliderRange(g, *r, t, val, lo, hi, zero);
+    }
+
+    // Обидві кнопки мовчать, поки тон типовий: скидати й порівнювати нема чого.
+    const bool touched = !EdToneDefault();
+    if (const RECT* r = EdRegionRect(EdHit::ToneReset, 0)) {
+        EdPaintButton(g, *r, t, false, touched && g_edHotWhat == EdHit::ToneReset, false);
+        EdDrawText(dc, *r, S(Str::EdToneReset), g_edFont, touched ? t.text : t.text2,
+                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    if (const RECT* r = EdRegionRect(EdHit::Compare, 0)) {
+        EdPaintButton(g, *r, t, g_edCompare, touched && g_edHotWhat == EdHit::Compare, false);
+        const COLORREF fg = touched ? t.text : t.text2;
+        RECT ic = { r->left + EdPx(8), r->top, r->left + EdPx(8) + EdPx(16), r->bottom };
+        EdIcon(g, IcoCompare, EdIconBox(ic), EdC(fg), 1.4f);
+        RECT lr = { ic.right + EdPx(4), r->top, r->right - EdPx(6), r->bottom };
+        EdDrawText(dc, lr, S(Str::EdCompare), g_edFont, fg, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
 }
 
 void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
@@ -10212,6 +10660,30 @@ void EdSetStrengthAt(int mouseX)
         g_edObjs[g_edSel].strength = p;
     else
         g_edStrength = p;
+    InvalidateRect(g_edWnd, nullptr, FALSE);
+}
+
+// Три повзунки тону — одна функція: діапазони різні, а поведінка однакова.
+// Знімок для Ctrl+Z кладемо на ПЕРШІЙ реальній зміні, а не на натисканні:
+// інакше клік, який нічого не зсунув, залишав би порожній крок скасування.
+void EdSetToneAt(EdHit what, int mouseX)
+{
+    const RECT* sl = EdRegionRect(what, 0);
+    if (!sl) return;
+    const int w = sl->right - sl->left;
+    if (w <= 0) return;
+    int lo, hi;
+    int* dst;
+    if (what == EdHit::Exposure)   { lo = -20; hi =  20; dst = &g_edExposure; }
+    else if (what == EdHit::Gamma) { lo =  50; hi = 200; dst = &g_edGamma; }
+    else                           { lo = -50; hi =  50; dst = &g_edContrast; }
+    int v = lo + (int)((mouseX - sl->left) * (double)(hi - lo) / w + 0.5);
+    if (v < lo) v = lo;
+    if (v > hi) v = hi;
+    if (*dst == v) return;
+    if (!g_edTonePushed) { EdPushUndo(); g_edTonePushed = true; }
+    *dst = v;
+    EdRebuildImage();
     InvalidateRect(g_edWnd, nullptr, FALSE);
 }
 
@@ -10560,6 +11032,15 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::NumReset: return Str::EdTipNumReset;
     case EdHit::StampMore: return Str::EdTipStampMore;
     case EdHit::Strength: return Str::EdTipStrength;
+    case EdHit::RotL:      return Str::EdTipRotL;
+    case EdHit::RotR:      return Str::EdTipRotR;
+    case EdHit::FlipH:     return Str::EdTipFlipH;
+    case EdHit::FlipV:     return Str::EdTipFlipV;
+    case EdHit::Exposure:  return Str::EdTipExposure;
+    case EdHit::Gamma:     return Str::EdTipGamma;
+    case EdHit::Contrast:  return Str::EdTipContrast;
+    case EdHit::ToneReset: return Str::EdTipToneReset;
+    case EdHit::Compare:   return Str::EdTipCompare;
     case EdHit::Size:    return idx ? Str::EdTipSizeUp : Str::EdTipSizeDn;
     case EdHit::Bold:    return Str::EdTipBold;
     case EdHit::Italic:  return Str::EdTipItalic;
@@ -10822,7 +11303,9 @@ LRESULT CALLBACK EdEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 // зникає, тут — лише вміст.
 bool EdConfirmReplace()
 {
-    if (g_edSaved || g_edObjs.empty()) return true;
+    // Порожній список позначок ще не означає «нічого не зроблено»: поворот
+    // і тон — теж робота, і втрачати їх мовчки не можна.
+    if (g_edSaved || (g_edObjs.empty() && EdToneDefault() && EdGeomDefault())) return true;
     return MessageBoxW(g_edWnd, S(Str::EdAskReplace), kAppName,
                        MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
 }
@@ -11374,6 +11857,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         if (g_edDrag == EdDrag::Slider) { EdSetAlphaAt(pt.x); return 0; }
         if (g_edDrag == EdDrag::Strength) { EdSetStrengthAt(pt.x); return 0; }
+        if (g_edDrag == EdDrag::Tone) { EdSetToneAt(g_edToneWhat, pt.x); return 0; }
         if (g_edDrag == EdDrag::Pan) {
             g_edPanX += pt.x - g_edDragFrom.x;
             g_edPanY += pt.y - g_edDragFrom.y;
@@ -11726,6 +12210,31 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             SetCapture(hwnd);
             EdSetAlphaAt(pt.x);
             return 0;
+        case EdHit::RotL:  EdRotateBy(false); return 0;
+        case EdHit::RotR:  EdRotateBy(true);  return 0;
+        case EdHit::FlipH: EdMirrorBy(true);  return 0;
+        case EdHit::FlipV: EdMirrorBy(false); return 0;
+        case EdHit::ToneReset: EdToneReset(); return 0;
+        case EdHit::Exposure:
+        case EdHit::Gamma:
+        case EdHit::Contrast:
+            g_edToneWhat = r->what;
+            g_edTonePushed = false;
+            g_edDrag = EdDrag::Tone;
+            SetCapture(hwnd);
+            EdSetToneAt(r->what, pt.x);
+            return 0;
+        case EdHit::Compare:
+            // Вихідний кадр будуємо один раз на натискання: той самий рецепт
+            // без тону. Тримати його постійно означало б другу копію 4K у пам'яті.
+            if (EdToneDefault()) return 0;
+            delete g_edCmp;
+            g_edCmp = EdBuildWorking(false);
+            g_edCompare = true;
+            g_edDrag = EdDrag::Compare;
+            SetCapture(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         case EdHit::Min:   ShowWindow(hwnd, SW_MINIMIZE); return 0;
         case EdHit::Max:   ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE); return 0;
         case EdHit::Close: SendMessageW(hwnd, WM_CLOSE, 0, 0); return 0;
@@ -11913,6 +12422,11 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 }
             }
         }
+        if (g_edDrag == EdDrag::Compare) {
+            g_edCompare = false;
+            delete g_edCmp;
+            g_edCmp = nullptr;
+        }
         if (g_edDrag != EdDrag::None) {
             g_edDrag = EdDrag::None;
             g_edHandle = -1;
@@ -12052,8 +12566,10 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         KillTimer(hwnd, kEdTipTimer);
         if (g_edTip) { DestroyWindow(g_edTip); g_edTip = nullptr; }
         EdTilesClear();
-        delete g_edImg;
-        g_edImg = nullptr;
+        delete g_edImg; g_edImg = nullptr;
+        delete g_edSrc; g_edSrc = nullptr;
+        delete g_edCmp; g_edCmp = nullptr;
+        g_edCompare = false;
         g_edObjs.clear();
         g_edUndo.clear();
         g_edRedo.clear();
@@ -12088,10 +12604,15 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
         registered = true;
     }
 
-    delete g_edImg;
-    g_edImg  = bmp;
-    g_edImgW = (int)bmp->GetWidth();
-    g_edImgH = (int)bmp->GetHeight();
+    // Редактор бере у власність ОРИГІНАЛ, а показує похідне від нього. Новий
+    // знімок приходить із чистим рецептом: чужий поворот і чужий тон на ньому
+    // не мали б сенсу.
+    delete g_edSrc;
+    g_edSrc  = bmp;
+    g_edExposure = 0; g_edGamma = 100; g_edContrast = 0;
+    g_edRot = 0; g_edMirror = false; g_edCompare = false;
+    delete g_edCmp; g_edCmp = nullptr;
+    EdRebuildImage();
     g_edHdr        = hdr;
     g_edToneMapped = toneMapped;
     g_edSdrWhite   = sdrWhite;
@@ -12142,8 +12663,8 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
                               CW_USEDEFAULT, CW_USEDEFAULT, w, h,
                               nullptr, nullptr, hInst, nullptr);
     if (!g_edWnd) {
-        delete g_edImg;
-        g_edImg = nullptr;
+        delete g_edImg; g_edImg = nullptr;
+        delete g_edSrc; g_edSrc = nullptr;
         return;
     }
     ShowWindow(g_edWnd, SW_SHOW);
@@ -12463,7 +12984,9 @@ void EdDoSave()
 // Esc і закриття: питаємо лише тоді, коли є що втрачати.
 bool EdConfirmClose()
 {
-    if (g_edSaved || g_edObjs.empty()) return true;
+    // Порожній список позначок ще не означає «нічого не зроблено»: поворот
+    // і тон — теж робота, і втрачати їх мовчки не можна.
+    if (g_edSaved || (g_edObjs.empty() && EdToneDefault() && EdGeomDefault())) return true;
     return MessageBoxW(g_edWnd, S(Str::EdAskDiscard), kAppName,
                        MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
 }
