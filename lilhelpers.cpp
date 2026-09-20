@@ -536,10 +536,11 @@ X(EdTipPlate,         L"Суцільна плашка",               L"Solid pl
 X(EdTipStrength,      L"Сила приховування",             L"Hiding strength")                            \
 X(EdTipMarkH,         L"Висота смуги",                  L"Band height")                                \
 X(EdTipSize,          L"Розмір",                        L"Size")                                       \
-X(EdTipNum,           L"Наступний номер",               L"Next number")                                \
-X(EdTipNumStart,      L"З якого числа починати",        L"Number to start from")                       \
-X(EdNumReset,         L"Почати",                        L"Restart")                                    \
-X(EdTipNumReset,      L"Скинути лічильник до початку",  L"Reset the counter to the start")             \
+X(EdFmtGroup,         L"Група %d · далі %d",            L"Group %d · next %d")                         \
+X(EdTipNumStart,      L"З якого числа починати групу (перенумеровує її)",                             \
+                      L"Number the group starts from (renumbers it)")                                  \
+X(EdTipNumReset,      L"Нова група: нумерація знову з початку",                                        \
+                      L"New group: numbering starts over")                                             \
 X(EdTipStampMore,     L"Більше емодзі",                 L"More emoji")                                 \
 X(EdTipTextBox,       L"Ручками з боків — ширина блока; кегль — степером",                              \
                       L"Side handles set the block width; type size has a stepper")                    \
@@ -7405,7 +7406,13 @@ struct EdObj {
     int      strength;
     // Лічильник і штамп. num — число в кружечку; stamp — що саме за штамп:
     // 0..5 власні контури, від kEdEmojiBase — емодзі за номером у таблиці.
-    int      num;
+    // Лічильник НЕ зберігає свого номера. Номер = початок групи + скільки в
+    // цій групі кружечків, створених раніше. Тому видалення першого зсуває
+    // решту, зміна початку перенумеровує всіх, а новий знімок починає з
+    // початку сам собою — усе це не окремі правила, а одна формула.
+    int      seq;     // порядок створення серед лічильників
+    int      group;   // група: у кожної своя незалежна нумерація
+    int      start;   // з якого числа починає група (однакове в усіх її кружечках)
     int      stamp;
 };
 
@@ -7570,7 +7577,7 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Front, Back, Del, ZoomOut, ZoomIn, Fit, Panel, Copy, Save,
                    Thick, Fill, Size, Bold, Italic, Align, Stroke, Dup, Open,
                    OpenMenu, Min, Max, Close, HideMode, Strength,
-                   Num, NumStart, NumReset, StampPick, StampMore };
+                   NumStart, NumReset, StampPick, StampMore };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7637,8 +7644,13 @@ COLORREF g_edMarkColor = RGB(255, 255, 0);
 // Лічильник нумерує сам, а «початок» — те число, до якого його скидає кнопка
 // «Почати». Видалення кружечка з середини решту НЕ перенумеровує: підпис у чаті
 // поруч зі знімком інакше перестав би збігатися.
-int      g_edNextNum  = 1;
-int      g_edStartNum = 1;
+int      g_edStartNum = 1;        // початок для групи, в якій ще нема кружечків
+int      g_edSeq      = 0;        // лічильник створень, лише зростає
+int      g_edCounterGroup = 0;    // куди піде наступний кружечок
+// Формули нумерації визначені разом із малюванням, а потрібні вже розкладці.
+int EdCurGroup();
+int EdGroupStart(int grp);
+int EdGroupCount(int grp);
 int      g_edStampSize = kEdStampSizes[1];
 int      g_edStamp    = 0;
 
@@ -8296,6 +8308,11 @@ void EdLayout(HWND hwnd)
     g_edRcPanel  = { rc.right - panel, cap + strip, rc.right, rc.bottom - status };
     g_edRcCanvas = { rail, cap + strip, rc.right - panel, rc.bottom - status };
 
+    // Клацнули по кружечку — його група стає поточною: так до старої групи
+    // повертаються без жодних кнопок.
+    if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() && g_edObjs[g_edSel].kind == EdKind::Counter)
+        g_edCounterGroup = g_edObjs[g_edSel].group;
+
     // заголовок: кнопки вікна праворуч, перед ними — скасувати, повторити, довідка
     {
         const int ccy = (g_edRcCaption.top + g_edRcCaption.bottom) / 2;
@@ -8388,13 +8405,8 @@ void EdLayout(HWND hwnd)
                 x = rm.right + gap;
             }
 
-            // Лічильник: наступний номер, число початку й кнопка скидання.
+            // Лічильник: початок групи, «група · далі» і кнопка нової групи.
             if (kk == EdKind::Counter) {
-                RECT nm = EdPill(x, cy, EdPx(24), EdPx(26)); EdAdd(nm, EdHit::Num, 0);
-                x = nm.right + EdPx(2) + EdPx(34) + EdPx(2);
-                RECT np = EdPill(x, cy, EdPx(24), EdPx(26)); EdAdd(np, EdHit::Num, 1);
-                x = np.right + gap;
-
                 RECT si = EdPill(x, cy, EdPx(18), EdPx(18));
                 EdAdd(si, EdHit::None, 0);
                 x = si.right + EdPx(6);
@@ -8402,6 +8414,14 @@ void EdLayout(HWND hwnd)
                 x = sm.right + EdPx(2) + EdPx(30) + EdPx(2);
                 RECT sp = EdPill(x, cy, EdPx(24), EdPx(26)); EdAdd(sp, EdHit::NumStart, 1);
                 x = sp.right + EdPx(8);
+
+                // «Група N · далі M» — не інтерактивний, рахуємо ширину як для чіпа.
+                wchar_t gb[48];
+                wsprintfW(gb, S(Str::EdFmtGroup), EdCurGroup() + 1,
+                          EdGroupStart(EdCurGroup()) + EdGroupCount(EdCurGroup()));
+                RECT gt = EdPill(x, cy, EdTextWidth(dc, gb, g_edFont) + EdPx(4), EdPx(26));
+                EdAdd(gt, EdHit::None, 0);
+                x = gt.right + EdPx(8);
 
                 RECT rb = EdPill(x, cy, EdPx(30), EdPx(28));
                 EdAdd(rb, EdHit::NumReset, 0);
@@ -8875,25 +8895,10 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         }
     }
 
-    // Лічильник: наступний номер, число початку, скидання.
+    // Лічильник: початок групи, «група · далі», нова група.
     {
-        const bool selNum = hasSel && g_edObjs[g_edSel].kind == EdKind::Counter;
-        const int vNum = selNum ? g_edObjs[g_edSel].num : g_edNextNum;
-        wchar_t nb[16];
-        for (int i = 0; i < 2; ++i) {
-            const RECT* r = EdRegionRect(EdHit::Num, i);
-            if (!r) break;
-            EdPaintButton(g, *r, t, false, g_edHotWhat == EdHit::Num && g_edHotIdx == i, false);
-            EdIcon(g, i ? IcoPlus : IcoMinus, EdIconBox(*r), EdC(t.text), 1.6f);
-            if (i == 0) {
-                const RECT* r2 = EdRegionRect(EdHit::Num, 1);
-                if (r2) {
-                    wsprintfW(nb, L"%d", vNum);
-                    RECT tv = { r->right, r->top, r2->left, r->bottom };
-                    EdDrawText(dc, tv, nb, g_edFontBold, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                }
-            }
-        }
+        wchar_t nb[48];
+        const int grp = EdCurGroup();
         for (int i = 0; i < 2; ++i) {
             const RECT* r = EdRegionRect(EdHit::NumStart, i);
             if (!r) break;
@@ -8907,13 +8912,20 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
             if (i == 0) {
                 const RECT* r2 = EdRegionRect(EdHit::NumStart, 1);
                 if (r2) {
-                    wsprintfW(nb, L"%d", g_edStartNum);
+                    wsprintfW(nb, L"%d", EdGroupStart(grp));
                     RECT tv = { r->right, r->top, r2->left, r->bottom };
                     EdDrawText(dc, tv, nb, g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 }
             }
         }
         if (const RECT* rb = EdRegionRect(EdHit::NumReset, 0)) {
+            // Напис «Група N · далі M» стоїть одразу ліворуч від кнопки.
+            const RECT* sp = EdRegionRect(EdHit::NumStart, 1);
+            if (sp) {
+                wsprintfW(nb, S(Str::EdFmtGroup), grp + 1, EdGroupStart(grp) + EdGroupCount(grp));
+                RECT tv = { sp->right + EdPx(8), g_edRcStrip.top, rb->left - EdPx(4), g_edRcStrip.bottom };
+                EdDrawText(dc, tv, nb, g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            }
             EdPaintButton(g, *rb, t, false, g_edHotWhat == EdHit::NumReset, false);
             EdIcon(g, IcoRestart, EdIconBox(*rb), EdC(t.text), 1.5f);
         }
@@ -9504,6 +9516,40 @@ void EdStampShape(Gdiplus::Graphics& g, int id, float ox, float oy, float side,
     g.Restore(st);
 }
 
+// Поточна група: якщо вибрано кружечок — його, інакше остання використана.
+// Так повернутись до старої групи = клацнути по будь-якому її кружечку.
+int EdCurGroup()
+{
+    if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() && g_edObjs[g_edSel].kind == EdKind::Counter)
+        return g_edObjs[g_edSel].group;
+    return g_edCounterGroup;
+}
+
+int EdGroupStart(int grp)
+{
+    for (size_t i = 0; i < g_edObjs.size(); ++i)
+        if (g_edObjs[i].kind == EdKind::Counter && g_edObjs[i].group == grp) return g_edObjs[i].start;
+    return g_edStartNum;
+}
+
+int EdGroupCount(int grp)
+{
+    int n = 0;
+    for (size_t i = 0; i < g_edObjs.size(); ++i)
+        if (g_edObjs[i].kind == EdKind::Counter && g_edObjs[i].group == grp) ++n;
+    return n;
+}
+
+int EdCounterNumber(const EdObj& o)
+{
+    int rank = 0;
+    for (size_t i = 0; i < g_edObjs.size(); ++i) {
+        const EdObj& c = g_edObjs[i];
+        if (c.kind == EdKind::Counter && c.group == o.group && c.seq < o.seq) ++rank;
+    }
+    return o.start + rank;
+}
+
 // Число в кружечку має читатися й на темному, і на світлому кольорі позначки.
 COLORREF EdOnColor(COLORREF c)
 {
@@ -9602,7 +9648,7 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
         g.DrawEllipse(&ring, x + (float)(w / 32.0), y + (float)(w / 32.0),
                       w - (float)(w / 16.0), h - (float)(h / 16.0));
         wchar_t nb[16];
-        wsprintfW(nb, L"%d", o.num);
+        wsprintfW(nb, L"%d", EdCounterNumber(o));
         EdObj t = EdGlyphObj(o, nb, o.thick * 52 / 100, EdOnColor(o.color));
         t.bold = true;
         const EdTile* tile = EdTextTile(t, s);
@@ -9908,6 +9954,7 @@ void EdDuplicateSel()
     o.x += d;
     o.y += d;
     for (size_t i = 0; i < o.pts.size(); ++i) { o.pts[i].x += d; o.pts[i].y += d; }
+    if (o.kind == EdKind::Counter) o.seq = ++g_edSeq;   // копія стає останньою в групі
     EdPushUndo();
     g_edObjs.push_back(o);
     g_edSel = (int)g_edObjs.size() - 1;
@@ -10295,7 +10342,6 @@ Str EdTipFor(EdHit what, int idx)
             return Str::EdTipThick;
         }
     case EdHit::HideMode: return idx == 1 ? Str::EdTipPixels : idx == 2 ? Str::EdTipPlate : Str::EdTipBlur;
-    case EdHit::Num:      return Str::EdTipNum;
     case EdHit::NumStart: return Str::EdTipNumStart;
     case EdHit::NumReset: return Str::EdTipNumReset;
     case EdHit::StampMore: return Str::EdTipStampMore;
@@ -11137,33 +11183,36 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case EdHit::StampMore:
             EdEmojiPick(hwnd, r->r);
             return 0;
-        case EdHit::Num: {
-            int v = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
-                     g_edObjs[g_edSel].kind == EdKind::Counter)
-                        ? g_edObjs[g_edSel].num : g_edNextNum;
-            v += r->idx ? 1 : -1;
-            if (v < 0) v = 0;
+        case EdHit::NumStart: {
+            // Початок живе в кружечках групи, тож зміна перенумеровує їх усіх
+            // і лягає в скасування. Порожня група тримає початок у типовому.
+            const int grp = EdCurGroup();
+            int v = EdGroupStart(grp) + (r->idx ? 1 : -1);
+            if (v < 0)   v = 0;
             if (v > 999) v = 999;
-            if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
-                g_edObjs[g_edSel].kind == EdKind::Counter) {
+            if (EdGroupCount(grp) > 0) {
                 EdPushUndo();
-                g_edObjs[g_edSel].num = v;
+                for (size_t i = 0; i < g_edObjs.size(); ++i)
+                    if (g_edObjs[i].kind == EdKind::Counter && g_edObjs[i].group == grp)
+                        g_edObjs[i].start = v;
             } else {
-                g_edNextNum = v;
+                g_edStartNum = v;
             }
+            EdLayout(hwnd);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
-        case EdHit::NumStart:
-            g_edStartNum += r->idx ? 1 : -1;
-            if (g_edStartNum < 0)   g_edStartNum = 0;
-            if (g_edStartNum > 999) g_edStartNum = 999;
+        case EdHit::NumReset: {
+            // Нова група: нумерація знову з початку, стара група лишається як є.
+            int mx = -1;
+            for (size_t i = 0; i < g_edObjs.size(); ++i)
+                if (g_edObjs[i].kind == EdKind::Counter && g_edObjs[i].group > mx) mx = g_edObjs[i].group;
+            g_edCounterGroup = mx + 1;
+            g_edSel = -1;
+            EdLayout(hwnd);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
-        case EdHit::NumReset:
-            g_edNextNum = g_edStartNum;
-            InvalidateRect(hwnd, nullptr, FALSE);
-            return 0;
+        }
         case EdHit::HideMode: {
             if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
                 g_edObjs[g_edSel].kind == EdKind::Hide && g_edObjs[g_edSel].mode != r->idx) {
@@ -11343,11 +11392,15 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             o.color = g_edColor;
             o.alpha = g_edAlpha;
             o.stamp = g_edStamp;
-            o.num   = g_edNextNum;
+            if (o.kind == EdKind::Counter) {
+                o.group = EdCurGroup();
+                o.start = EdGroupStart(o.group);
+                o.seq   = ++g_edSeq;
+                g_edCounterGroup = o.group;
+            }
             EdPushUndo();
             g_edObjs.push_back(o);
             g_edSel = (int)g_edObjs.size() - 1;
-            if (o.kind == EdKind::Counter && g_edNextNum < 999) ++g_edNextNum;
             if (!g_edKeepTool) g_edTool = EdTool::Select;
             EdLayout(hwnd);
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -11597,6 +11650,8 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edZoom = 1.0f;
     g_edPanX = g_edPanY = 0;
     g_edPanelOpen = true;
+    g_edCounterGroup = 0;               // новий знімок — нумерація з початку сама
+    g_edSeq = 0;
 
     if (g_edWnd) {                      // уже відкрите — просто новий вміст
         EdFitView();
