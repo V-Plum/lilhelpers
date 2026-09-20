@@ -1,4 +1,4 @@
-// Little Helpers (lilhelpers) — дрібні зручності для Windows 11 в одному треї:
+﻿// Little Helpers (lilhelpers) — дрібні зручності для Windows 11 в одному треї:
 // розкладка по CapsLock, пошук курсора трусінням, день/ніч, темна тема вікна,
 // перегляд файлу по пробілу, автооновлення.
 //
@@ -486,6 +486,28 @@ X(EdToolCounter,      L"Лічильник",                     L"Counter")    
 X(EdToolStamp,        L"Штамп",                         L"Stamp")                                      \
 X(EdKindImage,        L"Зображення",                    L"Image")                                      \
 X(EdFmtPicked,        L"Вибрано: %d",                   L"Selected: %d")                               \
+X(EdSizeImgTitle,     L"Розмір зображення",             L"Image size")                                 \
+X(EdSizeCanTitle,     L"Розмір полотна",                L"Canvas size")                                \
+X(EdSizeW,            L"Ширина",                        L"Width")                                      \
+X(EdSizeH,            L"Висота",                        L"Height")                                     \
+X(EdSizePct,          L"Відсоток",                      L"Percent")                                    \
+X(EdSizeKeep,         L"Тримати пропорції",             L"Keep proportions")                           \
+X(EdSizeText,         L"Масштабувати текст разом із зображенням",                                      \
+                                                        L"Scale text along with the image")            \
+X(EdSizeSharp,        L"Різко (без згладжування)",      L"Sharp (no smoothing)")                       \
+X(EdSizeApply,        L"Змінити",                       L"Resize")                                     \
+X(EdSizeCancel,       L"Скасувати",                     L"Cancel")                                     \
+X(EdFmtSizeNow,       L"Зараз: %d × %d",                L"Now: %d × %d")                               \
+X(EdSizeNoteImg,      L"Товщина ліній, кружечки й штампи лишаться свого розміру.\n"                     \
+                      L"Зменшення втрачає пікселі назавжди — повернути їх зможе лише скасування.",     \
+                      L"Line widths, counters and stamps keep their size.\n"                           \
+                      L"Shrinking loses pixels for good — only undo brings them back.")                \
+X(EdSizeNoteCan,      L"Знімок стане окремим об\x2019єктом, а тло навколо — прозорим.",                  \
+                      L"The shot becomes a separate object and the space around it stays clear.")      \
+X(EdBtnSizeImg,       L"Розмір зображення…",            L"Image size…")                                \
+X(EdBtnSizeCan,       L"Розмір полотна…",               L"Canvas size…")                               \
+X(EdTipSizeImg,       L"Змінити розмір самого зображення", L"Resize the image itself")                 \
+X(EdTipSizeCan,       L"Змінити розмір полотна",        L"Resize the canvas")                          \
 X(EdTipAlL,           L"Вирівняти за лівим краєм",      L"Align left edges")                           \
 X(EdTipAlCx,          L"Вирівняти по центру вертикалі", L"Align vertical centres")                     \
 X(EdTipAlR,           L"Вирівняти за правим краєм",     L"Align right edges")                          \
@@ -7666,6 +7688,7 @@ struct EdSnap {
     // їх не туди.
     int exposure, gamma, contrast, rot;
     bool mirror;
+    int srcId;        // який саме оригінал був у роботі
 };
 
 struct EdTile {
@@ -7686,7 +7709,7 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Aspect, CropReset, CropOk, CropNo,
                    RotL, RotR, FlipH, FlipV, Exposure, Gamma, Contrast,
                    ToneReset, Compare, GroupEdit, GroupDel, Pick, PickItem,
-                   SelAlign, SelGroup };
+                   SelAlign, SelGroup, SizeImg, SizeCan };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7727,6 +7750,11 @@ float    g_edSdrWhite = -1.0f;                      // ніт; -1 = систем
 // цього рецепта, і саме він іде в буфер, у файл і в плитки ефектів. Через це
 // «Порівняти» нічого не коштує, а двічі застосований тон не накопичується.
 Gdiplus::Bitmap* g_edSrc = nullptr;   // як прийшло; ніколи не змінюється
+// CAPS-44. Зміна розміру робить НОВИЙ оригінал, а скасування має повернути
+// старий — разом із пікселями. Тому джерела живуть у банку, а знімок стану
+// тримає лише НОМЕР: той самий прийом, що й для вкладених зображень.
+std::vector<Gdiplus::Bitmap*> g_edSrcBank;
+int      g_edSrcId = -1;
 Gdiplus::Bitmap* g_edCmp = nullptr;   // той самий рецепт БЕЗ тону, лише поки порівнюють
 int      g_edExposure = 0;            // -20..+20 = -2,0…+2,0 EV кроком 0,1
 int      g_edGamma    = 100;          // 50..200 = 0,50…2,00
@@ -8429,6 +8457,7 @@ void EdSnapTone(EdSnap& s)
 {
     s.exposure = g_edExposure; s.gamma = g_edGamma; s.contrast = g_edContrast;
     s.rot = g_edRot;           s.mirror = g_edMirror;
+    s.srcId = g_edSrcId;
 }
 
 void EdPushUndo()
@@ -8452,7 +8481,14 @@ void EdApply(const EdSnap& s)
     g_edCrop = s.crop;
     if (g_edSel >= (int)g_edObjs.size()) g_edSel = -1;
 
-    const bool geom = (s.rot != g_edRot || s.mirror != g_edMirror);
+    // Повернення до іншого оригіналу — теж «геометрія»: міняється розмір.
+    bool srcBack = false;
+    if (s.srcId != g_edSrcId && s.srcId >= 0 && s.srcId < (int)g_edSrcBank.size()) {
+        g_edSrcId = s.srcId;
+        g_edSrc = g_edSrcBank[s.srcId];
+        srcBack = true;
+    }
+    const bool geom = srcBack || (s.rot != g_edRot || s.mirror != g_edMirror);
     const bool tone = (s.exposure != g_edExposure || s.gamma != g_edGamma ||
                        s.contrast != g_edContrast);
     g_edExposure = s.exposure; g_edGamma = s.gamma; g_edContrast = s.contrast;
@@ -9204,7 +9240,15 @@ void EdLayout(HWND hwnd)
             RECT r = { px + i * step, y, px + i * step + gb, y + gh };
             EdAdd(r, geo[i], 0);
         }
-        y += gh + EdPx(20) + EdPx(18) + EdPx(10);   // + заголовок «ТОН»
+        // CAPS-44: розмір — над тоном, як просив власник.
+        y += gh + EdPx(10);
+        const int sbh = EdPx(28);
+        RECT rsi = { px, y, pr, y + sbh };
+        EdAdd(rsi, EdHit::SizeImg, 0);
+        y += sbh + EdPx(6);
+        RECT rsc = { px, y, pr, y + sbh };
+        EdAdd(rsc, EdHit::SizeCan, 0);
+        y += sbh + EdPx(20) + EdPx(18) + EdPx(10);   // + заголовок «ТОН»
 
         const EdHit sl[3] = { EdHit::Exposure, EdHit::Gamma, EdHit::Contrast };
         for (int i = 0; i < 3; ++i) {
@@ -11114,7 +11158,19 @@ void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         EdPaintButton(g, *r, t, false, g_edHotWhat == geo[i], false);
         EdIcon(g, gico[i], EdIconBox(*r), EdC(t.text), 1.5f);
     }
-    if (const RECT* r0 = EdRegionRect(EdHit::RotL, 0)) {
+    {
+        const struct { EdHit what; Str label; } sz[2] = {
+            { EdHit::SizeImg, Str::EdBtnSizeImg }, { EdHit::SizeCan, Str::EdBtnSizeCan }
+        };
+        for (int i = 0; i < 2; ++i) {
+            const RECT* r = EdRegionRect(sz[i].what, 0);
+            if (!r) continue;
+            EdPaintButton(g, *r, t, false, g_edHotWhat == sz[i].what, false);
+            EdDrawText(dc, *r, S(sz[i].label), g_edFont, t.text,
+                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+    }
+    if (const RECT* r0 = EdRegionRect(EdHit::SizeCan, 0)) {
         RECT th = { x, r0->bottom + EdPx(20), pr, r0->bottom + EdPx(20) + EdPx(18) };
         EdDrawText(dc, th, S(Str::EdSecTone), g_edFontSmall, t.text2,
                    DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -12008,6 +12064,217 @@ LPCWSTR EdCursorFor(POINT pt)
     return (g_edTool != EdTool::Select) ? IDC_CROSS : IDC_ARROW;
 }
 
+// Тіла нижче — біля решти дій над знімком; діалогу вони потрібні вже тут.
+bool EdResizeImage(int nw, int nh, bool scaleText, bool sharp);
+bool EdResizeCanvas(int nw, int nh);
+
+// ---- CAPS-44: діалог розміру -------------------------------------------
+//
+// Власне вікно з дочірніми контролами, а не DLGTEMPLATE: шаблон довелося б
+// збирати в пам'яті побайтово, а виграшу — нуль. Модальність робимо самі:
+// вимикаємо власника й крутимо власний цикл повідомлень.
+
+HWND g_edSzWnd = nullptr;
+HWND g_edSzW = nullptr, g_edSzH = nullptr, g_edSzPct = nullptr;
+HWND g_edSzKeep = nullptr, g_edSzText = nullptr, g_edSzSharp = nullptr;
+bool g_edSzCanvas = false;      // полотно чи зображення
+bool g_edSzGuard = false;       // щоб перерахунок полів не ганявся сам за собою
+int  g_edSzOrigW = 0, g_edSzOrigH = 0;
+bool g_edSzOk = false;
+int  g_edSzLastW = 0, g_edSzLastH = 0;
+bool g_edSzLastText = false, g_edSzLastSharp = false;
+
+int EdSzRead(HWND e)
+{
+    wchar_t buf[32] = {};
+    GetWindowTextW(e, buf, 32);
+    return _wtoi(buf);
+}
+
+void EdSzWrite(HWND e, int v)
+{
+    wchar_t buf[32];
+    wsprintfW(buf, L"%d", v);
+    SetWindowTextW(e, buf);
+}
+
+void EdSzSync(HWND from)
+{
+    if (g_edSzGuard) return;
+    g_edSzGuard = true;
+    const bool keep = (SendMessageW(g_edSzKeep, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    if (from == g_edSzPct) {
+        int p = EdSzRead(g_edSzPct);
+        if (p < 1) p = 1;
+        if (p > 1000) p = 1000;
+        EdSzWrite(g_edSzW, (int)((double)g_edSzOrigW * p / 100.0 + 0.5));
+        EdSzWrite(g_edSzH, (int)((double)g_edSzOrigH * p / 100.0 + 0.5));
+    } else if (keep && g_edSzOrigW > 0 && g_edSzOrigH > 0) {
+        if (from == g_edSzW) {
+            const int w = EdSzRead(g_edSzW);
+            if (w > 0) EdSzWrite(g_edSzH, (int)((double)w * g_edSzOrigH / g_edSzOrigW + 0.5));
+        } else if (from == g_edSzH) {
+            const int h = EdSzRead(g_edSzH);
+            if (h > 0) EdSzWrite(g_edSzW, (int)((double)h * g_edSzOrigW / g_edSzOrigH + 0.5));
+        }
+    }
+    if (from != g_edSzPct && g_edSzOrigW > 0) {
+        const int w = EdSzRead(g_edSzW);
+        EdSzWrite(g_edSzPct, (int)((double)w * 100.0 / g_edSzOrigW + 0.5));
+    }
+    g_edSzGuard = false;
+}
+
+LRESULT CALLBACK EdSzProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_COMMAND:
+        if (HIWORD(wp) == EN_CHANGE) { EdSzSync((HWND)lp); return 0; }
+        if (LOWORD(wp) == 1) {              // Змінити
+            // ⚠ Значення знімаємо ДО знищення вікна: після DestroyWindow
+            // контролів уже немає, а GetWindowText мовчки віддасть порожнє.
+            // ⚠ Питаємо контроли ЧЕРЕЗ GetDlgItem, а не через глобальні
+            // вказівники: глобальні пережили б минулий діалог, і «Змінити»
+            // прочитало б поля, яких уже немає.
+            g_edSzLastW = EdSzRead(GetDlgItem(hwnd, 10));
+            g_edSzLastH = EdSzRead(GetDlgItem(hwnd, 11));
+            g_edSzLastText = g_edSzText && SendMessageW(g_edSzText, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            g_edSzLastSharp = g_edSzSharp && SendMessageW(g_edSzSharp, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            g_edSzOk = true;
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        if (LOWORD(wp) == 2) { DestroyWindow(hwnd); return 0; }
+        return 0;
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        g_edSzWnd = nullptr;
+        // ⚠ Будимо власний цикл: він стоїть у GetMessage, і без цього штурхана
+        // вийде з нього лише з наступним випадковим повідомленням — тобто
+        // натиснуте «Змінити» спрацювало б із затримкою невідомої довжини.
+        PostThreadMessageW(GetCurrentThreadId(), WM_NULL, 0, 0);
+        return 0;
+    default: break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+HWND EdSzMake(HWND parent, const wchar_t* cls, const wchar_t* text, DWORD style,
+              int x, int y, int w, int h, int id)
+{
+    HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style,
+                             x, y, w, h, parent, (HMENU)(INT_PTR)id,
+                             (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE), nullptr);
+    if (c) SendMessageW(c, WM_SETFONT, (WPARAM)g_edFont, TRUE);
+    return c;
+}
+
+// Показує діалог і застосовує зміну. Повертає true, якщо розмір змінено.
+bool EdSizeDialog(HWND owner, bool canvas)
+{
+    if (!g_edImg || g_edSzWnd) return false;
+    g_edSzCanvas = canvas;
+    g_edSzOrigW = g_edImgW;
+    g_edSzOrigH = g_edImgH;
+    g_edSzOk = false;
+
+    static bool reg = false;
+    HINSTANCE inst = (HINSTANCE)GetWindowLongPtrW(owner, GWLP_HINSTANCE);
+    if (!reg) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc   = EdSzProc;
+        wc.hInstance     = inst;
+        wc.lpszClassName = L"lilhelpers_size";
+        wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+        RegisterClassW(&wc);
+        reg = true;
+    }
+
+    const int pad = EdPx(14), lh = EdPx(24), gap = EdPx(10);
+    const int w = EdPx(canvas ? 360 : 380), h = EdPx(canvas ? 240 : 285);
+    RECT orc;
+    GetWindowRect(owner, &orc);
+    const int px = orc.left + ((orc.right - orc.left) - w) / 2;
+    const int py = orc.top + ((orc.bottom - orc.top) - h) / 3;
+    g_edSzWnd = CreateWindowExW(WS_EX_DLGMODALFRAME, L"lilhelpers_size",
+                                S(canvas ? Str::EdSizeCanTitle : Str::EdSizeImgTitle),
+                                WS_POPUPWINDOW | WS_CAPTION, px, py, w, h,
+                                owner, nullptr, inst, nullptr);
+    if (!g_edSzWnd) return false;
+
+    wchar_t now[64];
+    wsprintfW(now, S(Str::EdFmtSizeNow), g_edSzOrigW, g_edSzOrigH);
+    int y = pad;
+    EdSzMake(g_edSzWnd, L"STATIC", now, 0, pad, y, w - pad * 2, lh, 0);
+    y += lh + gap;
+    EdSzMake(g_edSzWnd, L"STATIC", S(Str::EdSizeW), 0, pad, y + EdPx(3), EdPx(70), lh, 0);
+    g_edSzW = EdSzMake(g_edSzWnd, L"EDIT", L"", WS_BORDER | ES_NUMBER,
+                       pad + EdPx(78), y, EdPx(80), lh, 10);
+    EdSzMake(g_edSzWnd, L"STATIC", S(Str::EdSizeH), 0, pad + EdPx(176), y + EdPx(3), EdPx(70), lh, 0);
+    g_edSzH = EdSzMake(g_edSzWnd, L"EDIT", L"", WS_BORDER | ES_NUMBER,
+                       pad + EdPx(246), y, EdPx(80), lh, 11);
+    y += lh + gap;
+    EdSzMake(g_edSzWnd, L"STATIC", S(Str::EdSizePct), 0, pad, y + EdPx(3), EdPx(70), lh, 0);
+    g_edSzPct = EdSzMake(g_edSzWnd, L"EDIT", L"", WS_BORDER | ES_NUMBER,
+                         pad + EdPx(78), y, EdPx(80), lh, 12);
+    g_edSzKeep = EdSzMake(g_edSzWnd, L"BUTTON", S(Str::EdSizeKeep), BS_AUTOCHECKBOX,
+                          pad + EdPx(176), y + EdPx(2), EdPx(160), lh, 13);
+    SendMessageW(g_edSzKeep, BM_SETCHECK, BST_CHECKED, 0);
+    y += lh + gap;
+
+    if (!canvas) {
+        g_edSzText = EdSzMake(g_edSzWnd, L"BUTTON", S(Str::EdSizeText), BS_AUTOCHECKBOX,
+                              pad, y, w - pad * 2, lh, 14);
+        y += lh;
+        g_edSzSharp = EdSzMake(g_edSzWnd, L"BUTTON", S(Str::EdSizeSharp), BS_AUTOCHECKBOX,
+                               pad, y, w - pad * 2, lh, 15);
+        y += lh + EdPx(4);
+    } else {
+        g_edSzText = nullptr;
+        g_edSzSharp = nullptr;
+    }
+    EdSzMake(g_edSzWnd, L"STATIC", S(canvas ? Str::EdSizeNoteCan : Str::EdSizeNoteImg), 0,
+             pad, y, w - pad * 2, lh * 2, 0);
+
+    // ⚠ Кнопки ставимо від КЛІЄНТСЬКОЇ висоти, а не від висоти вікна: підпис
+    // і рамку система забирає собі, і на різних темах по-різному.
+    RECT crc = {};
+    GetClientRect(g_edSzWnd, &crc);
+    const int bw = EdPx(110), bh = EdPx(30);
+    const int by = crc.bottom - bh - EdPx(12);
+    EdSzMake(g_edSzWnd, L"BUTTON", S(Str::EdSizeApply), BS_DEFPUSHBUTTON,
+             crc.right - pad - bw * 2 - EdPx(8), by, bw, bh, 1);
+    EdSzMake(g_edSzWnd, L"BUTTON", S(Str::EdSizeCancel), 0,
+             crc.right - pad - bw, by, bw, bh, 2);
+
+    g_edSzGuard = true;
+    EdSzWrite(g_edSzW, g_edSzOrigW);
+    EdSzWrite(g_edSzH, g_edSzOrigH);
+    EdSzWrite(g_edSzPct, 100);
+    g_edSzGuard = false;
+
+    EnableWindow(owner, FALSE);
+    ShowWindow(g_edSzWnd, SW_SHOW);
+    SetFocus(g_edSzW);
+
+    MSG msg;
+    while (g_edSzWnd && GetMessageW(&msg, nullptr, 0, 0)) {
+        if (g_edSzWnd && IsDialogMessageW(g_edSzWnd, &msg)) continue;
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    EnableWindow(owner, TRUE);
+    SetForegroundWindow(owner);
+
+    if (!g_edSzOk) return false;
+    if (g_edSzLastW < 1 || g_edSzLastH < 1) return false;
+    return canvas ? EdResizeCanvas(g_edSzLastW, g_edSzLastH)
+                  : EdResizeImage(g_edSzLastW, g_edSzLastH, g_edSzLastText, g_edSzLastSharp);
+}
+
 // ---- CAPS-37: підказки над кнопками -------------------------------------
 //
 // Кнопки редактора — не вікна, а прямокутники зі списку, тож звичайний тултіп
@@ -12079,6 +12346,8 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::NumReset: return Str::EdTipNumReset;
     case EdHit::StampMore: return Str::EdTipStampMore;
     case EdHit::Strength: return Str::EdTipStrength;
+    case EdHit::SizeImg:   return Str::EdTipSizeImg;
+    case EdHit::SizeCan:   return Str::EdTipSizeCan;
     case EdHit::RotL:      return Str::EdTipRotL;
     case EdHit::RotR:      return Str::EdTipRotR;
     case EdHit::FlipH:     return Str::EdTipFlipH;
@@ -12466,6 +12735,131 @@ void EdTextBegin(HWND hwnd, POINT img, int idx)
     SetFocus(g_edEdit);
     SendMessageW(g_edEdit, EM_SETSEL, 0, -1);
     InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+// ---- CAPS-44: розмір зображення й полотна -------------------------------
+//
+// ⚠ Обидві дії ЗАПІКАЮТЬ поточний рецепт (поворот, дзеркало, тон) у новий
+// оригінал. Інакше «Скинути» в тоні повернуло б кадр іншого розміру, ніж той,
+// що на екрані, — а це гірше за втрату самого рецепта.
+
+// Позначки прив'язані до зображення КООРДИНАТАМИ, але товщина ліній і розміри
+// кружечків та штампів лишаються як були (рішення власника 21.09): інакше
+// кегль 18 після зменшення вдвічі стає дев'яткою, якої немає в наборі.
+void EdScaleObjs(double kx, double ky, bool scaleText)
+{
+    for (size_t i = 0; i < g_edObjs.size(); ++i) {
+        EdObj& o = g_edObjs[i];
+        const bool upright = (o.kind == EdKind::Text || o.kind == EdKind::Counter ||
+                              o.kind == EdKind::Stamp);
+        if (upright) {
+            // Переїздить центр, розмір лишається — крім кегля, і то за згодою.
+            const int cx = (int)((o.x + o.w / 2) * kx + 0.5);
+            const int cy = (int)((o.y + o.h / 2) * ky + 0.5);
+            if (o.kind == EdKind::Text && scaleText) {
+                const double k = (kx + ky) / 2.0;
+                o.size = (int)(o.size * k + 0.5);
+                if (o.size < 6) o.size = 6;
+                o.w = (int)(o.w * kx + 0.5);
+                o.h = (int)(o.h * ky + 0.5);
+                if (o.boxw) o.boxw = (int)(o.boxw * kx + 0.5);
+            }
+            o.x = cx - o.w / 2;
+            o.y = cy - o.h / 2;
+            continue;
+        }
+        o.x = (int)(o.x * kx + 0.5);
+        o.y = (int)(o.y * ky + 0.5);
+        o.w = (int)(o.w * kx + 0.5);
+        o.h = (int)(o.h * ky + 0.5);
+        for (size_t k = 0; k < o.pts.size(); ++k) {
+            o.pts[k].x = (LONG)(o.pts[k].x * kx + 0.5);
+            o.pts[k].y = (LONG)(o.pts[k].y * ky + 0.5);
+        }
+    }
+    if (EdHasCrop()) {
+        g_edCrop.left   = (LONG)(g_edCrop.left * kx + 0.5);
+        g_edCrop.right  = (LONG)(g_edCrop.right * kx + 0.5);
+        g_edCrop.top    = (LONG)(g_edCrop.top * ky + 0.5);
+        g_edCrop.bottom = (LONG)(g_edCrop.bottom * ky + 0.5);
+    }
+}
+
+// Рецепт запечено — далі він порожній, а оригіналом стає те, що показували.
+void EdAdoptSource(Gdiplus::Bitmap* fresh)
+{
+    // ⚠ Старий оригінал НЕ видаляємо: на нього ще посилаються знімки
+    // скасування. Банк чиститься разом із новим знімком екрана.
+    g_edSrcBank.push_back(fresh);
+    g_edSrcId = (int)g_edSrcBank.size() - 1;
+    g_edSrc = fresh;
+    g_edRot = 0;
+    g_edMirror = false;
+    g_edExposure = 0; g_edGamma = 100; g_edContrast = 0;
+    delete g_edCmp; g_edCmp = nullptr;
+    g_edCompare = false;
+    EdRebuildImage();
+    if (g_edWnd) {
+        EdFitView();
+        EdLayout(g_edWnd);
+        InvalidateRect(g_edWnd, nullptr, TRUE);
+    }
+}
+
+bool EdResizeImage(int nw, int nh, bool scaleText, bool sharp)
+{
+    if (!g_edImg || nw < 1 || nh < 1 || nw > 20000 || nh > 20000) return false;
+    const int ow = g_edImgW, oh = g_edImgH;
+    if (nw == ow && nh == oh) return false;
+    Gdiplus::Bitmap* out = new Gdiplus::Bitmap(nw, nh, PixelFormat32bppPARGB);
+    if (!out || out->GetLastStatus() != Gdiplus::Ok) { delete out; return false; }
+    {
+        Gdiplus::Graphics g(out);
+        g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+        g.SetInterpolationMode(sharp ? Gdiplus::InterpolationModeNearestNeighbor
+                                     : Gdiplus::InterpolationModeHighQualityBicubic);
+        g.DrawImage(g_edImg, Gdiplus::Rect(0, 0, nw, nh), 0, 0, ow, oh, Gdiplus::UnitPixel);
+    }
+    EdPushUndo();
+    EdScaleObjs((double)nw / ow, (double)nh / oh, scaleText);
+    EdAdoptSource(out);
+    return true;
+}
+
+// Полотно більшає — наявне зображення СТАЄ ОКРЕМИМ ОБ'ЄКТОМ (вимога власника),
+// а тло під ним лишається прозорим. Далі його можна рухати, як будь-яку
+// позначку, або підкласти під нього прямокутник потрібного кольору.
+bool EdResizeCanvas(int nw, int nh)
+{
+    if (!g_edImg || nw < 1 || nh < 1 || nw > 20000 || nh > 20000) return false;
+    const int ow = g_edImgW, oh = g_edImgH;
+    if (nw == ow && nh == oh) return false;
+    Gdiplus::Bitmap* fresh = new Gdiplus::Bitmap(nw, nh, PixelFormat32bppPARGB);
+    if (!fresh || fresh->GetLastStatus() != Gdiplus::Ok) { delete fresh; return false; }
+    Gdiplus::Bitmap* old = g_edImg->Clone(0, 0, ow, oh, PixelFormat32bppPARGB);
+    if (!old || old->GetLastStatus() != Gdiplus::Ok) { delete old; delete fresh; return false; }
+
+    const int dx = (nw - ow) / 2, dy = (nh - oh) / 2;
+    EdPushUndo();
+    const int id = EdAddImage(old);
+    if (id >= 0) {
+        EdObj o = EdObj{};
+        o.kind = EdKind::Image;
+        o.img = id;
+        o.alpha = 100;
+        o.color = g_edColor;
+        o.x = dx; o.y = dy; o.w = ow; o.h = oh;
+        // Колишній знімок лягає НАЙНИЖЧЕ: він тло, а не остання позначка.
+        g_edObjs.insert(g_edObjs.begin(), o);
+        if (g_edSel >= 0) ++g_edSel;
+        for (size_t k = 0; k < g_edSelMore.size(); ++k) ++g_edSelMore[k];
+    }
+    // Решта позначок їде разом із ним — вони показували на його пікселі.
+    for (size_t i = (id >= 0 ? 1 : 0); i < g_edObjs.size(); ++i)
+        EdMoveObj(g_edObjs[i], dx, dy);
+    if (EdHasCrop()) OffsetRect(&g_edCrop, dx, dy);
+    EdAdoptSource(fresh);
+    return true;
 }
 
 // ---- CAPS-27: кадрування -------------------------------------------------
@@ -13353,6 +13747,8 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case EdHit::GroupDel:
             EdGroupDelete();
             return 0;
+        case EdHit::SizeImg: EdSizeDialog(hwnd, false); return 0;
+        case EdHit::SizeCan: EdSizeDialog(hwnd, true);  return 0;
         case EdHit::RotL:  EdRotateBy(false); return 0;
         case EdHit::RotR:  EdRotateBy(true);  return 0;
         case EdHit::FlipH: EdMirrorBy(true);  return 0;
@@ -13814,7 +14210,10 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (g_edTip) { DestroyWindow(g_edTip); g_edTip = nullptr; }
         EdTilesClear();
         delete g_edImg; g_edImg = nullptr;
-        delete g_edSrc; g_edSrc = nullptr;
+        for (size_t i = 0; i < g_edSrcBank.size(); ++i) delete g_edSrcBank[i];
+        g_edSrcBank.clear();
+        g_edSrc = nullptr;
+        g_edSrcId = -1;
         delete g_edCmp; g_edCmp = nullptr;
         g_edCompare = false;
         EdImageBankClear();
@@ -13855,7 +14254,10 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     // Редактор бере у власність ОРИГІНАЛ, а показує похідне від нього. Новий
     // знімок приходить із чистим рецептом: чужий поворот і чужий тон на ньому
     // не мали б сенсу.
-    delete g_edSrc;
+    for (size_t i = 0; i < g_edSrcBank.size(); ++i) delete g_edSrcBank[i];
+    g_edSrcBank.clear();
+    g_edSrcBank.push_back(bmp);
+    g_edSrcId = 0;
     g_edSrc  = bmp;
     g_edExposure = 0; g_edGamma = 100; g_edContrast = 0;
     g_edRot = 0; g_edMirror = false; g_edCompare = false;
@@ -13914,7 +14316,10 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
                               nullptr, nullptr, hInst, nullptr);
     if (!g_edWnd) {
         delete g_edImg; g_edImg = nullptr;
-        delete g_edSrc; g_edSrc = nullptr;
+        for (size_t i = 0; i < g_edSrcBank.size(); ++i) delete g_edSrcBank[i];
+        g_edSrcBank.clear();
+        g_edSrc = nullptr;
+        g_edSrcId = -1;
         return;
     }
     ShowWindow(g_edWnd, SW_SHOW);
@@ -14132,6 +14537,21 @@ bool EdWriteFile(const wchar_t* path)
         const bool jpg = ext && (!lstrcmpiW(ext, L".jpg") || !lstrcmpiW(ext, L".jpeg"));
         CLSID enc;
         if (EdEncoderClsid(jpg ? L"image/jpeg" : L"image/png", &enc)) {
+            // ⚠ JPEG альфи не має, і прозоре тло стало б чорним. Кладемо кадр
+            // на біле: це єдиний колір, який у такому випадку нікого не дивує.
+            Gdiplus::Bitmap* opaque = nullptr;
+            if (jpg) {
+                opaque = new Gdiplus::Bitmap((INT)flat->GetWidth(), (INT)flat->GetHeight(),
+                                             PixelFormat32bppPARGB);
+                if (opaque && opaque->GetLastStatus() == Gdiplus::Ok) {
+                    Gdiplus::Graphics g(opaque);
+                    Gdiplus::SolidBrush white(Gdiplus::Color(255, 255, 255, 255));
+                    g.FillRectangle(&white, 0, 0, (INT)flat->GetWidth(), (INT)flat->GetHeight());
+                    g.DrawImage(flat, 0, 0, (INT)flat->GetWidth(), (INT)flat->GetHeight());
+                    delete flat;
+                    flat = opaque;
+                } else { delete opaque; }
+            }
             if (jpg) {
                 // Якість фіксована 92: помітної втрати ще нема, а повзунок у
                 // системному діалозі не поставиш — окремий контроль буде в
