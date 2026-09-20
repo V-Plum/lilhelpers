@@ -7347,33 +7347,44 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
     case IcoRect:
         g.DrawRectangle(&pen, 3.2f, 5.2f, 13.6f, 9.6f);
         break;
+    // Держак, гачок і наконечник-шеврон, вершина якого збігається з початком
+    // держака: інакше наконечник «наїжджає» на лінію і зливається з нею.
     case IcoUndo:
-        g.DrawLine(&pen, 6.0f, 8.0f, 12.5f, 8.0f);
-        g.DrawArc(&pen, 9.0f, 8.0f, 7.0f, 7.0f, -90.0f, 180.0f);
-        g.DrawLine(&pen, 12.5f, 15.0f, 9.0f, 15.0f);
-        g.DrawLine(&pen, 8.6f, 5.0f, 5.4f, 8.0f);
-        g.DrawLine(&pen, 5.4f, 8.0f, 8.6f, 11.0f);
+        g.DrawLine(&pen, 6.4f, 7.8f, 12.4f, 7.8f);
+        g.DrawArc(&pen, 9.2f, 7.8f, 6.4f, 6.4f, -90.0f, 180.0f);
+        g.DrawLine(&pen, 12.4f, 14.2f, 10.2f, 14.2f);
+        g.DrawLine(&pen, 9.1f, 5.2f, 6.4f, 7.8f);
+        g.DrawLine(&pen, 6.4f, 7.8f, 9.1f, 10.4f);
         break;
     case IcoRedo:
-        g.DrawLine(&pen, 14.0f, 8.0f, 7.5f, 8.0f);
-        g.DrawArc(&pen, 4.0f, 8.0f, 7.0f, 7.0f, 90.0f, 180.0f);
-        g.DrawLine(&pen, 7.5f, 15.0f, 11.0f, 15.0f);
-        g.DrawLine(&pen, 11.4f, 5.0f, 14.6f, 8.0f);
-        g.DrawLine(&pen, 14.6f, 8.0f, 11.4f, 11.0f);
+        g.DrawLine(&pen, 13.6f, 7.8f, 7.6f, 7.8f);
+        g.DrawArc(&pen, 4.4f, 7.8f, 6.4f, 6.4f, 90.0f, 180.0f);
+        g.DrawLine(&pen, 7.6f, 14.2f, 9.8f, 14.2f);
+        g.DrawLine(&pen, 10.9f, 5.2f, 13.6f, 7.8f);
+        g.DrawLine(&pen, 13.6f, 7.8f, 10.9f, 10.4f);
         break;
+    // Знак питання: дуга верхнього гачка, плавний перехід у ніжку кривою Безьє
+    // і крапка окремо. Одна дуга на 230° читалась як кільце, а не як «?».
     case IcoHelp:
-        g.DrawEllipse(&pen, 2.8f, 2.8f, 14.4f, 14.4f);
-        g.DrawArc(&pen, 7.0f, 5.2f, 6.0f, 6.0f, 170.0f, 230.0f);
-        g.DrawLine(&pen, 10.0f, 10.4f, 10.0f, 12.2f);
-        g.FillEllipse(&br, 9.05f, 13.6f, 1.9f, 1.9f);
+        g.DrawEllipse(&pen, 2.6f, 2.6f, 14.8f, 14.8f);
+        g.DrawArc(&pen, 7.0f, 4.9f, 6.0f, 6.0f, 180.0f, 200.0f);
+        g.DrawBezier(&pen, 12.82f, 8.93f, 12.2f, 10.7f, 10.0f, 10.6f, 10.0f, 12.3f);
+        g.FillEllipse(&br, 9.15f, 13.9f, 1.7f, 1.7f);
         break;
+    // IcoFront: прямокутник і стрілка вгору. IcoBack — той самий прямокутник,
+    // але вище, і стрілка вниз. Дві заливки різного квадрата, як було раніше,
+    // на цьому розмірі не розрізнялись узагалі.
     case IcoFront:
-        g.DrawRectangle(&pen, 3.2f, 3.2f, 9.6f, 9.6f);
-        g.FillRectangle(&br, 7.6f, 7.6f, 9.2f, 9.2f);
+        g.DrawRectangle(&pen, 4.0f, 9.0f, 12.0f, 8.0f);
+        g.DrawLine(&pen, 10.0f, 7.2f, 10.0f, 1.8f);
+        g.DrawLine(&pen, 7.3f, 4.5f, 10.0f, 1.8f);
+        g.DrawLine(&pen, 10.0f, 1.8f, 12.7f, 4.5f);
         break;
     case IcoBack:
-        g.FillRectangle(&br, 3.2f, 3.2f, 9.2f, 9.2f);
-        g.DrawRectangle(&pen, 7.2f, 7.2f, 9.6f, 9.6f);
+        g.DrawRectangle(&pen, 4.0f, 3.0f, 12.0f, 8.0f);
+        g.DrawLine(&pen, 10.0f, 12.8f, 10.0f, 18.2f);
+        g.DrawLine(&pen, 7.3f, 15.5f, 10.0f, 18.2f);
+        g.DrawLine(&pen, 10.0f, 18.2f, 12.7f, 15.5f);
         break;
     case IcoDel:
         g.DrawLine(&pen, 4.2f, 5.8f, 15.8f, 5.8f);
@@ -7406,6 +7417,17 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
     default: break;
     }
     g.Restore(st);
+}
+
+// Гліф займає не всю кнопку, а 58 % її сторони. Без цього поля іконка тисне
+// на межі кнопки, а штрих, який масштабується разом із сіткою, виходить удвічі
+// товщим за системні іконки поруч.
+RECT EdIconBox(const RECT& r)
+{
+    const int side = (int)(EdMin(r.right - r.left, r.bottom - r.top) * 0.58f);
+    const int cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+    RECT b = { cx - side / 2, cy - side / 2, cx - side / 2 + side, cy - side / 2 + side };
+    return b;
 }
 
 void EdDrawText(HDC dc, const RECT& r, const wchar_t* s, HFONT f, COLORREF c, UINT flags)
@@ -7821,7 +7843,7 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         if (!r) continue;
         const bool hot = (g_edHotWhat == acts[i].what);
         EdPaintButton(g, *r, t, false, hot, false, acts[i].danger);
-        EdIcon(g, acts[i].ico, *r, EdC(acts[i].danger ? t.dangerFg : t.text), 1.6f);
+        EdIcon(g, acts[i].ico, EdIconBox(*r), EdC(acts[i].danger ? t.dangerFg : t.text), 1.5f);
     }
 
     struct { EdHit what; int ico; bool on; } cmds[3] = {
@@ -7834,7 +7856,7 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         if (!r) continue;
         const bool hot = (g_edHotWhat == cmds[i].what) && cmds[i].on;
         EdPaintButton(g, *r, t, false, hot, true);
-        EdIcon(g, cmds[i].ico, *r, EdC(cmds[i].on ? t.text : t.text2, cmds[i].on ? 255 : 130), 1.6f);
+        EdIcon(g, cmds[i].ico, EdIconBox(*r), EdC(cmds[i].on ? t.text : t.text2, cmds[i].on ? 255 : 130), 1.5f);
     }
 }
 
@@ -7855,7 +7877,7 @@ void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         const bool active = ((int)g_edTool == i);
         const bool hot = (g_edHotWhat == EdHit::Tool && g_edHotIdx == i);
         EdPaintButton(g, *r, t, active, hot, !active);
-        EdIcon(g, icos[i], *r, EdC(active ? t.accent : t.text), 1.7f);
+        EdIcon(g, icos[i], EdIconBox(*r), EdC(active ? t.accent : t.text), 1.5f);
     }
 }
 
@@ -7938,7 +7960,7 @@ void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     if (const RECT* r = EdRegionRect(EdHit::Panel, 0)) {
         const bool hot = (g_edHotWhat == EdHit::Panel);
         EdPaintButton(g, *r, t, false, hot, true);
-        EdIcon(g, g_edPanelOpen ? IcoChevR : IcoChevL, *r, EdC(t.text2), 1.7f);
+        EdIcon(g, g_edPanelOpen ? IcoChevR : IcoChevL, EdIconBox(*r), EdC(t.text2), 1.5f);
     }
     if (!g_edPanelOpen) return;
 
@@ -8012,7 +8034,7 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         const RECT* r = EdRegionRect(zb[i].what, 0);
         if (!r) continue;
         EdPaintButton(g, *r, t, false, g_edHotWhat == zb[i].what, false);
-        EdIcon(g, zb[i].ico, *r, EdC(t.text), 1.6f);
+        EdIcon(g, zb[i].ico, EdIconBox(*r), EdC(t.text), 1.5f);
     }
     if (const RECT* rm = EdRegionRect(EdHit::ZoomOut, 0)) {
         const int pc = (int)(EdScale() * 100.0 + 0.5);
