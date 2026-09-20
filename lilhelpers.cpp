@@ -536,9 +536,12 @@ X(EdTipPlate,         L"Суцільна плашка",               L"Solid pl
 X(EdTipStrength,      L"Сила приховування",             L"Hiding strength")                            \
 X(EdTipMarkH,         L"Висота смуги",                  L"Band height")                                \
 X(EdTipSize,          L"Розмір",                        L"Size")                                       \
-X(EdFmtGroup,         L"Група %d · далі %d",            L"Group %d · next %d")                         \
-X(EdTipNumStart,      L"З якого числа починати групу (перенумеровує її)",                             \
-                      L"Number the group starts from (renumbers it)")                                  \
+X(EdFmtGroupOnly,     L"Група %d",                      L"Group %d")                                   \
+X(EdNumStartLabel,    L"Початковий номер",              L"Starting number")                            \
+X(EdFmtNext,          L"Наступний номер: %d",           L"Next number: %d")                            \
+X(EdTipGroup,         L"Виберіть вже вставлений елемент для вибору іншої групи",                       \
+                      L"Pick an already placed circle to switch to its group")                        \
+X(EdTipNumStart,      L"Початковий номер",              L"Starting number")                            \
 X(EdTipNumReset,      L"Нова група: нумерація знову з початку",                                        \
                       L"New group: numbering starts over")                                             \
 X(EdTipStampMore,     L"Більше емодзі",                 L"More emoji")                                 \
@@ -7332,7 +7335,10 @@ constexpr int kEdRail    = 52;    // панель інструментів
 constexpr int kEdPanel   = 260;   // права панель
 constexpr int kEdPanelLo = 30;    // вона ж згорнута
 constexpr int kEdStatus  = 48;
-constexpr int kEdMinW    = 1160;
+// Смуга лічильника — найдовша з усіх: чіп, група, початковий номер зі
+// степером, наступний номер, кольори, розміри, прозорість і кнопка нової
+// групи. Разом із діями над вибраним це 1270 точок, звідси й мінімум.
+constexpr int kEdMinW    = 1280;
 // 11 інструментів займають 8 + 7 + 11*(40+4) = 499 точок. Плюс заголовок,
 // смуга властивостей і рядок стану — ось звідки цей мінімум: у нижчому вікні
 // останній інструмент просто не вміщався б у панель.
@@ -7577,7 +7583,7 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Front, Back, Del, ZoomOut, ZoomIn, Fit, Panel, Copy, Save,
                    Thick, Fill, Size, Bold, Italic, Align, Stroke, Dup, Open,
                    OpenMenu, Min, Max, Close, HideMode, Strength,
-                   NumStart, NumReset, StampPick, StampMore };
+                   NumStart, NumReset, StampPick, StampMore, NumGroup, NumNext };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7588,7 +7594,7 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoDup, IcoOpen, IcoChevD, IcoSave, IcoCopy,
              IcoWinMin, IcoWinMax, IcoWinRestore, IcoWinClose,
              IcoHide, IcoMark, IcoBlur, IcoPixels, IcoPlate, IcoStrength,
-             IcoCounter, IcoStamp, IcoNumStart, IcoRestart, IcoMore,
+             IcoCounter, IcoStamp, IcoNewGroup, IcoMore,
              IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn };
 
 enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength };
@@ -7843,18 +7849,13 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
         g.DrawLine(&pen, 6.6f, 6.2f, 7.6f, 9.0f);
         g.DrawLine(&pen, 13.4f, 6.2f, 12.4f, 9.0f);
         break;
-    case IcoNumStart:
-        g.DrawLine(&pen, 4.0f, 10.0f, 4.0f, 16.0f);
-        g.DrawLine(&pen, 7.4f, 8.6f, 9.2f, 7.0f);
-        g.DrawLine(&pen, 9.2f, 7.0f, 9.2f, 16.0f);
-        g.DrawLine(&pen, 7.2f, 16.0f, 11.2f, 16.0f);
-        g.DrawLine(&pen, 13.6f, 4.4f, 16.6f, 4.4f);
-        g.DrawLine(&pen, 15.1f, 4.4f, 15.1f, 16.0f);
-        break;
-    case IcoRestart:
-        g.DrawArc(&pen, 3.4f, 3.4f, 13.2f, 13.2f, -50.0f, 290.0f);
-        g.DrawLine(&pen, 13.4f, 1.8f, 16.8f, 4.6f);
-        g.DrawLine(&pen, 16.8f, 4.6f, 13.2f, 7.0f);
+    // Нова група — коло з плюсом: те саме коло, що й сам лічильник, плюс
+    // означає «ще одне». Кругова стрілка, яка тут стояла раніше, на двадцяти
+    // точках зліплювалась у кільце й читалась як «оновити», а не «нова».
+    case IcoNewGroup:
+        g.DrawEllipse(&pen, 2.8f, 2.8f, 14.4f, 14.4f);
+        g.DrawLine(&pen, 10.0f, 6.2f, 10.0f, 13.8f);
+        g.DrawLine(&pen, 6.2f, 10.0f, 13.8f, 10.0f);
         break;
     case IcoMore:
         g.FillEllipse(&br, 3.0f, 8.6f, 2.8f, 2.8f);
@@ -8405,27 +8406,32 @@ void EdLayout(HWND hwnd)
                 x = rm.right + gap;
             }
 
-            // Лічильник: початок групи, «група · далі» і кнопка нової групи.
+            // Лічильник читається зліва направо як речення: яка група, з якого
+            // числа вона починається, який номер піде наступним. Кнопка нової
+            // групи стоїть окремо в кінці смуги — це дія, а не властивість.
             if (kk == EdKind::Counter) {
-                RECT si = EdPill(x, cy, EdPx(18), EdPx(18));
-                EdAdd(si, EdHit::None, 0);
-                x = si.right + EdPx(6);
+                const int grp = EdCurGroup();
+                wchar_t gb[64];
+                wsprintfW(gb, S(Str::EdFmtGroupOnly), grp + 1);
+                RECT gt = EdPill(x, cy, EdTextWidth(dc, gb, g_edFontBold) + EdPx(6), EdPx(26));
+                EdAdd(gt, EdHit::NumGroup, 0);
+                x = gt.right + EdPx(14);
+
+                // Підпис теж є ділянкою — лише заради підказки на наведення.
+                RECT lb = EdPill(x, cy, EdTextWidth(dc, S(Str::EdNumStartLabel), g_edFont) + EdPx(4),
+                                 EdPx(26));
+                EdAdd(lb, EdHit::NumStart, 2);
+                x = lb.right + EdPx(6);
                 RECT sm = EdPill(x, cy, EdPx(24), EdPx(26)); EdAdd(sm, EdHit::NumStart, 0);
                 x = sm.right + EdPx(2) + EdPx(30) + EdPx(2);
                 RECT sp = EdPill(x, cy, EdPx(24), EdPx(26)); EdAdd(sp, EdHit::NumStart, 1);
-                x = sp.right + EdPx(8);
+                x = sp.right + EdPx(14);
 
-                // «Група N · далі M» — не інтерактивний, рахуємо ширину як для чіпа.
-                wchar_t gb[48];
-                wsprintfW(gb, S(Str::EdFmtGroup), EdCurGroup() + 1,
-                          EdGroupStart(EdCurGroup()) + EdGroupCount(EdCurGroup()));
-                RECT gt = EdPill(x, cy, EdTextWidth(dc, gb, g_edFont) + EdPx(4), EdPx(26));
-                EdAdd(gt, EdHit::None, 0);
-                x = gt.right + EdPx(8);
-
-                RECT rb = EdPill(x, cy, EdPx(30), EdPx(28));
-                EdAdd(rb, EdHit::NumReset, 0);
-                x = rb.right + gap;
+                wchar_t nx[64];
+                wsprintfW(nx, S(Str::EdFmtNext), EdGroupStart(grp) + EdGroupCount(grp));
+                RECT nt = EdPill(x, cy, EdTextWidth(dc, nx, g_edFont) + EdPx(4), EdPx(26));
+                EdAdd(nt, EdHit::NumNext, 0);
+                x = nt.right + gap;
             }
 
             int npal = 8;
@@ -8501,6 +8507,12 @@ void EdLayout(HWND hwnd)
             RECT sl = EdPill(x, cy, EdPx(76), EdPx(20));
             EdAdd(sl, EdHit::Opacity, 0);
             x = sl.right + EdPx(8) + EdPx(44) + gap;
+
+            if (kk == EdKind::Counter) {
+                RECT rb = EdPill(x, cy, EdPx(32), EdPx(28));
+                EdAdd(rb, EdHit::NumReset, 0);
+                x = rb.right + gap;
+            }
         }
 
         // Скасувати, повторити й довідка переїхали в заголовок (рішення власника
@@ -8895,18 +8907,20 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         }
     }
 
-    // Лічильник: початок групи, «група · далі», нова група.
+    // Лічильник: група, початковий номер, наступний номер, нова група.
     {
-        wchar_t nb[48];
+        wchar_t nb[64];
         const int grp = EdCurGroup();
+        if (const RECT* gt = EdRegionRect(EdHit::NumGroup, 0)) {
+            wsprintfW(nb, S(Str::EdFmtGroupOnly), grp + 1);
+            EdDrawText(dc, *gt, nb, g_edFontBold, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
+        if (const RECT* lb = EdRegionRect(EdHit::NumStart, 2))
+            EdDrawText(dc, *lb, S(Str::EdNumStartLabel), g_edFont, t.text2,
+                       DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         for (int i = 0; i < 2; ++i) {
             const RECT* r = EdRegionRect(EdHit::NumStart, i);
             if (!r) break;
-            if (i == 0) {
-                RECT ic = { r->left - EdPx(6) - EdPx(18), (r->top + r->bottom) / 2 - EdPx(9),
-                            r->left - EdPx(6), (r->top + r->bottom) / 2 + EdPx(9) };
-                EdIcon(g, IcoNumStart, ic, EdC(t.text2), 1.5f);
-            }
             EdPaintButton(g, *r, t, false, g_edHotWhat == EdHit::NumStart && g_edHotIdx == i, false);
             EdIcon(g, i ? IcoPlus : IcoMinus, EdIconBox(*r), EdC(t.text), 1.6f);
             if (i == 0) {
@@ -8914,20 +8928,17 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
                 if (r2) {
                     wsprintfW(nb, L"%d", EdGroupStart(grp));
                     RECT tv = { r->right, r->top, r2->left, r->bottom };
-                    EdDrawText(dc, tv, nb, g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    EdDrawText(dc, tv, nb, g_edFontBold, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 }
             }
         }
+        if (const RECT* nt = EdRegionRect(EdHit::NumNext, 0)) {
+            wsprintfW(nb, S(Str::EdFmtNext), EdGroupStart(grp) + EdGroupCount(grp));
+            EdDrawText(dc, *nt, nb, g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
         if (const RECT* rb = EdRegionRect(EdHit::NumReset, 0)) {
-            // Напис «Група N · далі M» стоїть одразу ліворуч від кнопки.
-            const RECT* sp = EdRegionRect(EdHit::NumStart, 1);
-            if (sp) {
-                wsprintfW(nb, S(Str::EdFmtGroup), grp + 1, EdGroupStart(grp) + EdGroupCount(grp));
-                RECT tv = { sp->right + EdPx(8), g_edRcStrip.top, rb->left - EdPx(4), g_edRcStrip.bottom };
-                EdDrawText(dc, tv, nb, g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-            }
             EdPaintButton(g, *rb, t, false, g_edHotWhat == EdHit::NumReset, false);
-            EdIcon(g, IcoRestart, EdIconBox(*rb), EdC(t.text), 1.5f);
+            EdIcon(g, IcoNewGroup, EdIconBox(*rb), EdC(t.text), 1.5f);
         }
     }
 
@@ -10343,6 +10354,7 @@ Str EdTipFor(EdHit what, int idx)
         }
     case EdHit::HideMode: return idx == 1 ? Str::EdTipPixels : idx == 2 ? Str::EdTipPlate : Str::EdTipBlur;
     case EdHit::NumStart: return Str::EdTipNumStart;
+    case EdHit::NumGroup: return Str::EdTipGroup;
     case EdHit::NumReset: return Str::EdTipNumReset;
     case EdHit::StampMore: return Str::EdTipStampMore;
     case EdHit::Strength: return Str::EdTipStrength;
@@ -11183,7 +11195,11 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case EdHit::StampMore:
             EdEmojiPick(hwnd, r->r);
             return 0;
+        case EdHit::NumGroup:
+        case EdHit::NumNext:
+            return 0;                      // самі лише підписи, з підказкою
         case EdHit::NumStart: {
+            if (r->idx > 1) return 0;      // підпис «Початковий номер» не клікається
             // Початок живе в кружечках групи, тож зміна перенумеровує їх усіх
             // і лягає в скасування. Порожня група тримає початок у типовому.
             const int grp = EdCurGroup();
@@ -11671,7 +11687,7 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     wsprintfW(caption, L"%s — %s", S(Str::EdTitle), kAppName);
 
     const int dpi = (int)GetDpiForSystem();
-    const int want = MulDiv(1280, dpi, 96), wantH = MulDiv(760, dpi, 96);
+    const int want = MulDiv(1400, dpi, 96), wantH = MulDiv(760, dpi, 96);
     RECT work = {};
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
     const int maxW = (work.right - work.left) - MulDiv(80, dpi, 96);
@@ -11889,6 +11905,41 @@ void EdSaveDirRemember(const wchar_t* path)
     }
 }
 
+// Єдине місце, де редактор пише файл. Діалог лише добуває шлях: так те, що
+// зберігається, не може розійтися з тим, що показано, і те саме можна
+// перевірити без діалогу взагалі.
+bool EdWriteFile(const wchar_t* path)
+{
+    if (!path || !*path) return false;
+    bool ok = false;
+    if (Gdiplus::Bitmap* flat = EdRender()) {
+        const wchar_t* ext = wcsrchr(path, L'.');
+        const bool jpg = ext && (!lstrcmpiW(ext, L".jpg") || !lstrcmpiW(ext, L".jpeg"));
+        CLSID enc;
+        if (EdEncoderClsid(jpg ? L"image/jpeg" : L"image/png", &enc)) {
+            if (jpg) {
+                // Якість фіксована 92: помітної втрати ще нема, а повзунок у
+                // системному діалозі не поставиш — окремий контроль буде в
+                // налаштуваннях.
+                ULONG q = 92;
+                Gdiplus::EncoderParameters ep;
+                ep.Count = 1;
+                ep.Parameter[0].Guid = Gdiplus::EncoderQuality;
+                ep.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
+                ep.Parameter[0].NumberOfValues = 1;
+                ep.Parameter[0].Value = &q;
+                ok = flat->Save(path, &enc, &ep) == Gdiplus::Ok;
+            } else {
+                ok = flat->Save(path, &enc, nullptr) == Gdiplus::Ok;
+            }
+        }
+        delete flat;
+    }
+    if (ok) EdSaveDirRemember(path);
+    else MessageBoxW(g_edWnd, S(Str::EdErrSave), kAppName, MB_OK | MB_ICONWARNING);
+    return ok;
+}
+
 bool EdSaveAs()
 {
     IFileSaveDialog* dlg = nullptr;
@@ -11932,31 +11983,7 @@ bool EdSaveAs()
         if (SUCCEEDED(dlg->GetResult(&item)) && item) {
             PWSTR path = nullptr;
             if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
-                if (Gdiplus::Bitmap* flat = EdRender()) {
-                    const wchar_t* ext = wcsrchr(path, L'.');
-                    const bool jpg = ext && (!lstrcmpiW(ext, L".jpg") || !lstrcmpiW(ext, L".jpeg"));
-                    CLSID enc;
-                    if (EdEncoderClsid(jpg ? L"image/jpeg" : L"image/png", &enc)) {
-                        if (jpg) {
-                            // Якість фіксована 92: помітної втрати ще нема, а
-                            // повзунок у системному діалозі не поставиш —
-                            // окремий контроль буде в налаштуваннях.
-                            ULONG q = 92;
-                            Gdiplus::EncoderParameters ep;
-                            ep.Count = 1;
-                            ep.Parameter[0].Guid = Gdiplus::EncoderQuality;
-                            ep.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
-                            ep.Parameter[0].NumberOfValues = 1;
-                            ep.Parameter[0].Value = &q;
-                            ok = flat->Save(path, &enc, &ep) == Gdiplus::Ok;
-                        } else {
-                            ok = flat->Save(path, &enc, nullptr) == Gdiplus::Ok;
-                        }
-                    }
-                    delete flat;
-                }
-                if (ok) EdSaveDirRemember(path);
-                else MessageBoxW(g_edWnd, S(Str::EdErrSave), kAppName, MB_OK | MB_ICONWARNING);
+                ok = EdWriteFile(path);
                 CoTaskMemFree(path);
             }
             item->Release();
