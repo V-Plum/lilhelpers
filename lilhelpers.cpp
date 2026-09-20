@@ -482,6 +482,8 @@ X(EdToolPen,          L"Олівець",                       L"Pencil")       
 X(EdToolText,         L"Текст",                         L"Text")                                       \
 X(EdToolHide,         L"Приховати",                     L"Hide")                                       \
 X(EdToolMark,         L"Маркер",                        L"Marker")                                     \
+X(EdToolCounter,      L"Лічильник",                     L"Counter")                                    \
+X(EdToolStamp,        L"Штамп",                         L"Stamp")                                      \
 X(EdOutline,          L"Контур",                        L"Outline")                                    \
 X(EdFilled,           L"Заливка",                       L"Filled")                                     \
 X(CapKeepTool,        L"Лишати інструмент активним після малювання",                                   \
@@ -533,6 +535,12 @@ X(EdTipPixels,        L"Пікселі",                       L"Pixels")       
 X(EdTipPlate,         L"Суцільна плашка",               L"Solid plate")                                \
 X(EdTipStrength,      L"Сила приховування",             L"Hiding strength")                            \
 X(EdTipMarkH,         L"Висота смуги",                  L"Band height")                                \
+X(EdTipSize,          L"Розмір",                        L"Size")                                       \
+X(EdTipNum,           L"Наступний номер",               L"Next number")                                \
+X(EdTipNumStart,      L"З якого числа починати",        L"Number to start from")                       \
+X(EdNumReset,         L"Почати",                        L"Restart")                                    \
+X(EdTipNumReset,      L"Скинути лічильник до початку",  L"Reset the counter to the start")             \
+X(EdTipStampMore,     L"Більше емодзі",                 L"More emoji")                                 \
 X(EdTipTextBox,       L"Ручками з боків — ширина блока; кегль — степером",                              \
                       L"Side handles set the block width; type size has a stepper")                    \
 X(EdAskReplace,       L"Відкрити інше зображення? Позначки не збережено.",                             \
@@ -541,7 +549,7 @@ X(EdOpenFilter,       L"Зображення",                    L"Images")    
 X(EdErrOpen,          L"Не вдалося відкрити зображення.", L"Could not open the image.")                \
 X(EdHelpTitle,        L"Редактор знімків",              L"Screenshot editor")                          \
 X(EdHelpBody,         L"Інструменти: V вибір, R прямокутник, O овал, A стрілка, L лінія,\n"            \
-                      L"P олівець, T текст, B приховати, H маркер.\n\n"                                \
+                      L"P олівець, T текст, B приховати, H маркер,\nN лічильник, S штамп.\n\n"          \
                       L"Shift під час малювання — квадрат, коло, кут через 45°\n"                       \
                       L"Текст: Enter — готово, Shift+Enter — новий рядок,\n"                            \
                       L"подвійний клік по напису — відкрити на правку\n"                                \
@@ -550,7 +558,7 @@ X(EdHelpBody,         L"Інструменти: V вибір, R прямокут
                       L"Коліщатко — масштаб, подвійний клік — вписати\n"                                \
                       L"Пробіл або середня кнопка — рухати полотно",                                    \
                       L"Tools: V select, R rectangle, O oval, A arrow, L line,\n"                       \
-                      L"P pencil, T text, B hide, H marker.\n\n"                                       \
+                      L"P pencil, T text, B hide, H marker,\nN counter, S stamp.\n\n"                   \
                       L"Shift while drawing — square, circle, 45° steps\n"                              \
                       L"Text: Enter finishes, Shift+Enter adds a line,\n"                               \
                       L"double click a caption to edit it again\n"                                      \
@@ -7324,7 +7332,10 @@ constexpr int kEdPanel   = 260;   // права панель
 constexpr int kEdPanelLo = 30;    // вона ж згорнута
 constexpr int kEdStatus  = 48;
 constexpr int kEdMinW    = 1160;
-constexpr int kEdMinH    = 600;
+// 11 інструментів займають 8 + 7 + 11*(40+4) = 499 точок. Плюс заголовок,
+// смуга властивостей і рядок стану — ось звідки цей мінімум: у нижчому вікні
+// останній інструмент просто не вміщався б у панель.
+constexpr int kEdMinH    = 660;
 constexpr int kEdUndoMax = 120;   // глибина скасування; знімок списку дешевий
 
 struct EdTheme {
@@ -7363,8 +7374,8 @@ const COLORREF kEdPalette[8] = {
     RGB(0, 120, 212), RGB(123, 63, 228), RGB(27, 27, 31), RGB(255, 255, 255)
 };
 
-enum class EdTool { Select, Rect, Ellipse, Arrow, Line, Pen, Text, Hide, Mark };
-enum class EdKind { Rect, Ellipse, Arrow, Line, Pen, Text, Hide, Mark };
+enum class EdTool { Select, Rect, Ellipse, Arrow, Line, Pen, Text, Hide, Mark, Counter, Stamp };
+enum class EdKind { Rect, Ellipse, Arrow, Line, Pen, Text, Hide, Mark, Counter, Stamp };
 
 struct EdObj {
     EdKind   kind;
@@ -7392,6 +7403,10 @@ struct EdObj {
     // і від неї залежить радіус розмиття чи розмір блока пікселізації.
     int      mode;
     int      strength;
+    // Лічильник і штамп. num — число в кружечку; stamp — що саме за штамп:
+    // 0..5 власні контури, від kEdEmojiBase — емодзі за номером у таблиці.
+    int      num;
+    int      stamp;
 };
 
 // Чіп називає вид однією назвою і для інструмента, і для вибраного. Префікс
@@ -7407,6 +7422,8 @@ Str EdKindName(EdKind k)
     case EdKind::Text:    return Str::EdToolText;
     case EdKind::Hide:    return Str::EdToolHide;
     case EdKind::Mark:    return Str::EdToolMark;
+    case EdKind::Counter: return Str::EdToolCounter;
+    case EdKind::Stamp:   return Str::EdToolStamp;
     default:              return Str::EdToolRect;
     }
 }
@@ -7421,6 +7438,8 @@ Str EdToolName(EdTool t)
     case EdTool::Text:    return Str::EdToolText;
     case EdTool::Hide:    return Str::EdToolHide;
     case EdTool::Mark:    return Str::EdToolMark;
+    case EdTool::Counter: return Str::EdToolCounter;
+    case EdTool::Stamp:   return Str::EdToolStamp;
     case EdTool::Rect:    return Str::EdToolRect;
     default:              return Str::Empty;
     }
@@ -7436,6 +7455,8 @@ EdKind EdToolKind(EdTool t)
     case EdTool::Text:    return EdKind::Text;
     case EdTool::Hide:    return EdKind::Hide;
     case EdTool::Mark:    return EdKind::Mark;
+    case EdTool::Counter: return EdKind::Counter;
+    case EdTool::Stamp:   return EdKind::Stamp;
     default:              return EdKind::Rect;
     }
 }
@@ -7448,6 +7469,35 @@ bool EdIsEffect(EdKind k)  { return k == EdKind::Hide || k == EdKind::Mark; }
 // У напису товщини немає: її роль грає кегль. У приховування — теж: там сила.
 // У маркера ті самі три кнопки означають висоту смуги.
 bool EdHasThick(EdKind k)  { return k != EdKind::Text && k != EdKind::Hide; }
+// Лічильник і штамп ставляться одним кліком, а не тягненням: у них немає
+// «намалюй рамку», є лише розмір із трьох значень.
+bool EdIsStamped(EdKind k) { return k == EdKind::Counter || k == EdKind::Stamp; }
+
+// Розміри кружечка лічильника й штампа — діаметр у пікселях знімка.
+const int kEdStampSizes[3] = { 28, 40, 56 };
+
+// Шість власних контурів. Далі — емодзі з таблиці нижче.
+constexpr int kEdEmojiBase = 100;
+const int kEdVectorStamps = 6;
+
+// Чотири швидкі емодзі в смузі; решта — у сітці за кнопкою «…». Тримаємо один
+// список: перші чотири просто показуються одразу.
+const wchar_t* const kEdEmoji[] = {
+    L"\U0001F44D", L"\U0001F44E", L"\U0001F512", L"\U0001F4A1",
+    L"\u2705",     L"\u274C",     L"\u2757",     L"\u2753",
+    L"\u26A0",     L"\U0001F525", L"\u2B50",     L"\U0001F4CC",
+    L"\U0001F440", L"\U0001F3AF", L"\U0001F41B", L"\U0001F389",
+    L"\u2B06",     L"\u2B07",     L"\u27A1",     L"\u2B05",
+    L"\U0001F535", L"\U0001F534", L"\U0001F7E2", L"\U0001F7E1",
+    L"\U0001F4C1", L"\U0001F5D1", L"\U0001F50D", L"\u2699",
+    L"\U0001F464", L"\U0001F4C5", L"\u23F0",     L"\U0001F4AC",
+    L"\u2764",     L"\U0001F44C", L"\U0001F91D", L"\U0001F680",
+    L"\U0001F6D1", L"\u267B",     L"\U0001F4CA", L"\U0001F4B0",
+    L"\u2753",     L"\u2139",     L"\U0001F4DD", L"\U0001F3C1",
+    L"\U0001F513", L"\U0001F4E7", L"\U0001F5A5", L"\U0001F4F1"
+};
+const int kEdEmojiCount = (int)(sizeof(kEdEmoji) / sizeof(*kEdEmoji));
+const int kEdEmojiQuick = 4;      // скільки з них стоїть просто в смузі
 
 // Три висоти смуги маркера — у пікселях знімка, як і решта розмірів.
 const int kEdMarkH[3] = { 16, 26, 40 };
@@ -7471,7 +7521,9 @@ const int kEdThicks[3] = { 2, 4, 7 };
 
 const int* EdThickSet(EdKind k)
 {
-    return (k == EdKind::Mark) ? kEdMarkH : kEdThicks;
+    if (k == EdKind::Mark) return kEdMarkH;
+    if (EdIsStamped(k))    return kEdStampSizes;
+    return kEdThicks;
 }
 
 int EdThickIndex(EdKind k, int t)
@@ -7504,10 +7556,21 @@ struct EdSnap {
     int sel;
 };
 
+struct EdTile {
+    std::wstring     key;
+    Gdiplus::Bitmap* bmp;
+    int              pad;    // на скільки плитка більша за сам напис із кожного боку
+};
+
+// Плитки малюються далеко нижче, а смуга властивостей показує ними емодзі
+// на кнопках штампів — тому оголошуємо наперед.
+const EdTile* EdTextTile(const EdObj& o, double s);
+
 enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Front, Back, Del, ZoomOut, ZoomIn, Fit, Panel, Copy, Save,
                    Thick, Fill, Size, Bold, Italic, Align, Stroke, Dup, Open,
-                   OpenMenu, Min, Max, Close, HideMode, Strength };
+                   OpenMenu, Min, Max, Close, HideMode, Strength,
+                   Num, NumStart, NumReset, StampPick, StampMore };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7517,7 +7580,9 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoAlignL, IcoAlignC, IcoAlignR, IcoStroke0, IcoStroke1, IcoStroke2,
              IcoDup, IcoOpen, IcoChevD, IcoSave, IcoCopy,
              IcoWinMin, IcoWinMax, IcoWinRestore, IcoWinClose,
-             IcoHide, IcoMark, IcoBlur, IcoPixels, IcoPlate, IcoStrength };
+             IcoHide, IcoMark, IcoBlur, IcoPixels, IcoPlate, IcoStrength,
+             IcoCounter, IcoStamp, IcoNumStart, IcoRestart, IcoMore,
+             IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn };
 
 enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength };
 
@@ -7569,6 +7634,13 @@ int      g_edHideMode = 1;        // типово пікселі: вони че�
 int      g_edStrength = 70;
 int      g_edMarkH    = kEdMarkH[1];
 COLORREF g_edMarkColor = RGB(255, 255, 0);
+// Лічильник нумерує сам, а «початок» — те число, до якого його скидає кнопка
+// «Почати». Видалення кружечка з середини решту НЕ перенумеровує: підпис у чаті
+// поруч зі знімком інакше перестав би збігатися.
+int      g_edNextNum  = 1;
+int      g_edStartNum = 1;
+int      g_edStampSize = kEdStampSizes[1];
+int      g_edStamp    = 0;
 
 float g_edZoom = 1.0f;                   // множник до «вписаного», як у перегляді
 int   g_edPanX = 0, g_edPanY = 0;
@@ -7637,6 +7709,11 @@ void EdFillRound(Gdiplus::Graphics& g, const RECT& r, float rad,
 
 // Іконки малюються в сітці 20×20 і масштабуються у квадрат кнопки. Так одна
 // правка форми діє на всі розміри й на будь-який DPI.
+// Контур штампа малюється нижче, а потрібен уже тут: кнопка штампа в смузі
+// показує РІВНО той самий контур, що й ставить, щоб вони не розійшлися.
+void EdStampShape(Gdiplus::Graphics& g, int id, float ox, float oy, float side,
+                  Gdiplus::Color c);
+
 void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, float sw = 1.7f)
 {
     const int side = EdMin(box.right - box.left, box.bottom - box.top);
@@ -7737,6 +7814,52 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
     // Кнопки вікна малюємо тонкою лінією в один піксель, як це робить сама
     // Windows: товстий штрих поруч із системними вікнами читається як чужий.
     // Приховати — око з рискою: те саме, чим позначають «не показувати».
+    // Лічильник — кружечок із одиницею всередині; малюємо саму цифру шляхами,
+    // бо тексту в піктограмах у нас немає.
+    case IcoCounter:
+        g.DrawEllipse(&pen, 2.6f, 2.6f, 14.8f, 14.8f);
+        g.DrawLine(&pen, 8.4f, 7.6f, 10.2f, 6.0f);
+        g.DrawLine(&pen, 10.2f, 6.0f, 10.2f, 14.0f);
+        g.DrawLine(&pen, 8.2f, 14.0f, 12.2f, 14.0f);
+        break;
+    case IcoStamp:
+        g.DrawLine(&pen, 5.4f, 16.6f, 14.6f, 16.6f);
+        g.DrawLine(&pen, 6.4f, 13.4f, 13.6f, 13.4f);
+        g.DrawLine(&pen, 6.4f, 13.4f, 7.6f, 9.0f);
+        g.DrawLine(&pen, 13.6f, 13.4f, 12.4f, 9.0f);
+        g.DrawArc(&pen, 6.6f, 2.8f, 6.8f, 6.8f, 0.0f, -180.0f);
+        g.DrawLine(&pen, 6.6f, 6.2f, 7.6f, 9.0f);
+        g.DrawLine(&pen, 13.4f, 6.2f, 12.4f, 9.0f);
+        break;
+    case IcoNumStart:
+        g.DrawLine(&pen, 4.0f, 10.0f, 4.0f, 16.0f);
+        g.DrawLine(&pen, 7.4f, 8.6f, 9.2f, 7.0f);
+        g.DrawLine(&pen, 9.2f, 7.0f, 9.2f, 16.0f);
+        g.DrawLine(&pen, 7.2f, 16.0f, 11.2f, 16.0f);
+        g.DrawLine(&pen, 13.6f, 4.4f, 16.6f, 4.4f);
+        g.DrawLine(&pen, 15.1f, 4.4f, 15.1f, 16.0f);
+        break;
+    case IcoRestart:
+        g.DrawArc(&pen, 3.4f, 3.4f, 13.2f, 13.2f, -50.0f, 290.0f);
+        g.DrawLine(&pen, 13.4f, 1.8f, 16.8f, 4.6f);
+        g.DrawLine(&pen, 16.8f, 4.6f, 13.2f, 7.0f);
+        break;
+    case IcoMore:
+        g.FillEllipse(&br, 3.0f, 8.6f, 2.8f, 2.8f);
+        g.FillEllipse(&br, 8.6f, 8.6f, 2.8f, 2.8f);
+        g.FillEllipse(&br, 14.2f, 8.6f, 2.8f, 2.8f);
+        break;
+    case IcoStCheck: case IcoStCross: case IcoStQuestion:
+    case IcoStBang:  case IcoStStar:  case IcoStWarn: {
+        // Піктограма штампа — той самий контур, що й сам штамп: одне джерело,
+        // тож кнопка не може розійтися з тим, що вона ставить.
+        const int side = EdMin(box.right - box.left, box.bottom - box.top);
+        g.Restore(st);
+        EdStampShape(g, id - IcoStCheck,
+                     box.left + (box.right - box.left - side) / 2.0f,
+                     box.top + (box.bottom - box.top - side) / 2.0f, (float)side, c);
+        return;
+    }
     case IcoHide:
         g.DrawBezier(&pen, 2.4f, 10.0f, 6.0f, 4.6f, 14.0f, 4.6f, 17.6f, 10.0f);
         g.DrawBezier(&pen, 17.6f, 10.0f, 14.0f, 15.4f, 6.0f, 15.4f, 2.4f, 10.0f);
@@ -8068,6 +8191,7 @@ RECT EdObjScreen(const EdObj& o)
 // у нього теж немає.
 int EdHandleCount(const EdObj& o)
 {
+    if (EdIsStamped(o.kind)) return 0;
     // Маркер, як і напис, тягнеться лише вшир: висота смуги — це набір із трьох
     // значень, і ручка, що її розтягує, зробила б сусідні смуги різними.
     if (o.kind == EdKind::Text || o.kind == EdKind::Mark) return 2;
@@ -8200,7 +8324,7 @@ void EdLayout(HWND hwnd)
         const int b = EdPx(40), gap = EdPx(4);
         int y = g_edRcRail.top + EdPx(8);
         const int x = g_edRcRail.left + (rail - b) / 2;
-        for (int i = 0; i < 9; ++i) {
+        for (int i = 0; i < 11; ++i) {
             if (i == 1) y += EdPx(7);      // вказівник відділено від фігур
             RECT r = { x, y, x + b, y + b };
             EdAdd(r, EdHit::Tool, i);
@@ -8240,17 +8364,56 @@ void EdLayout(HWND hwnd)
                     x = r.right + EdPx(2);
                 }
                 x += gap - EdPx(2);
+                // Плашка суцільна, і сили в неї немає — повзунок, який нічого не
+                // робить, гірший за його відсутність (зауваження власника 20.09).
+                if (curMode != 2) {
+                    RECT si = EdPill(x, cy, EdPx(18), EdPx(18));
+                    EdAdd(si, EdHit::None, 0);
+                    x = si.right + EdPx(8);
+                    RECT ss = EdPill(x, cy, EdPx(76), EdPx(20));
+                    EdAdd(ss, EdHit::Strength, 0);
+                    x = ss.right + EdPx(8) + EdPx(44) + gap;
+                }
+            }
+
+            // Штампи: шість контурів, чотири швидкі емодзі й «…» на решту.
+            if (kk == EdKind::Stamp) {
+                for (int i = 0; i < kEdVectorStamps + kEdEmojiQuick; ++i) {
+                    RECT r = EdPill(x, cy, EdPx(28), EdPx(28));
+                    EdAdd(r, EdHit::StampPick, i);
+                    x = r.right + EdPx(2);
+                }
+                RECT rm = EdPill(x, cy, EdPx(28), EdPx(28));
+                EdAdd(rm, EdHit::StampMore, 0);
+                x = rm.right + gap;
+            }
+
+            // Лічильник: наступний номер, число початку й кнопка скидання.
+            if (kk == EdKind::Counter) {
+                RECT nm = EdPill(x, cy, EdPx(24), EdPx(26)); EdAdd(nm, EdHit::Num, 0);
+                x = nm.right + EdPx(2) + EdPx(34) + EdPx(2);
+                RECT np = EdPill(x, cy, EdPx(24), EdPx(26)); EdAdd(np, EdHit::Num, 1);
+                x = np.right + gap;
+
                 RECT si = EdPill(x, cy, EdPx(18), EdPx(18));
                 EdAdd(si, EdHit::None, 0);
-                x = si.right + EdPx(8);
-                RECT ss = EdPill(x, cy, EdPx(76), EdPx(20));
-                EdAdd(ss, EdHit::Strength, 0);
-                x = ss.right + EdPx(8) + EdPx(44) + gap;
+                x = si.right + EdPx(6);
+                RECT sm = EdPill(x, cy, EdPx(24), EdPx(26)); EdAdd(sm, EdHit::NumStart, 0);
+                x = sm.right + EdPx(2) + EdPx(30) + EdPx(2);
+                RECT sp = EdPill(x, cy, EdPx(24), EdPx(26)); EdAdd(sp, EdHit::NumStart, 1);
+                x = sp.right + EdPx(8);
+
+                RECT rb = EdPill(x, cy, EdPx(30), EdPx(28));
+                EdAdd(rb, EdHit::NumReset, 0);
+                x = rb.right + gap;
             }
 
             int npal = 8;
             const COLORREF* pal = EdPaletteFor(kk, npal);
-            const bool showPal = (kk != EdKind::Hide) || (curMode == 2);
+            // Емодзі мають власний колір, палітра на них не діє.
+            const bool emojiStamp = (kk == EdKind::Stamp) &&
+                ((hasSel ? g_edObjs[g_edSel].stamp : g_edStamp) >= kEdEmojiBase);
+            const bool showPal = ((kk != EdKind::Hide) || (curMode == 2)) && !emojiStamp;
             if (showPal) {
                 const int sw = EdPx(22), sg = EdPx(5);
                 for (int i = 0; i < npal; ++i) {
@@ -8577,13 +8740,25 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 
     {
         const int* tset = EdThickSet(kkp);
+        const int defThick = (kkp == EdKind::Mark) ? g_edMarkH
+                           : EdIsStamped(kkp) ? g_edStampSize : g_edThick;
         const int curThick = hasSel ? EdThickIndex(kkp, g_edObjs[g_edSel].thick)
-                                    : EdThickIndex(kkp, kkp == EdKind::Mark ? g_edMarkH : g_edThick);
+                                    : EdThickIndex(kkp, defThick);
         for (int i = 0; i < 3; ++i) {
             const RECT* r = EdRegionRect(EdHit::Thick, i);
             if (!r) break;
             const bool on = (i == curThick);
             EdPaintButton(g, *r, t, on, g_edHotWhat == EdHit::Thick && g_edHotIdx == i, false);
+            // Розмір штампа показуємо кружечком, а не смужкою: смужка означає
+            // товщину лінії, і три різні смисли на одній формі плутають.
+            if (EdIsStamped(kkp)) {
+                const int side = EdPx(8 + i * 5);
+                Gdiplus::SolidBrush sb(EdC(on ? t.accent : t.text));
+                g.FillEllipse(&sb, (float)((r->left + r->right) / 2 - side / 2),
+                              (float)((r->top + r->bottom) / 2 - side / 2),
+                              (float)side, (float)side);
+                continue;
+            }
             // Смуга маркера вища за лінію — показуємо її в тій самій пропорції,
             // але приборкуємо, щоб найтовща не вилазила за кнопку.
             int bh = EdPx(tset[i]) * 2 / 3;
@@ -8662,6 +8837,88 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         }
     }
 
+    // Штампи: кнопка показує сам штамп. Емодзі малюємо тією самою плиткою, що й
+    // на полотні, — інакше в смузі вони були б чорно-білими.
+    {
+        const int curStamp = (hasSel && g_edObjs[g_edSel].kind == EdKind::Stamp)
+                                 ? g_edObjs[g_edSel].stamp : g_edStamp;
+        for (int i = 0; i < kEdVectorStamps + kEdEmojiQuick; ++i) {
+            const RECT* r = EdRegionRect(EdHit::StampPick, i);
+            if (!r) break;
+            const bool on = (i < kEdVectorStamps) ? (curStamp == i)
+                                                  : (curStamp == kEdEmojiBase + (i - kEdVectorStamps));
+            EdPaintButton(g, *r, t, on, g_edHotWhat == EdHit::StampPick && g_edHotIdx == i, false);
+            const RECT ib = EdIconBox(*r);
+            if (i < kEdVectorStamps) {
+                EdStampShape(g, i, (float)ib.left, (float)ib.top,
+                             (float)(ib.right - ib.left), EdC(on ? t.accent : t.text));
+            } else {
+                EdObj probe = EdObj{};
+                probe.kind = EdKind::Text;
+                probe.text = kEdEmoji[i - kEdVectorStamps];
+                probe.size = (ib.right - ib.left) * 96 / (g_edDpi ? g_edDpi : 96);
+                probe.alpha = 100;
+                probe.color = RGB(255, 255, 255);
+                const EdTile* tile = EdTextTile(probe, (double)g_edDpi / 96.0);
+                if (tile && tile->bmp) {
+                    const int tw = (int)tile->bmp->GetWidth(), th = (int)tile->bmp->GetHeight();
+                    g.DrawImage(tile->bmp,
+                                Gdiplus::Rect((r->left + r->right) / 2 - tw / 2,
+                                              (r->top + r->bottom) / 2 - th / 2, tw, th),
+                                0, 0, tw, th, Gdiplus::UnitPixel);
+                }
+            }
+        }
+        if (const RECT* rm = EdRegionRect(EdHit::StampMore, 0)) {
+            EdPaintButton(g, *rm, t, false, g_edHotWhat == EdHit::StampMore, false);
+            EdIcon(g, IcoMore, EdIconBox(*rm), EdC(t.text), 1.5f);
+        }
+    }
+
+    // Лічильник: наступний номер, число початку, скидання.
+    {
+        const bool selNum = hasSel && g_edObjs[g_edSel].kind == EdKind::Counter;
+        const int vNum = selNum ? g_edObjs[g_edSel].num : g_edNextNum;
+        wchar_t nb[16];
+        for (int i = 0; i < 2; ++i) {
+            const RECT* r = EdRegionRect(EdHit::Num, i);
+            if (!r) break;
+            EdPaintButton(g, *r, t, false, g_edHotWhat == EdHit::Num && g_edHotIdx == i, false);
+            EdIcon(g, i ? IcoPlus : IcoMinus, EdIconBox(*r), EdC(t.text), 1.6f);
+            if (i == 0) {
+                const RECT* r2 = EdRegionRect(EdHit::Num, 1);
+                if (r2) {
+                    wsprintfW(nb, L"%d", vNum);
+                    RECT tv = { r->right, r->top, r2->left, r->bottom };
+                    EdDrawText(dc, tv, nb, g_edFontBold, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
+            }
+        }
+        for (int i = 0; i < 2; ++i) {
+            const RECT* r = EdRegionRect(EdHit::NumStart, i);
+            if (!r) break;
+            if (i == 0) {
+                RECT ic = { r->left - EdPx(6) - EdPx(18), (r->top + r->bottom) / 2 - EdPx(9),
+                            r->left - EdPx(6), (r->top + r->bottom) / 2 + EdPx(9) };
+                EdIcon(g, IcoNumStart, ic, EdC(t.text2), 1.5f);
+            }
+            EdPaintButton(g, *r, t, false, g_edHotWhat == EdHit::NumStart && g_edHotIdx == i, false);
+            EdIcon(g, i ? IcoPlus : IcoMinus, EdIconBox(*r), EdC(t.text), 1.6f);
+            if (i == 0) {
+                const RECT* r2 = EdRegionRect(EdHit::NumStart, 1);
+                if (r2) {
+                    wsprintfW(nb, L"%d", g_edStartNum);
+                    RECT tv = { r->right, r->top, r2->left, r->bottom };
+                    EdDrawText(dc, tv, nb, g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
+            }
+        }
+        if (const RECT* rb = EdRegionRect(EdHit::NumReset, 0)) {
+            EdPaintButton(g, *rb, t, false, g_edHotWhat == EdHit::NumReset, false);
+            EdIcon(g, IcoRestart, EdIconBox(*rb), EdC(t.text), 1.5f);
+        }
+    }
+
     // Приховування: режим і сила.
     {
         const bool selHide = hasSel && g_edObjs[g_edSel].kind == EdKind::Hide;
@@ -8727,9 +8984,9 @@ void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     FillRect(dc, &line, b);
     DeleteObject(b);
 
-    const int icos[9] = { IcoSelect, IcoRect, IcoEllipse, IcoArrow, IcoLine, IcoPen, IcoText,
-                          IcoHide, IcoMark };
-    for (int i = 0; i < 9; ++i) {
+    const int icos[11] = { IcoSelect, IcoRect, IcoEllipse, IcoArrow, IcoLine, IcoPen, IcoText,
+                           IcoHide, IcoMark, IcoCounter, IcoStamp };
+    for (int i = 0; i < 11; ++i) {
         const RECT* r = EdRegionRect(EdHit::Tool, i);
         if (!r) break;
         if (i == 1) {                       // лінія-розділювач над фігурами
@@ -8847,12 +9104,6 @@ float EdStrokeRadius(const EdObj& o, double s)
     if (r > 8.0f) r = 8.0f;
     return r;
 }
-
-struct EdTile {
-    std::wstring     key;
-    Gdiplus::Bitmap* bmp;
-    int              pad;    // на скільки плитка більша за сам напис із кожного боку
-};
 
 std::vector<EdTile> g_edTiles;
 const size_t kEdTileMax = 24;
@@ -9190,6 +9441,95 @@ const EdTile* EdEffectTile(const EdObj& o, double s)
     return &g_edTiles.back();
 }
 
+// ---- CAPS-26: лічильник і штампи -----------------------------------------
+//
+// Шість штампів — власні контури: беруть колір із палітри й масштабуються без
+// втрат, бо це шляхи, а не картинки. Емодзі натомість малює DirectWrite тією
+// самою плиткою, що й текст: GDI+ не вміє кольорових шрифтів COLR/CBDT і видав
+// би Segoe UI Emoji чорно-білим.
+
+// Контури задано в квадраті 0..20, як і піктограми інтерфейсу: далі його просто
+// масштабуємо в розмір штампа.
+void EdStampShape(Gdiplus::Graphics& g, int id, float ox, float oy, float side,
+                  Gdiplus::Color c)
+{
+    if (side <= 0) return;
+    Gdiplus::GraphicsState st = g.Save();
+    g.TranslateTransform(ox, oy);
+    g.ScaleTransform(side / 20.0f, side / 20.0f);
+
+    Gdiplus::Pen pen(c, 2.6f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    Gdiplus::SolidBrush br(c);
+
+    switch (id) {
+    case 0: {   // галочка
+        Gdiplus::PointF p[3] = { { 3.4f, 10.8f }, { 8.0f, 15.6f }, { 16.6f, 4.8f } };
+        g.DrawLines(&pen, p, 3);
+        break;
+    }
+    case 1:     // хрестик
+        g.DrawLine(&pen, 4.2f, 4.2f, 15.8f, 15.8f);
+        g.DrawLine(&pen, 15.8f, 4.2f, 4.2f, 15.8f);
+        break;
+    case 2:     // знак питання: гачок, плавний перехід у ніжку, крапка окремо
+        g.DrawArc(&pen, 5.6f, 2.4f, 8.8f, 8.8f, 180.0f, 200.0f);
+        g.DrawBezier(&pen, 14.14f, 8.3f, 13.2f, 11.2f, 10.0f, 11.0f, 10.0f, 13.6f);
+        g.FillEllipse(&br, 8.7f, 15.4f, 2.6f, 2.6f);
+        break;
+    case 3:     // знак оклику
+        g.DrawLine(&pen, 10.0f, 3.0f, 10.0f, 12.6f);
+        g.FillEllipse(&br, 8.7f, 15.0f, 2.6f, 2.6f);
+        break;
+    case 4: {   // зірочка
+        Gdiplus::PointF p[10];
+        for (int i = 0; i < 10; ++i) {
+            const double a = -3.14159265358979 / 2.0 + i * 3.14159265358979 / 5.0;
+            const double r = (i % 2 == 0) ? 8.6 : 3.6;
+            p[i] = Gdiplus::PointF((float)(10.0 + cos(a) * r), (float)(10.0 + sin(a) * r));
+        }
+        g.FillPolygon(&br, p, 10);
+        break;
+    }
+    default: {  // трикутник уваги
+        Gdiplus::PointF p[3] = { { 10.0f, 2.6f }, { 18.4f, 16.8f }, { 1.6f, 16.8f } };
+        g.DrawPolygon(&pen, p, 3);
+        g.DrawLine(&pen, 10.0f, 7.6f, 10.0f, 12.0f);
+        g.FillEllipse(&br, 8.9f, 13.6f, 2.2f, 2.2f);
+        break;
+    }
+    }
+    g.Restore(st);
+}
+
+// Число в кружечку має читатися й на темному, і на світлому кольорі позначки.
+COLORREF EdOnColor(COLORREF c)
+{
+    const int lum = (GetRValue(c) * 299 + GetGValue(c) * 587 + GetBValue(c) * 114) / 1000;
+    return lum > 140 ? RGB(24, 24, 28) : RGB(255, 255, 255);
+}
+
+// Емодзі — це текстова плитка з одного гліфа. Складаємо для неї тимчасовий
+// об'єкт: так емодзі задарма отримують і кеш, і прозорість, і той самий шлях
+// на екран та у файл.
+EdObj EdGlyphObj(const EdObj& o, const wchar_t* glyph, int size, COLORREF col)
+{
+    EdObj t = EdObj{};
+    t.kind    = EdKind::Text;
+    t.text    = glyph;
+    t.size    = size;
+    t.bold    = false;
+    t.italic  = false;
+    t.align   = 0;
+    t.outline = 0;
+    t.boxw    = 0;
+    t.color   = col;
+    t.alpha   = o.alpha;
+    return t;
+}
+
 // Один малювальник на екран і на експорт. Якби їх було два, збережений файл
 // рано чи пізно розійшовся б із тим, що показано на екрані.
 void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, double oy)
@@ -9250,6 +9590,46 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
         // це видно. Натяг малий, щоб крива не «вилітала» за точки на різких кутах.
         if (n >= 3) g.DrawCurve(&pen, p.data(), (INT)n, 0.3f);
         else g.DrawLines(&pen, p.data(), (INT)n);
+        break;
+    }
+    case EdKind::Counter: {
+        const Gdiplus::Color col = EdC(o.color, o.alpha * 255 / 100);
+        Gdiplus::SolidBrush disc(col);
+        g.FillEllipse(&disc, x, y, w, h);
+        // Тонка світла облямівка: без неї кружечок губиться на позначці того ж
+        // кольору, а таке трапляється частіше, ніж здається.
+        Gdiplus::Pen ring(EdC(RGB(255, 255, 255), o.alpha * 255 / 100), (float)(w / 16.0));
+        g.DrawEllipse(&ring, x + (float)(w / 32.0), y + (float)(w / 32.0),
+                      w - (float)(w / 16.0), h - (float)(h / 16.0));
+        wchar_t nb[16];
+        wsprintfW(nb, L"%d", o.num);
+        EdObj t = EdGlyphObj(o, nb, o.thick * 52 / 100, EdOnColor(o.color));
+        t.bold = true;
+        const EdTile* tile = EdTextTile(t, s);
+        if (tile && tile->bmp) {
+            const int tw = (int)tile->bmp->GetWidth(), th = (int)tile->bmp->GetHeight();
+            g.DrawImage(tile->bmp,
+                        Gdiplus::Rect((int)(x + w / 2 - tw / 2.0f + 0.5f),
+                                      (int)(y + h / 2 - th / 2.0f + 0.5f), tw, th),
+                        0, 0, tw, th, Gdiplus::UnitPixel);
+        }
+        break;
+    }
+    case EdKind::Stamp: {
+        if (o.stamp >= kEdEmojiBase) {
+            const int ei = o.stamp - kEdEmojiBase;
+            if (ei < 0 || ei >= kEdEmojiCount) break;
+            EdObj t = EdGlyphObj(o, kEdEmoji[ei], o.thick, o.color);
+            const EdTile* tile = EdTextTile(t, s);
+            if (!tile || !tile->bmp) break;
+            const int tw = (int)tile->bmp->GetWidth(), th = (int)tile->bmp->GetHeight();
+            g.DrawImage(tile->bmp,
+                        Gdiplus::Rect((int)(x + w / 2 - tw / 2.0f + 0.5f),
+                                      (int)(y + h / 2 - th / 2.0f + 0.5f), tw, th),
+                        0, 0, tw, th, Gdiplus::UnitPixel);
+        } else {
+            EdStampShape(g, o.stamp, x, y, w, EdC(o.color, o.alpha * 255 / 100));
+        }
         break;
     }
     case EdKind::Hide:
@@ -9901,14 +10281,24 @@ Str EdTipFor(EdHit what, int idx)
         case 5: return Str::EdToolPen;
         case 6: return Str::EdToolText;
         case 7: return Str::EdToolHide;
-        default: return Str::EdToolMark;
+        case 8: return Str::EdToolMark;
+        case 9: return Str::EdToolCounter;
+        default: return Str::EdToolStamp;
         }
     case EdHit::Swatch:  return Str::EdTipColor;
     case EdHit::Thick:
-        return (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
-                g_edObjs[g_edSel].kind == EdKind::Mark) ||
-               (g_edSel < 0 && g_edTool == EdTool::Mark) ? Str::EdTipMarkH : Str::EdTipThick;
+        {
+            const EdKind kt = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())
+                                  ? g_edObjs[g_edSel].kind : EdToolKind(g_edTool);
+            if (kt == EdKind::Mark) return Str::EdTipMarkH;
+            if (EdIsStamped(kt))    return Str::EdTipSize;
+            return Str::EdTipThick;
+        }
     case EdHit::HideMode: return idx == 1 ? Str::EdTipPixels : idx == 2 ? Str::EdTipPlate : Str::EdTipBlur;
+    case EdHit::Num:      return Str::EdTipNum;
+    case EdHit::NumStart: return Str::EdTipNumStart;
+    case EdHit::NumReset: return Str::EdTipNumReset;
+    case EdHit::StampMore: return Str::EdTipStampMore;
     case EdHit::Strength: return Str::EdTipStrength;
     case EdHit::Size:    return idx ? Str::EdTipSizeUp : Str::EdTipSizeDn;
     case EdHit::Bold:    return Str::EdTipBold;
@@ -9940,7 +10330,8 @@ Str EdTipFor(EdHit what, int idx)
 
 // Клавіша інструмента — та сама, що в довідці. Один масив на обидва місця:
 // якби їх було два, вони розійшлися б за перший же новий інструмент.
-const wchar_t* const kEdToolKeys[9] = { L"V", L"R", L"O", L"A", L"L", L"P", L"T", L"B", L"H" };
+const wchar_t* const kEdToolKeys[11] = { L"V", L"R", L"O", L"A", L"L", L"P", L"T", L"B", L"H",
+                                        L"N", L"S" };
 
 void EdTipText(EdHit what, int idx, wchar_t* out, int cch)
 {
@@ -9948,7 +10339,7 @@ void EdTipText(EdHit what, int idx, wchar_t* out, int cch)
     const Str st = EdTipFor(what, idx);
     if (st == Str::Empty) return;
     const wchar_t* key = nullptr;
-    if (what == EdHit::Tool && idx >= 0 && idx < 9) key = kEdToolKeys[idx];
+    if (what == EdHit::Tool && idx >= 0 && idx < 11) key = kEdToolKeys[idx];
     else if (what == EdHit::Copy) key = L"Ctrl+C";
     else if (what == EdHit::Save) key = L"Ctrl+S";
     if (key) {
@@ -10287,6 +10678,166 @@ void EdTextBegin(HWND hwnd, POINT img, int idx)
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
+// ---- CAPS-26: сітка емодзі ------------------------------------------------
+//
+// Своє вікно, а не системна панель Win+. — вона вставляє символ лише в
+// текстове поле з фокусом, тож довелося б тримати приховане поле й ловити
+// введене. До того ж у процесі з правами адміністратора вона може й не
+// відкритися. Своя сітка малюється тим самим DirectWrite і не залежить ні від
+// фокуса, ні від прав.
+
+constexpr int kEdEmojiCols = 8;
+constexpr int kEdEmojiCell = 34;
+
+HWND g_edEmojiWnd = nullptr;
+int  g_edEmojiHot = -1;
+
+LRESULT CALLBACK EdEmojiProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HDC mem = CreateCompatibleDC(dc);
+        HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+        HGDIOBJ old = SelectObject(mem, bmp);
+
+        const EdTheme t = EdColors(g_edDark);
+        HBRUSH b = CreateSolidBrush(t.surface);
+        FillRect(mem, &rc, b);
+        DeleteObject(b);
+        RECT edge = rc;
+        HBRUSH eb = CreateSolidBrush(t.border);
+        FrameRect(mem, &edge, eb);
+        DeleteObject(eb);
+
+        Gdiplus::Graphics g(mem);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        const int cell = EdPx(kEdEmojiCell);
+        const int pad = EdPx(6);
+        for (int i = 0; i < kEdEmojiCount; ++i) {
+            RECT r = { pad + (i % kEdEmojiCols) * cell, pad + (i / kEdEmojiCols) * cell, 0, 0 };
+            r.right = r.left + cell;
+            r.bottom = r.top + cell;
+            if (i == g_edEmojiHot) {
+                RECT hr = r;
+                InflateRect(&hr, -EdPx(2), -EdPx(2));
+                Gdiplus::Color hc = EdC(t.hot);
+                EdFillRound(g, hr, (float)EdPx(5), &hc, nullptr);
+            }
+            EdObj probe = EdObj{};
+            probe.kind  = EdKind::Text;
+            probe.text  = kEdEmoji[i];
+            probe.size  = kEdEmojiCell * 2 / 3;
+            probe.alpha = 100;
+            probe.color = RGB(255, 255, 255);
+            const EdTile* tile = EdTextTile(probe, (double)g_edDpi / 96.0);
+            if (tile && tile->bmp) {
+                const int tw = (int)tile->bmp->GetWidth(), th = (int)tile->bmp->GetHeight();
+                g.DrawImage(tile->bmp,
+                            Gdiplus::Rect((r.left + r.right) / 2 - tw / 2,
+                                          (r.top + r.bottom) / 2 - th / 2, tw, th),
+                            0, 0, tw, th, Gdiplus::UnitPixel);
+            }
+        }
+        BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+        SelectObject(mem, old);
+        DeleteObject(bmp);
+        DeleteDC(mem);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_MOUSEMOVE: {
+        const int cell = EdPx(kEdEmojiCell), pad = EdPx(6);
+        const int cx = (GET_X_LPARAM(lp) - pad) / cell, cy = (GET_Y_LPARAM(lp) - pad) / cell;
+        int idx = (cx >= 0 && cx < kEdEmojiCols && cy >= 0) ? cy * kEdEmojiCols + cx : -1;
+        if (idx >= kEdEmojiCount) idx = -1;
+        if (idx != g_edEmojiHot) {
+            g_edEmojiHot = idx;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+    }
+
+    case WM_LBUTTONUP:
+        if (g_edEmojiHot >= 0 && g_edEmojiHot < kEdEmojiCount) {
+            const int id = kEdEmojiBase + g_edEmojiHot;
+            if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
+                g_edObjs[g_edSel].kind == EdKind::Stamp && g_edObjs[g_edSel].stamp != id) {
+                EdPushUndo();
+                g_edObjs[g_edSel].stamp = id;
+            }
+            g_edStamp = id;
+            if (g_edWnd) {
+                EdLayout(g_edWnd);
+                InvalidateRect(g_edWnd, nullptr, FALSE);
+            }
+        }
+        DestroyWindow(hwnd);
+        return 0;
+
+    case WM_KEYDOWN:
+        if (wp == VK_ESCAPE) DestroyWindow(hwnd);
+        return 0;
+
+    case WM_KILLFOCUS:
+        DestroyWindow(hwnd);
+        return 0;
+
+    case WM_DESTROY:
+        g_edEmojiWnd = nullptr;
+        g_edEmojiHot = -1;
+        return 0;
+
+    default: break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void EdEmojiPick(HWND owner, const RECT& btn)
+{
+    if (g_edEmojiWnd) { DestroyWindow(g_edEmojiWnd); g_edEmojiWnd = nullptr; }
+
+    static bool registered = false;
+    HINSTANCE inst = (HINSTANCE)GetWindowLongPtrW(owner, GWLP_HINSTANCE);
+    if (!registered) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc   = EdEmojiProc;
+        wc.hInstance     = inst;
+        wc.lpszClassName = L"lilhelpers_emoji";
+        wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+        RegisterClassW(&wc);
+        registered = true;
+    }
+
+    const int cell = EdPx(kEdEmojiCell), pad = EdPx(6);
+    const int rows = (kEdEmojiCount + kEdEmojiCols - 1) / kEdEmojiCols;
+    const int w = kEdEmojiCols * cell + pad * 2;
+    const int h = rows * cell + pad * 2;
+
+    POINT p = { btn.left, btn.bottom + EdPx(4) };
+    ClientToScreen(owner, &p);
+    // Не даємо сітці вилізти за край монітора: вона з'являється біля кнопки в
+    // смузі, а та буває близько до правого краю.
+    HMONITOR mon = MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(mi) };
+    if (GetMonitorInfoW(mon, &mi)) {
+        if (p.x + w > mi.rcWork.right)  p.x = mi.rcWork.right - w;
+        if (p.y + h > mi.rcWork.bottom) p.y = mi.rcWork.bottom - h;
+        if (p.x < mi.rcWork.left) p.x = mi.rcWork.left;
+    }
+
+    g_edEmojiWnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"lilhelpers_emoji", nullptr,
+                                   WS_POPUP, p.x, p.y, w, h, owner, nullptr, inst, nullptr);
+    if (!g_edEmojiWnd) return;
+    ShowWindow(g_edEmojiWnd, SW_SHOWNA);
+    SetForegroundWindow(g_edEmojiWnd);
+    SetFocus(g_edEmojiWnd);
+}
+
 LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -10570,6 +11121,49 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             EdSetColor(pl[r->idx]);
             return 0;
         }
+        case EdHit::StampPick: {
+            const int id = (r->idx < kEdVectorStamps)
+                               ? r->idx : kEdEmojiBase + (r->idx - kEdVectorStamps);
+            if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
+                g_edObjs[g_edSel].kind == EdKind::Stamp && g_edObjs[g_edSel].stamp != id) {
+                EdPushUndo();
+                g_edObjs[g_edSel].stamp = id;
+            }
+            g_edStamp = id;
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case EdHit::StampMore:
+            EdEmojiPick(hwnd, r->r);
+            return 0;
+        case EdHit::Num: {
+            int v = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
+                     g_edObjs[g_edSel].kind == EdKind::Counter)
+                        ? g_edObjs[g_edSel].num : g_edNextNum;
+            v += r->idx ? 1 : -1;
+            if (v < 0) v = 0;
+            if (v > 999) v = 999;
+            if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
+                g_edObjs[g_edSel].kind == EdKind::Counter) {
+                EdPushUndo();
+                g_edObjs[g_edSel].num = v;
+            } else {
+                g_edNextNum = v;
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case EdHit::NumStart:
+            g_edStartNum += r->idx ? 1 : -1;
+            if (g_edStartNum < 0)   g_edStartNum = 0;
+            if (g_edStartNum > 999) g_edStartNum = 999;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case EdHit::NumReset:
+            g_edNextNum = g_edStartNum;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
         case EdHit::HideMode: {
             if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
                 g_edObjs[g_edSel].kind == EdKind::Hide && g_edObjs[g_edSel].mode != r->idx) {
@@ -10604,7 +11198,17 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                         mo.h = val;
                     }
                 }
-                if (kk == EdKind::Mark) g_edMarkH = val; else g_edThick = val;
+                if (kk == EdKind::Mark)        g_edMarkH = val;
+                else if (EdIsStamped(kk))      g_edStampSize = val;
+                else                           g_edThick = val;
+                if (EdIsStamped(kk) && g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
+                    EdIsStamped(g_edObjs[g_edSel].kind)) {
+                    // Штамп росте від свого центра, а не від лівого верхнього кута.
+                    EdObj& so = g_edObjs[g_edSel];
+                    so.x += (so.w - val) / 2;
+                    so.y += (so.h - val) / 2;
+                    so.w = so.h = val;
+                }
             }
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -10724,6 +11328,29 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         if (g_edTool == EdTool::Text) {
             EdTextBegin(hwnd, EdToImage(pt), -1);
+            return 0;
+        }
+        // Лічильник і штамп ставляться одним кліком: рамку для них тягнути
+        // нема сенсу, розмір у них із набору.
+        if (EdIsStamped(EdToolKind(g_edTool))) {
+            const POINT img = EdToImage(pt);
+            EdObj o = EdObj{};
+            o.kind  = EdToolKind(g_edTool);
+            o.thick = g_edStampSize;
+            o.w = o.h = g_edStampSize;
+            o.x = img.x - g_edStampSize / 2;
+            o.y = img.y - g_edStampSize / 2;
+            o.color = g_edColor;
+            o.alpha = g_edAlpha;
+            o.stamp = g_edStamp;
+            o.num   = g_edNextNum;
+            EdPushUndo();
+            g_edObjs.push_back(o);
+            g_edSel = (int)g_edObjs.size() - 1;
+            if (o.kind == EdKind::Counter && g_edNextNum < 999) ++g_edNextNum;
+            if (!g_edKeepTool) g_edTool = EdTool::Select;
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         if (g_edTool != EdTool::Select) {
@@ -10852,18 +11479,26 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case 'Z': if (ctrl) EdUndoAction(); return 0;
         case 'Y': if (ctrl) EdRedoAction(); return 0;
         case 'C': if (ctrl) EdDoCopy(); return 0;
-        case 'S': if (ctrl) EdDoSave(); return 0;
         case 'D': if (ctrl) EdDuplicateSel(); return 0;
         case VK_RETURN:
             if (g_edLastAction == 1) EdDoSave(); else EdDoCopy();
             return 0;
         case 'V': if (!ctrl) { g_edTool = EdTool::Select; InvalidateRect(hwnd, nullptr, FALSE); } return 0;
         case 'R': case 'O': case 'A': case 'L': case 'P': case 'T': case 'B': case 'H':
-            if (!ctrl) {
+        case 'N': case 'S':
+            // ⚠ 'S' носить дві ролі: сам по собі — штамп, із Ctrl — збереження.
+            // Тримати для нього окремий case не можна, компілятор скаже
+            // «duplicate case value», тож розводимо їх тут.
+            if (ctrl) {
+                if (wp == 'S') EdDoSave();
+                return 0;
+            }
+            {
                 g_edTool = (wp == 'R') ? EdTool::Rect : (wp == 'O') ? EdTool::Ellipse
                          : (wp == 'A') ? EdTool::Arrow : (wp == 'L') ? EdTool::Line
                          : (wp == 'T') ? EdTool::Text : (wp == 'B') ? EdTool::Hide
-                         : (wp == 'H') ? EdTool::Mark : EdTool::Pen;
+                         : (wp == 'H') ? EdTool::Mark : (wp == 'N') ? EdTool::Counter
+                         : (wp == 'S') ? EdTool::Stamp : EdTool::Pen;
                 g_edSel = -1;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
@@ -10904,6 +11539,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_DESTROY:
         EdTextCancel();
+        if (g_edEmojiWnd) { DestroyWindow(g_edEmojiWnd); g_edEmojiWnd = nullptr; }
         KillTimer(hwnd, kEdTipTimer);
         if (g_edTip) { DestroyWindow(g_edTip); g_edTip = nullptr; }
         EdTilesClear();
