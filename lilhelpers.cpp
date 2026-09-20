@@ -81,6 +81,8 @@
 #include <inspectable.h>
 #include <asyncinfo.h>
 #include <shcore.h>
+// CAPS-16: Markdown і підсвітка коду — через RichEdit, якому згодовується RTF.
+#include <richedit.h>
 
 namespace {
 
@@ -359,8 +361,10 @@ X(PeekHint,           L"Пробіл або Esc закриває. Стрілки
 X(PeekSecTypes,       L"Що показується",                L"What is shown")                               \
 X(PeekTypesImages,    L"Зображення: JPEG, PNG, GIF (анімовані програються), BMP, TIFF, ICO, WebP, SVG.", \
                       L"Images: JPEG, PNG, GIF (animated ones play), BMP, TIFF, ICO, WebP, SVG.")    \
-X(PeekTypesText,      L"Текст і код до 1 МБ — JSON форматується. Документи Word (docx) — текстом.",  \
-                      L"Text and code up to 1 MB — JSON is reformatted. Word docs (docx) as text.")  \
+X(PeekTypesText,      L"Текст і код — з підсвіткою, Markdown зверстаним, JSON форматується, docx текстом.", \
+                      L"Text and code highlighted, Markdown rendered, JSON reformatted, docx as text.") \
+X(PeekZoomHint,       L"Коліщатко масштабує, перетягування рухає, подвійний клік вписує назад.",     \
+                      L"The wheel zooms, dragging moves, a double click fits it back.")              \
 X(PeekTypesMedia,     L"PDF — гортається коліщатком і стрілками. Відео — кадр. STL — із габаритами.", \
                       L"PDF — flip by wheel or arrows. Video — a frame. STL — with its sizes.")      \
 X(PeekTypesOther,     L"Решта файлів, папки, ярлики та STEP — картка з відомостями про файл.",       \
@@ -3142,6 +3146,12 @@ bool     g_peekCloseHot = false;
 int      g_peekPagerHot = 0;   // 0 нічого, 1 «назад», 2 «вперед»
 bool     g_peekTracking = false;
 bool     g_peekDark     = false;
+// Масштаб — МНОЖНИК до «вписаного» розміру, тож 1.0 завжди означає «вміщено у вікно»
+// незалежно від розміру картинки й вікна. Зсув у пікселях екрана.
+float    g_peekZoom = 1.0f;
+int      g_peekPanX = 0, g_peekPanY = 0;
+bool     g_peekPanning = false;
+POINT    g_peekPanFrom = {};
 bool     g_peekJsonFormatted = false;   // показуємо не байт-у-байт, і про це варто сказати
 bool     g_peekSvgAsCode     = false;   // SVG не намалювали — скажемо чому, а не промовчимо
 Str      g_peekSvgNote       = Str::Empty;  // намалювали, але не все — теж скажемо
@@ -3486,6 +3496,441 @@ bool IsJsonExt(const wchar_t* ext)
     return ExtIn(ext, k, sizeof(k) / sizeof(*k));
 }
 
+
+// ---- текст із оформленням: RTF для RichEdit ----
+//
+// Markdown і підсвітка синтаксису — одна й та сама задача: розкласти текст на
+// шматки з різним виглядом. Найдешевший спосіб віддати це RichEdit — зібрати
+// RTF і влити одним потоком (EM_STREAMIN). Альтернатива, тисячі
+// EM_SETCHARFORMAT, на файлі в кілька сотень кілобайт помітно гальмує.
+//
+// Підсвітка свідомо ОДНА на всі мови: коментарі, рядки, числа, спільний набір
+// ключових слів. Для перегляду цього досить, а повноцінні граматики на кожну
+// мову — це вже інший застосунок.
+
+enum RtfColor { RC_TEXT = 1, RC_GRAY, RC_KEYWORD, RC_STRING, RC_COMMENT, RC_NUMBER, RC_HEAD, RC_LINK };
+
+struct RtfBuilder {
+    std::string out;
+    bool mono = false;
+
+    void Begin(bool dark, int basePt)
+    {
+        out.reserve(64 * 1024);
+        out = "{\\rtf1\\ansi\\ansicpg1251\\deff0{\\fonttbl{\\f0\\fswiss Segoe UI;}{\\f1\\fmodern Consolas;}}";
+        out += "{\\colortbl;";
+        struct C { int r, g, b; };
+        const C light[] = { {32,32,32}, {110,110,110}, {0,0,192}, {163,21,21}, {0,128,0}, {9,134,88}, {17,17,17}, {0,102,204} };
+        const C night[] = { {230,230,230}, {155,155,155}, {110,170,240}, {220,150,120}, {130,180,120}, {170,210,160}, {245,245,245}, {120,180,250} };
+        const C* p = dark ? night : light;
+        for (int i = 0; i < 8; ++i) {
+            char buf[64];
+            sprintf(buf, "\\red%d\\green%d\\blue%d;", p[i].r, p[i].g, p[i].b);
+            out += buf;
+        }
+        out += "}";
+        char hdr[64];
+        sprintf(hdr, "\\f0\\fs%d\\cf1 ", basePt * 2);
+        out += hdr;
+    }
+
+    void Font(bool monoNow)
+    {
+        if (monoNow == mono) return;
+        mono = monoNow;
+        out += mono ? "\\f1 " : "\\f0 ";
+    }
+    void Color(int c) { char b[16]; sprintf(b, "\\cf%d ", c); out += b; }
+    void Size(int pt)  { char b[16]; sprintf(b, "\\fs%d ", pt * 2); out += b; }
+    void Bold(bool on)   { out += on ? "\\b " : "\\b0 "; }
+    void Italic(bool on) { out += on ? "\\i " : "\\i0 "; }
+    void Indent(int twips) { char b[24]; sprintf(b, "\\li%d ", twips); out += b; }
+    void Par() { out += "\\par\n"; }
+
+    // Не-ASCII віддаємо як \uN? — так RTF лишається чистим ASCII і не залежить
+    // від кодової сторінки, у якій його прочитають.
+    void Text(const wchar_t* s, size_t n)
+    {
+        char num[16];
+        for (size_t i = 0; i < n; ++i) {
+            const wchar_t c = s[i];
+            if (c == L'\\' || c == L'{' || c == L'}') { out += '\\'; out += (char)c; }
+            else if (c == L'\t') out += "\\tab ";
+            else if (c == L'\r') continue;
+            else if (c == L'\n') Par();
+            else if (c < 128) out += (char)c;
+            else {
+                sprintf(num, "\\u%d?", (int)(short)c);
+                out += num;
+            }
+        }
+    }
+    void Text(const std::wstring& s) { Text(s.c_str(), s.size()); }
+    void End() { out += "}"; }
+};
+
+DWORD CALLBACK RtfStreamIn(DWORD_PTR cookie, LPBYTE buf, LONG cb, LONG* done)
+{
+    std::pair<const char*, size_t>* src = (std::pair<const char*, size_t>*)cookie;
+    const LONG n = (LONG)(src->second < (size_t)cb ? src->second : (size_t)cb);
+    memcpy(buf, src->first, (size_t)n);
+    src->first += n;
+    src->second -= (size_t)n;
+    *done = n;
+    return 0;
+}
+
+void PeekSetRtf(const std::string& rtf)
+{
+    std::pair<const char*, size_t> src(rtf.c_str(), rtf.size());
+    EDITSTREAM es = {};
+    es.dwCookie = (DWORD_PTR)&src;
+    es.pfnCallback = RtfStreamIn;
+    SendMessageW(g_peekEdit, WM_SETTEXT, 0, (LPARAM)L"");
+    SendMessageW(g_peekEdit, EM_STREAMIN, SF_RTF, (LPARAM)&es);
+    SendMessageW(g_peekEdit, EM_SETSEL, 0, 0);
+    SendMessageW(g_peekEdit, WM_VSCROLL, SB_TOP, 0);
+}
+
+// ---- підсвітка коду ----
+
+bool CodeIdentChar(wchar_t c)
+{
+    return (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9') || c == L'_';
+}
+
+bool CodeIsKeyword(const std::wstring& w)
+{
+    static const wchar_t* const k[] = {
+        L"if", L"else", L"elif", L"for", L"while", L"do", L"switch", L"case", L"default", L"break",
+        L"continue", L"return", L"goto", L"try", L"catch", L"except", L"finally", L"throw", L"raise",
+        L"class", L"struct", L"enum", L"union", L"interface", L"namespace", L"module", L"package",
+        L"import", L"from", L"using", L"include", L"require", L"export", L"public", L"private",
+        L"protected", L"static", L"const", L"constexpr", L"final", L"virtual", L"override", L"inline",
+        L"function", L"func", L"def", L"lambda", L"var", L"let", L"val", L"auto", L"new", L"delete",
+        L"this", L"self", L"super", L"null", L"nullptr", L"none", L"nil", L"true", L"false", L"True",
+        L"False", L"None", L"and", L"or", L"not", L"in", L"is", L"as", L"with", L"yield", L"await",
+        L"async", L"void", L"int", L"long", L"short", L"char", L"float", L"double", L"bool", L"boolean",
+        L"string", L"str", L"list", L"dict", L"map", L"set", L"type", L"typedef", L"template", L"typename",
+        L"param", L"echo", L"print", L"end", L"then", L"fi", L"esac", L"elseif", L"foreach", L"begin",
+        L"select", L"where", L"insert", L"update", L"delete", L"create", L"table", L"join", L"group",
+    };
+    for (const wchar_t* t : k)
+        if (w == t) return true;
+    return false;
+}
+
+struct CodeStyle { bool slash, hash, dashdash, xml, backtick; };
+
+CodeStyle CodeStyleFor(const wchar_t* ext)
+{
+    CodeStyle s = {};
+    static const wchar_t* const slash[] = { L".c", L".cc", L".cpp", L".h", L".hpp", L".cs", L".java",
+                                            L".js", L".ts", L".jsx", L".tsx", L".go", L".rs", L".php",
+                                            L".kt", L".swift", L".css", L".scss", L".json", L".rc" };
+    static const wchar_t* const hash[] = { L".py", L".sh", L".ps1", L".psm1", L".yaml", L".yml", L".toml",
+                                           L".ini", L".conf", L".cfg", L".rb", L".pl", L".r", L".env",
+                                           L".gitignore", L".gitattributes", L".properties", L".editorconfig" };
+    static const wchar_t* const dd[] = { L".sql", L".lua", L".hs" };
+    static const wchar_t* const xml[] = { L".xml", L".html", L".htm", L".svg", L".manifest" };
+    s.slash    = ExtIn(ext, slash, sizeof(slash) / sizeof(*slash));
+    s.hash     = ExtIn(ext, hash, sizeof(hash) / sizeof(*hash));
+    s.dashdash = ExtIn(ext, dd, sizeof(dd) / sizeof(*dd));
+    s.xml      = ExtIn(ext, xml, sizeof(xml) / sizeof(*xml));
+    s.backtick = ExtIn(ext, slash, sizeof(slash) / sizeof(*slash)) || s.hash;
+    return s;
+}
+
+void CodeToRtf(const std::wstring& t, const wchar_t* ext, bool dark, int pt, std::string& rtf)
+{
+    const CodeStyle st = CodeStyleFor(ext);
+    RtfBuilder b;
+    b.Begin(dark, pt);
+    b.Font(true);
+    int cur = RC_TEXT;
+    auto setc = [&](int c) { if (c != cur) { b.Color(c); cur = c; } };
+
+    const size_t n = t.size();
+    size_t i = 0;
+    while (i < n) {
+        const wchar_t c = t[i];
+        // коментарі
+        if (st.slash && c == L'/' && i + 1 < n && t[i + 1] == L'/') {
+            const size_t e = t.find(L'\n', i);
+            setc(RC_COMMENT);
+            b.Text(t.c_str() + i, (e == std::wstring::npos ? n : e) - i);
+            i = (e == std::wstring::npos) ? n : e;
+            continue;
+        }
+        if (st.slash && c == L'/' && i + 1 < n && t[i + 1] == L'*') {
+            size_t e = t.find(L"*/", i + 2);
+            e = (e == std::wstring::npos) ? n : e + 2;
+            setc(RC_COMMENT);
+            b.Text(t.c_str() + i, e - i);
+            i = e;
+            continue;
+        }
+        if (st.hash && c == L'#') {
+            const size_t e = t.find(L'\n', i);
+            setc(RC_COMMENT);
+            b.Text(t.c_str() + i, (e == std::wstring::npos ? n : e) - i);
+            i = (e == std::wstring::npos) ? n : e;
+            continue;
+        }
+        if (st.dashdash && c == L'-' && i + 1 < n && t[i + 1] == L'-') {
+            const size_t e = t.find(L'\n', i);
+            setc(RC_COMMENT);
+            b.Text(t.c_str() + i, (e == std::wstring::npos ? n : e) - i);
+            i = (e == std::wstring::npos) ? n : e;
+            continue;
+        }
+        if (st.xml && c == L'<' && t.compare(i, 4, L"<!--") == 0) {
+            size_t e = t.find(L"-->", i + 4);
+            e = (e == std::wstring::npos) ? n : e + 3;
+            setc(RC_COMMENT);
+            b.Text(t.c_str() + i, e - i);
+            i = e;
+            continue;
+        }
+        // рядки
+        if (c == L'"' || c == L'\'' || (st.backtick && c == L'`')) {
+            const wchar_t q = c;
+            size_t e = i + 1;
+            while (e < n && t[e] != q) {
+                if (t[e] == L'\\' && e + 1 < n) ++e;
+                if (t[e] == L'\n' && q != L'`') break;      // незакритий рядок не тягнемо на весь файл
+                ++e;
+            }
+            if (e < n && t[e] == q) ++e;
+            setc(RC_STRING);
+            b.Text(t.c_str() + i, e - i);
+            i = e;
+            continue;
+        }
+        // числа
+        if (c >= L'0' && c <= L'9' && (i == 0 || !CodeIdentChar(t[i - 1]))) {
+            size_t e = i;
+            while (e < n && (CodeIdentChar(t[e]) || t[e] == L'.')) ++e;
+            setc(RC_NUMBER);
+            b.Text(t.c_str() + i, e - i);
+            i = e;
+            continue;
+        }
+        // слова
+        if (CodeIdentChar(c)) {
+            size_t e = i;
+            while (e < n && CodeIdentChar(t[e])) ++e;
+            const std::wstring w = t.substr(i, e - i);
+            setc(CodeIsKeyword(w) ? RC_KEYWORD : RC_TEXT);
+            b.Text(w);
+            i = e;
+            continue;
+        }
+        setc(RC_TEXT);
+        b.Text(t.c_str() + i, 1);
+        ++i;
+    }
+    b.End();
+    rtf.swap(b.out);
+}
+
+// ---- Markdown ----
+
+// Рядкові прикраси всередині абзацу: **жирний**, *курсив*, `код`, [текст](посилання).
+void MdInline(RtfBuilder& b, const std::wstring& s, int baseColor)
+{
+    size_t i = 0;
+    const size_t n = s.size();
+    while (i < n) {
+        const wchar_t c = s[i];
+        if (c == L'`') {
+            const size_t e = s.find(L'`', i + 1);
+            if (e != std::wstring::npos) {
+                b.Font(true);
+                b.Color(RC_STRING);
+                b.Text(s.c_str() + i + 1, e - i - 1);
+                b.Color(baseColor);
+                b.Font(false);
+                i = e + 1;
+                continue;
+            }
+        }
+        if ((c == L'*' || c == L'_') && i + 1 < n && s[i + 1] == c) {
+            const std::wstring mark(2, c);
+            const size_t e = s.find(mark, i + 2);
+            if (e != std::wstring::npos) {
+                b.Bold(true);
+                MdInline(b, s.substr(i + 2, e - i - 2), baseColor);
+                b.Bold(false);
+                i = e + 2;
+                continue;
+            }
+        }
+        if (c == L'*' || c == L'_') {
+            const size_t e = s.find(c, i + 1);
+            if (e != std::wstring::npos && e > i + 1) {
+                b.Italic(true);
+                MdInline(b, s.substr(i + 1, e - i - 1), baseColor);
+                b.Italic(false);
+                i = e + 1;
+                continue;
+            }
+        }
+        if (c == L'!' && i + 1 < n && s[i + 1] == L'[') { ++i; continue; }   // зображення: лишаємо підпис
+        if (c == L'[') {
+            const size_t close = s.find(L']', i);
+            if (close != std::wstring::npos && close + 1 < n && s[close + 1] == L'(') {
+                const size_t end = s.find(L')', close + 2);
+                if (end != std::wstring::npos) {
+                    b.Color(RC_LINK);
+                    b.Text(s.substr(i + 1, close - i - 1));
+                    b.Color(baseColor);
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+        b.Text(s.c_str() + i, 1);
+        ++i;
+    }
+}
+
+void MdToRtf(const std::wstring& t, bool dark, int pt, std::string& rtf)
+{
+    RtfBuilder b;
+    b.Begin(dark, pt);
+    bool inFence = false;
+    size_t pos = 0;
+    while (pos <= t.size()) {
+        size_t eol = t.find(L'\n', pos);
+        if (eol == std::wstring::npos) eol = t.size();
+        std::wstring line = t.substr(pos, eol - pos);
+        while (!line.empty() && (line.back() == L'\r')) line.pop_back();
+        pos = eol + 1;
+
+        // огорожа коду
+        if (line.compare(0, 3, L"```") == 0 || line.compare(0, 3, L"~~~") == 0) {
+            inFence = !inFence;
+            b.Font(inFence);
+            b.Color(inFence ? RC_STRING : RC_TEXT);
+            b.Indent(inFence ? 240 : 0);
+            if (pos > t.size()) break;
+            continue;
+        }
+        if (inFence) {
+            b.Text(line);
+            b.Par();
+            if (pos > t.size()) break;
+            continue;
+        }
+
+        size_t ind = 0;
+        while (ind < line.size() && (line[ind] == L' ' || line[ind] == L'\t')) ++ind;
+        const std::wstring body = line.substr(ind);
+
+        // горизонтальна лінія
+        if (body.size() >= 3 && (body.find_first_not_of(L"-") == std::wstring::npos ||
+                                 body.find_first_not_of(L"*") == std::wstring::npos ||
+                                 body.find_first_not_of(L"_") == std::wstring::npos)) {
+            b.Color(RC_GRAY);
+            b.Text(std::wstring(48, L'\x2500'));
+            b.Color(RC_TEXT);
+            b.Par();
+            if (pos > t.size()) break;
+            continue;
+        }
+        // заголовки
+        size_t hashes = 0;
+        while (hashes < body.size() && body[hashes] == L'#') ++hashes;
+        if (hashes >= 1 && hashes <= 6 && hashes < body.size() && body[hashes] == L' ') {
+            const int sizes[6] = { 17, 15, 13, 12, 11, 11 };
+            b.Size(sizes[hashes - 1]);
+            b.Bold(true);
+            b.Color(RC_HEAD);
+            MdInline(b, body.substr(hashes + 1), RC_HEAD);
+            b.Color(RC_TEXT);
+            b.Bold(false);
+            b.Size(pt);
+            b.Par();
+            if (pos > t.size()) break;
+            continue;
+        }
+        // цитата
+        if (!body.empty() && body[0] == L'>') {
+            b.Indent(240);
+            b.Color(RC_GRAY);
+            size_t k = 1;
+            while (k < body.size() && body[k] == L' ') ++k;
+            MdInline(b, body.substr(k), RC_GRAY);
+            b.Color(RC_TEXT);
+            b.Indent(0);
+            b.Par();
+            if (pos > t.size()) break;
+            continue;
+        }
+        // списки
+        if (body.size() >= 2 && (body[0] == L'-' || body[0] == L'*' || body[0] == L'+') && body[1] == L' ') {
+            b.Indent(240 + (int)ind * 120);
+            b.Text(L"\x2022  ", 3);
+            MdInline(b, body.substr(2), RC_TEXT);
+            b.Indent(0);
+            b.Par();
+            if (pos > t.size()) break;
+            continue;
+        }
+        if (!body.empty() && body[0] >= L'0' && body[0] <= L'9') {
+            size_t d = 0;
+            while (d < body.size() && body[d] >= L'0' && body[d] <= L'9') ++d;
+            if (d + 1 < body.size() && (body[d] == L'.' || body[d] == L')') && body[d + 1] == L' ') {
+                b.Indent(240 + (int)ind * 120);
+                b.Text(body.substr(0, d + 2));
+                MdInline(b, body.substr(d + 2), RC_TEXT);
+                b.Indent(0);
+                b.Par();
+                if (pos > t.size()) break;
+                continue;
+            }
+        }
+        MdInline(b, body, RC_TEXT);
+        b.Par();
+        if (pos > t.size()) break;
+    }
+    b.End();
+    rtf.swap(b.out);
+}
+
+void PlainToRtf(const std::wstring& t, bool mono, bool dark, int pt, std::string& rtf)
+{
+    RtfBuilder b;
+    b.Begin(dark, pt);
+    b.Font(mono);
+    b.Text(t);
+    b.End();
+    rtf.swap(b.out);
+}
+
+bool IsMarkdownExt(const wchar_t* ext)
+{
+    static const wchar_t* const k[] = { L".md", L".markdown", L".mdown", L".mkd" };
+    return ExtIn(ext, k, sizeof(k) / sizeof(*k));
+}
+
+// Понад цю межу підсвітку не робимо: користь мала, а пауза помітна.
+constexpr size_t kHighlightMax = 400 * 1024;
+
+void PeekShowText(const std::wstring& text, const wchar_t* ext)
+{
+    const int pt = 10;
+    std::string rtf;
+    if (IsMarkdownExt(ext) && text.size() <= kHighlightMax)
+        MdToRtf(text, g_peekDark, pt, rtf);
+    else if (!IsProseExt(ext) && text.size() <= kHighlightMax)
+        CodeToRtf(text, ext, g_peekDark, pt, rtf);
+    else
+        PlainToRtf(text, !IsProseExt(ext), g_peekDark, pt, rtf);
+    PeekSetRtf(rtf);
+}
+
 bool PeekLoadText(const wchar_t* path, const wchar_t* ext)
 {
     std::vector<BYTE> raw;
@@ -3512,12 +3957,7 @@ bool PeekLoadText(const wchar_t* path, const wchar_t* ext)
         text.push_back(L'\n'); text.push_back(L'\n');
         text.insert(text.end(), note, note + lstrlenW(note));
     }
-    std::vector<wchar_t> crlf;
-    NormalizeNewlines(text, crlf);
-    SendMessageW(g_peekEdit, WM_SETFONT, (WPARAM)(IsProseExt(ext) ? g_peekFont : g_peekFontMono), FALSE);
-    // WM_SETFONT скидає поля EDIT до типових — повертаємо після кожної зміни шрифту
-    SendMessageW(g_peekEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(PeekPx(6), PeekPx(12)));
-    SetWindowTextW(g_peekEdit, crlf.data());
+    PeekShowText(std::wstring(text.begin(), text.end()), ext);
     return true;
 }
 
@@ -4575,11 +5015,7 @@ bool PeekLoadDocx(const wchar_t* path)
     DocxExtractText(xml, text);
     if (text.empty()) return false;
 
-    std::vector<wchar_t> in(text.begin(), text.end()), crlf;
-    NormalizeNewlines(in, crlf);
-    SendMessageW(g_peekEdit, WM_SETFONT, (WPARAM)g_peekFont, FALSE);
-    SendMessageW(g_peekEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(PeekPx(6), PeekPx(12)));
-    SetWindowTextW(g_peekEdit, crlf.data());
+    PeekShowText(text, L".txt");   // docx — проза, без підсвітки
     return true;
 }
 
@@ -4936,6 +5372,8 @@ bool PeekPdfGoto(int page)
     if (WaitForSingleObject(g_pdf->evDone, 20000) != WAIT_OBJECT_0) return false;
     if (!PdfTakeBitmap(g_pdf)) return false;
     g_peekPdfPage = (UINT32)page;
+    g_peekZoom = 1.0f;                 // нова сторінка — знову «вписано»
+    g_peekPanX = g_peekPanY = 0;
     swprintf(g_peekInfo.subtitle, 320, S(Str::PeekFmtPdfPage), g_peekInfo.imgW, g_peekInfo.imgH,
              g_peekPdfPage + 1, g_peekPdfPages, g_peekInfo.size);
     return true;
@@ -4956,6 +5394,9 @@ void PeekReset()
     if (g_peekIconBig)   { DestroyIcon(g_peekIconBig);   g_peekIconBig = nullptr; }
     if (g_peekIconSmall) { DestroyIcon(g_peekIconSmall); g_peekIconSmall = nullptr; }
     g_peekKind = PeekKind::None;
+    g_peekZoom = 1.0f;
+    g_peekPanX = g_peekPanY = 0;
+    g_peekPanning = false;
     ZeroMemory(&g_peekInfo, sizeof(g_peekInfo));
 }
 
@@ -5159,6 +5600,8 @@ void PeekApplyTheme()
     // кеш зображення й на самий лише SetWindowTheme не реагує — будить його WM_THEMECHANGED.
     SetWindowTheme(g_peekEdit, g_peekDark ? L"DarkMode_Explorer" : nullptr, nullptr);
     SendMessageW(g_peekEdit, WM_THEMECHANGED, 0, 0);
+    // RichEdit малює фон сам — колір тексту приходить з таблиці кольорів RTF.
+    SendMessageW(g_peekEdit, EM_SETBKGNDCOLOR, 0, (LPARAM)(g_peekDark ? kDkBg : RGB(255, 255, 255)));
     InvalidateRect(g_peekWnd, nullptr, TRUE);
     RedrawWindow(g_peekEdit, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_UPDATENOW);
 }
@@ -5168,9 +5611,11 @@ void PeekLayout(HWND hwnd)
     RECT c = PeekContentRect(hwnd);
     if (g_peekKind == PeekKind::Text) {
         // Поле трохи менше за область вмісту: текст не притискається до країв
-        c.left += PeekPx(12); c.right -= PeekPx(4); c.top += PeekPx(10); c.bottom -= PeekPx(8);
+        c.top += PeekPx(6);
         SetWindowPos(g_peekEdit, nullptr, c.left, c.top, c.right - c.left, c.bottom - c.top,
                      SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        RECT inner = { PeekPx(14), PeekPx(6), (c.right - c.left) - PeekPx(10), (c.bottom - c.top) - PeekPx(6) };
+        SendMessageW(g_peekEdit, EM_SETRECT, 0, (LPARAM)&inner);
     } else {
         ShowWindow(g_peekEdit, SW_HIDE);
     }
@@ -5288,6 +5733,87 @@ void PeekOnForeground()
     if (g_peekShown && GetForegroundWindow() != g_peekRoot) PeekClose();
 }
 
+// Куди саме лягає зображення. Одна функція і для малювання, і для миші — інакше
+// зум із панорамуванням неминуче розійдуться між тим, що видно, і тим, що клікаєш.
+double PeekFitScale(const RECT& content)
+{
+    const int cw = content.right - content.left, ch = content.bottom - content.top;
+    if (!g_peekInfo.imgW || !g_peekInfo.imgH || cw <= 0 || ch <= 0) return 1.0;
+    double fit = 1.0;
+    if (g_peekInfo.imgW > cw) fit = (double)cw / g_peekInfo.imgW;
+    if (g_peekInfo.imgH * fit > ch) fit = (double)ch / g_peekInfo.imgH;
+    return fit;
+}
+
+void PeekClampPan(const RECT& content, int dw, int dh)
+{
+    const int cw = content.right - content.left, ch = content.bottom - content.top;
+    const int maxX = (dw > cw) ? (dw - cw) / 2 : 0;
+    const int maxY = (dh > ch) ? (dh - ch) / 2 : 0;
+    if (g_peekPanX >  maxX) g_peekPanX =  maxX;
+    if (g_peekPanX < -maxX) g_peekPanX = -maxX;
+    if (g_peekPanY >  maxY) g_peekPanY =  maxY;
+    if (g_peekPanY < -maxY) g_peekPanY = -maxY;
+}
+
+RECT PeekImageRect(const RECT& content)
+{
+    const double scale = PeekFitScale(content) * g_peekZoom;
+    int dw = (int)(g_peekInfo.imgW * scale + 0.5), dh = (int)(g_peekInfo.imgH * scale + 0.5);
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    PeekClampPan(content, dw, dh);
+    const int cw = content.right - content.left, ch = content.bottom - content.top;
+    const int x = content.left + (cw - dw) / 2 + g_peekPanX;
+    const int y = content.top + (ch - dh) / 2 + g_peekPanY;
+    RECT r = { x, y, x + dw, y + dh };
+    return r;
+}
+
+// Зум навколо курсора: точка під ним має лишитись на місці, інакше
+// «наблизити оце» перетворюється на «наблизити й шукати, куди воно поїхало».
+void PeekZoomAt(HWND hwnd, POINT cur, bool in)
+{
+    if (g_peekKind != PeekKind::Image || !g_peekImg) return;
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    const RECT c = PeekContentRect(hwnd);
+    const double fit = PeekFitScale(c);
+    const float oldZoom = g_peekZoom;
+    float z = in ? g_peekZoom * 1.25f : g_peekZoom / 1.25f;
+    if (z < 1.0f) z = 1.0f;                                  // менше «вписаного» не зменшуємо
+    const double maxDim = 20000.0;                           // стеля, щоб GDI+ не вдавився
+    const double longSide = (g_peekInfo.imgW > g_peekInfo.imgH ? g_peekInfo.imgW : g_peekInfo.imgH) * fit;
+    if (longSide > 0 && longSide * z > maxDim) z = (float)(maxDim / longSide);
+    if (z == oldZoom) return;
+
+    const RECT before = PeekImageRect(c);
+    const double sOld = fit * oldZoom;
+    const double imgX = (before.right > before.left) ? (cur.x - before.left) / sOld : 0.0;
+    const double imgY = (before.bottom > before.top) ? (cur.y - before.top) / sOld : 0.0;
+
+    g_peekZoom = z;
+    const double sNew = fit * z;
+    const int dw = (int)(g_peekInfo.imgW * sNew + 0.5), dh = (int)(g_peekInfo.imgH * sNew + 0.5);
+    const int cw = c.right - c.left, chh = c.bottom - c.top;
+    g_peekPanX = (int)(cur.x - imgX * sNew - c.left - (cw - dw) / 2.0 + 0.5);
+    g_peekPanY = (int)(cur.y - imgY * sNew - c.top - (chh - dh) / 2.0 + 0.5);
+    PeekClampPan(c, dw, dh);
+    delete g_peekScaled;
+    g_peekScaled = nullptr;
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+void PeekZoomReset(HWND hwnd)
+{
+    if (g_peekZoom == 1.0f && !g_peekPanX && !g_peekPanY) return;
+    g_peekZoom = 1.0f;
+    g_peekPanX = g_peekPanY = 0;
+    delete g_peekScaled;
+    g_peekScaled = nullptr;
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
 void PeekPaintArrow(HDC dc, const RECT& r, COLORREF fg, COLORREF dim, bool left, bool hot, bool enabled)
 {
     if (hot && enabled) {
@@ -5375,16 +5901,23 @@ void PeekPaint(HDC dc, const RECT& rc)
     const int cw = c.right - c.left, ch = c.bottom - c.top;
 
     if (g_peekKind == PeekKind::Image && g_peekImg && cw > 0 && ch > 0) {
-        double scale = 1.0;
-        if (g_peekInfo.imgW > cw) scale = (double)cw / g_peekInfo.imgW;
-        if (g_peekInfo.imgH * scale > ch) scale = (double)ch / g_peekInfo.imgH;
-        const int dw = (int)(g_peekInfo.imgW * scale + 0.5), dh = (int)(g_peekInfo.imgH * scale + 0.5);
-        const int dx = c.left + (cw - dw) / 2, dy = c.top + (ch - dh) / 2;
+        RECT dst = PeekImageRect(c);
+        const int dw = dst.right - dst.left, dh = dst.bottom - dst.top;
         Gdiplus::Graphics g(dc);
+        // Збільшене зображення більше за область вмісту й інакше лізло б на шапку
+        // з назвою файлу — обмежуємо малювання рівно областю вмісту.
+        g.SetClip(Gdiplus::Rect(c.left, c.top, cw, ch));
         if (dw == g_peekInfo.imgW && dh == g_peekInfo.imgH) {
             g.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
             g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-            g.DrawImage(g_peekImg, dx, dy, dw, dh);
+            g.DrawImage(g_peekImg, dst.left, dst.top, dw, dh);
+        } else if (dw > g_peekInfo.imgW) {
+            // Збільшення малюємо НАПРЯМУ: кешований бітмап у 8× зайняв би сотні МБ.
+            // Дрібні картинки при цьому лишаються різкими, як і має бути при зумі.
+            g.SetInterpolationMode(dw > g_peekInfo.imgW * 3 ? Gdiplus::InterpolationModeNearestNeighbor
+                                                            : Gdiplus::InterpolationModeHighQualityBicubic);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            g.DrawImage(g_peekImg, dst.left, dst.top, dw, dh);
         } else {
             // Зменшена копія кешується: перемальовування (наведення на ✕) не має
             // щоразу масштабувати десятки мегапікселів.
@@ -5401,7 +5934,7 @@ void PeekPaint(HDC dc, const RECT& rc)
             }
             g.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
             g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-            g.DrawImage(g_peekScaled, dx, dy, dw, dh);
+            g.DrawImage(g_peekScaled, dst.left, dst.top, dw, dh);
         }
     } else if (g_peekKind == PeekKind::Card) {
         const int icon = PeekPx(96);
@@ -5526,6 +6059,14 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_MOUSEMOVE: {
         RECT rc;
         GetClientRect(hwnd, &rc);
+        if (g_peekPanning) {
+            const POINT now = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            g_peekPanX += now.x - g_peekPanFrom.x;
+            g_peekPanY += now.y - g_peekPanFrom.y;
+            g_peekPanFrom = now;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         const RECT closeR = PeekCloseRect(rc);
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         const bool hot = PtInRect(&closeR, pt) != FALSE;
@@ -5561,15 +6102,44 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     // Гортання коліщатком. Вікно не має фокуса, але Windows шле коліщатко вікну
     // під курсором — саме тому це працює, а клавіші лишаються Провіднику.
-    case WM_MOUSEWHEEL:
-        if (PeekHasPager()) {
-            const int delta = GET_WHEEL_DELTA_WPARAM(wp);
+    case WM_MOUSEWHEEL: {
+        const int delta = GET_WHEEL_DELTA_WPARAM(wp);
+        const bool ctrl = (GET_KEYSTATE_WPARAM(wp) & MK_CONTROL) != 0;
+        POINT cur = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        ScreenToClient(hwnd, &cur);
+        // У багатосторінковому PDF просте коліщатко гортає сторінки, а Ctrl масштабує;
+        // усюди інакше коліщатко саме масштабує — гортати там нічого.
+        if (PeekHasPager() && !ctrl) {
             const int to = (int)g_peekPdfPage + (delta < 0 ? 1 : -1);
             if (PeekPdfGoto(to)) InvalidateRect(hwnd, nullptr, FALSE);
+        } else {
+            PeekZoomAt(hwnd, cur, delta > 0);
         }
+        return 0;
+    }
+
+    case WM_LBUTTONDOWN: {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        if (pt.y >= PeekPx(kPeekHead) && g_peekKind == PeekKind::Image && g_peekZoom > 1.0f) {
+            g_peekPanning = true;
+            g_peekPanFrom = pt;
+            SetCapture(hwnd);
+        }
+        return 0;
+    }
+
+    case WM_LBUTTONDBLCLK:
+        PeekZoomReset(hwnd);            // подвійний клік — знову вписати у вікно
         return 0;
 
     case WM_LBUTTONUP: {
+        if (g_peekPanning) {
+            g_peekPanning = false;
+            ReleaseCapture();
+            return 0;
+        }
         RECT rc;
         GetClientRect(hwnd, &rc);
         const RECT closeR = PeekCloseRect(rc);
@@ -5624,6 +6194,7 @@ void PeekCreateWindow(HINSTANCE hInst)
     wc.lpfnWndProc   = PeekWndProc;
     wc.hInstance     = hInst;
     wc.lpszClassName = L"lilhelpers_peek";
+    wc.style         = CS_DBLCLKS;      // без цього подвійний клік не приходить
     wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
     wc.hIcon         = LoadIconW(hInst, MAKEINTRESOURCEW(1));
     RegisterClassW(&wc);
@@ -5650,15 +6221,15 @@ void PeekCreateWindow(HINSTANCE hInst)
         g_peekFontMono = CreateFontIndirectW(&lf);
     }
 
-    g_peekEdit = CreateWindowExW(0, L"EDIT", L"",
-                                 WS_CHILD | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
+    // RichEdit, а не EDIT: він уміє шрифти, кольори й відступи, тобто і Markdown,
+    // і підсвітку коду. Бібліотеку вантажимо тут, бо клас реєструє саме вона.
+    LoadLibraryW(L"Msftedit.dll");
+    g_peekEdit = CreateWindowExW(0, MSFTEDIT_CLASS, L"",
+                                 WS_CHILD | ES_MULTILINE | ES_READONLY | WS_VSCROLL,
                                  0, 0, 10, 10, g_peekWnd, nullptr, hInst, nullptr);
     SendMessageW(g_peekEdit, EM_SETLIMITTEXT, 0, 0);
-    SendMessageW(g_peekEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(PeekPx(14), PeekPx(14)));
-    {
-        int tab = 16;   // діалогові одиниці ≈ 4 символи
-        SendMessageW(g_peekEdit, EM_SETTABSTOPS, 1, (LPARAM)&tab);
-    }
+    SendMessageW(g_peekEdit, EM_SETEVENTMASK, 0, 0);
+    SendMessageW(g_peekEdit, EM_EXLIMITTEXT, 0, 64 * 1024 * 1024);
     SetWindowSubclass(g_peekEdit, PeekEditSubclass, 1, 0);
 }
 
@@ -6296,7 +6867,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // CAPS-11: шапка з логотипом, назвою і версією; сторінки на єдиній сітці —
     // 20 px від краю полотна, крок 8 px між елементами, підказка одразу під
     // своїм контролом, між групами 6–8 px повітря плюс заголовок групи.
-    constexpr int W = 500, H = 606;
+    constexpr int W = 500, H = 634;   // 2.6.0: вкладка «Перегляд» переросла попередню висоту
     constexpr int TAB_X = 20, TAB_Y = 74, FOOT_H = 42;    // таб-контрол під шапкою, підвал під табом
     constexpr int PX = TAB_X + 20, PW = 420, PY = 116;    // сторінка: лівий край, ширина, перший рядок
     const int w = sc(W), h = sc(H);
@@ -6527,7 +7098,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     y = PY;
     // Помітка «експериментальна» — найперша на сторінці й звичайним кольором, а не
     // сірим, як підказки: її треба прочитати ДО того, як вирішувати щодо чекбокса.
-    text(addP, Str::PeekExperimental, 2, 0, 14);
+    text(addP, Str::PeekExperimental, 2, 0, 10);
     g_peekEnableCb = check(addP, Str::PeekEnable, IDC_PEEK_ENABLE, g_peekOn, 2);
     hint(addP, Str::PeekHint, 2);
     y += 6;
@@ -6535,7 +7106,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     text(addP, Str::PeekTypesImages, 2, 0, 4);
     text(addP, Str::PeekTypesText,   2, 0, 4);
     text(addP, Str::PeekTypesMedia,  2, 0, 4);
-    text(addP, Str::PeekTypesOther,  2, 0, 10);
+    text(addP, Str::PeekTypesOther,  2, 0, 4);
+    text(addP, Str::PeekZoomHint,    2, IDC_HINT_GRAY, 10);
     sec(addP, Str::PeekSecKeeps);
     text(addP, Str::PeekKeeps, 3, 0, 8);
 
