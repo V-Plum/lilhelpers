@@ -63,6 +63,15 @@
 #include <servprov.h>
 #include <windowsx.h>
 // CAPS-16: рендер SVG — системний Direct2D (ніякого чужого коду в процесі).
+// ⚠ Заголовки WinRT у MinGW мають зіткнення: IReference<boolean> і
+// IReference<BYTE> там — та сама спеціалізація (boolean = unsigned char), і
+// друга з них не компілюється. Глушимо перший блок його ж вартовим макросом:
+// нам потрібні зовсім інші інтерфейси, а MSVC цей рядок просто не помітить.
+#define ____FIReference_1_boolean_INTERFACE_DEFINED__
+#include <windows.foundation.h>
+#include <windows.storage.streams.h>
+#include <windows.applicationmodel.datatransfer.h>
+#include <shobjidl.h>            // CAPS-36: IDataTransferManagerInterop
 #include <d2d1_3.h>
 #include <d2d1svg.h>
 // CAPS-24: текст і кольорові емодзі — DirectWrite. GDI+ не знає ні COLR/CBDT,
@@ -505,6 +514,10 @@ X(EdSizeNoteImg,      L"Товщина ліній, кружечки й штам�
 X(EdSizeNoteCan,      L"Знімок стане окремим об\x2019єктом, а тло навколо — прозорим.",                  \
                       L"The shot becomes a separate object and the space around it stays clear.")      \
 X(EdBtnSizeImg,       L"Розмір зображення…",            L"Image size…")                                \
+X(EdShare,            L"Поділитися",                    L"Share")                                      \
+X(EdTipShare,         L"Системне меню поширення Windows", L"The Windows share menu")                   \
+X(EdErrShare,         L"Системне меню поширення не відкрилось.",                                       \
+                                                        L"The system share menu did not open.")        \
 X(EdBtnSizeCan,       L"Розмір полотна…",               L"Canvas size…")                               \
 X(EdTipSizeImg,       L"Змінити розмір самого зображення", L"Resize the image itself")                 \
 X(EdTipSizeCan,       L"Змінити розмір полотна",        L"Resize the canvas")                          \
@@ -7709,7 +7722,7 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Aspect, CropReset, CropOk, CropNo,
                    RotL, RotR, FlipH, FlipV, Exposure, Gamma, Contrast,
                    ToneReset, Compare, GroupEdit, GroupDel, Pick, PickItem,
-                   SelAlign, SelGroup, SizeImg, SizeCan };
+                   SelAlign, SelGroup, SizeImg, SizeCan, Share };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -8836,6 +8849,10 @@ int EdPanelInfoBottom()
     return y + EdPx(20);                           // «Позначок: N»
 }
 
+// Потрібна вже в розкладці: кнопки поширення немає там, де меню недоступне.
+bool EdShareAvailable();
+void EdShareNow(HWND hwnd);
+
 // Потрібні вже в розкладці й у чіпі — тіла нижче, біля решти дій над вибором.
 int  EdSelCount();
 bool EdManySel();
@@ -9198,6 +9215,14 @@ void EdLayout(HWND hwnd)
         rx -= EdPx(8) + ws;
         RECT rcSave = { rx, cy - bh / 2, rx + ws, cy + bh / 2 };
         EdAdd(rcSave, EdHit::Save, 0);
+        // CAPS-36: кнопки немає там, де системне меню поширення недоступне —
+        // під адміністратором брокер може не відповісти взагалі.
+        if (EdShareAvailable()) {
+            const int wsh = EdTextWidth(dc, S(Str::EdShare), g_edFont) + EdPx(26);
+            rx -= EdPx(8) + wsh;
+            RECT rcShare = { rx, cy - bh / 2, rx + wsh, cy + bh / 2 };
+            EdAdd(rcShare, EdHit::Share, 0);
+        }
         ReleaseDC(hwnd, dc);
     }
 
@@ -11335,6 +11360,12 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         EdDrawText(dc, *rf, S(Str::EdFit), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
+    if (const RECT* rsh = EdRegionRect(EdHit::Share, 0)) {
+        EdPaintButton(g, *rsh, t, false, g_edHotWhat == EdHit::Share, false);
+        EdDrawText(dc, *rsh, S(Str::EdShare), g_edFont, t.text,
+                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
     // Дві рівноправні кнопки. Підсвічена — та, якою користувалися востаннє:
     // вона ж спрацює на Enter. Друга нікуди не дівається.
     struct { EdHit what; Str label; int ico; bool primary; } outs[2] = {
@@ -12068,6 +12099,141 @@ LPCWSTR EdCursorFor(POINT pt)
 bool EdResizeImage(int nw, int nh, bool scaleText, bool sharp);
 bool EdResizeCanvas(int nw, int nh);
 
+// ---- CAPS-36: системне меню поширення -----------------------------------
+//
+// Ми НЕ хостимо чужого коду (запобіжник 20.09): дані віддаються системному
+// брокеру, а весь інтерфейс малює сама Windows. Межа проходить саме тут.
+//
+// ⚠ Процес запускається requireAdministrator, і меню поширення в елевейтованому
+// процесі історично не з'являється. Тому доступність перевіряється на льоту, і
+// кнопки просто немає там, де вона не працює, — замість кнопки, яка мовчить.
+
+namespace EdShareNs {
+
+using namespace ABI::Windows::ApplicationModel::DataTransfer;
+using namespace ABI::Windows::Foundation;
+using namespace ABI::Windows::Storage::Streams;
+
+std::wstring g_tempFile;     // останній тимчасовий PNG — прибираємо за собою
+
+void CleanTemp()
+{
+    if (g_tempFile.empty()) return;
+    DeleteFileW(g_tempFile.c_str());
+    g_tempFile.clear();
+}
+
+// ⚠ Псевдонім потрібен не для краси: __uuidof у MinGW — МАКРОС, і кома між
+// параметрами шаблону всередині нього розбирається як кома аргументів макроса.
+typedef ITypedEventHandler<DataTransferManager*, DataRequestedEventArgs*> ShareHandlerBase;
+
+// Обробник запиту даних. Живе рівно стільки, скільки система його тримає.
+struct Handler : public ShareHandlerBase
+{
+    LONG rc = 1;
+    std::wstring file, title;
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override
+    {
+        if (!out) return E_POINTER;
+        if (IsEqualIID(riid, IID_IUnknown) ||
+            IsEqualIID(riid, __uuidof(ShareHandlerBase))) {
+            *out = static_cast<IUnknown*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&rc); }
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        const LONG n = InterlockedDecrement(&rc);
+        if (n == 0) delete this;
+        return (ULONG)n;
+    }
+
+    HRESULT STDMETHODCALLTYPE Invoke(IDataTransferManager*, IDataRequestedEventArgs* args) override
+    {
+        if (!args) return S_OK;
+        IDataRequest* req = nullptr;
+        if (FAILED(args->get_Request(&req)) || !req) return S_OK;
+        IDataPackage* pkg = nullptr;
+        if (SUCCEEDED(req->get_Data(&pkg)) && pkg) {
+            IDataPackagePropertySet* props = nullptr;
+            if (SUCCEEDED(pkg->get_Properties(&props)) && props) {
+                HSTRING_HEADER th; HSTRING ts = nullptr;
+                if (SUCCEEDED(WindowsCreateStringReference(title.c_str(), (UINT32)title.size(), &th, &ts)))
+                    props->put_Title(ts);
+                props->Release();
+            }
+            // Файл → URI → посилання на потік. Усе синхронне: асинхронний
+            // StorageFile вимагав би відкладення (deferral) і власного
+            // обробника завершення заради того самого результату.
+            std::wstring uriText = L"file:///";
+            for (size_t i = 0; i < file.size(); ++i)
+                uriText += (file[i] == L'\\') ? L'/' : file[i];
+            IUriRuntimeClassFactory* uriF = nullptr;
+            HSTRING_HEADER ch; HSTRING cls = nullptr;
+            if (SUCCEEDED(WindowsCreateStringReference(RuntimeClass_Windows_Foundation_Uri,
+                    (UINT32)wcslen(RuntimeClass_Windows_Foundation_Uri), &ch, &cls)) &&
+                SUCCEEDED(RoGetActivationFactory(cls, __uuidof(IUriRuntimeClassFactory), (void**)&uriF)) && uriF) {
+                HSTRING_HEADER uh; HSTRING us = nullptr;
+                IUriRuntimeClass* uri = nullptr;
+                if (SUCCEEDED(WindowsCreateStringReference(uriText.c_str(), (UINT32)uriText.size(), &uh, &us)) &&
+                    SUCCEEDED(uriF->CreateUri(us, &uri)) && uri) {
+                    IRandomAccessStreamReferenceStatics* st = nullptr;
+                    HSTRING_HEADER sh; HSTRING scls = nullptr;
+                    if (SUCCEEDED(WindowsCreateStringReference(
+                            RuntimeClass_Windows_Storage_Streams_RandomAccessStreamReference,
+                            (UINT32)wcslen(RuntimeClass_Windows_Storage_Streams_RandomAccessStreamReference),
+                            &sh, &scls)) &&
+                        SUCCEEDED(RoGetActivationFactory(scls, __uuidof(IRandomAccessStreamReferenceStatics),
+                                                         (void**)&st)) && st) {
+                        IRandomAccessStreamReference* ref = nullptr;
+                        if (SUCCEEDED(st->CreateFromUri(uri, &ref)) && ref) {
+                            pkg->SetBitmap(ref);
+                            ref->Release();
+                        }
+                        st->Release();
+                    }
+                    uri->Release();
+                }
+                uriF->Release();
+            }
+            pkg->Release();
+        }
+        req->Release();
+        return S_OK;
+    }
+};
+
+IDataTransferManagerInterop* Interop()
+{
+    IDataTransferManagerInterop* it = nullptr;
+    HSTRING_HEADER hh; HSTRING cls = nullptr;
+    const wchar_t* name = RuntimeClass_Windows_ApplicationModel_DataTransfer_DataTransferManager;
+    if (FAILED(WindowsCreateStringReference(name, (UINT32)wcslen(name), &hh, &cls))) return nullptr;
+    if (FAILED(RoGetActivationFactory(cls, IID_IDataTransferManagerInterop, (void**)&it))) return nullptr;
+    return it;
+}
+
+}  // namespace EdShareNs
+
+// Чи має сенс показувати кнопку. Питаємо систему ОДИН раз: під адміністратором
+// брокер поширення може бути недоступний, і тоді кнопка лише збивала б з пантелику.
+bool EdShareAvailable()
+{
+    static int cached = -1;
+    if (cached >= 0) return cached != 0;
+    cached = 0;
+    if (IDataTransferManagerInterop* it = EdShareNs::Interop()) {
+        cached = 1;
+        it->Release();
+    }
+    return cached != 0;
+}
+
 // ---- CAPS-44: діалог розміру -------------------------------------------
 //
 // Власне вікно з дочірніми контролами, а не DLGTEMPLATE: шаблон довелося б
@@ -12346,6 +12512,7 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::NumReset: return Str::EdTipNumReset;
     case EdHit::StampMore: return Str::EdTipStampMore;
     case EdHit::Strength: return Str::EdTipStrength;
+    case EdHit::Share:     return Str::EdTipShare;
     case EdHit::SizeImg:   return Str::EdTipSizeImg;
     case EdHit::SizeCan:   return Str::EdTipSizeCan;
     case EdHit::RotL:      return Str::EdTipRotL;
@@ -13747,6 +13914,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case EdHit::GroupDel:
             EdGroupDelete();
             return 0;
+        case EdHit::Share:   if (!g_edCropping) EdShareNow(hwnd); return 0;
         case EdHit::SizeImg: EdSizeDialog(hwnd, false); return 0;
         case EdHit::SizeCan: EdSizeDialog(hwnd, true);  return 0;
         case EdHit::RotL:  EdRotateBy(false); return 0;
@@ -14217,6 +14385,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         delete g_edCmp; g_edCmp = nullptr;
         g_edCompare = false;
         EdImageBankClear();
+        EdShareNs::CleanTemp();
         g_edObjs.clear();
         g_edUndo.clear();
         g_edRedo.clear();
@@ -14573,6 +14742,53 @@ bool EdWriteFile(const wchar_t* path)
     if (ok) EdSaveDirRemember(path);
     else MessageBoxW(g_edWnd, S(Str::EdErrSave), kAppName, MB_OK | MB_ICONWARNING);
     return ok;
+}
+
+// CAPS-36. Знімок лягає в %TEMP% і звідти йде системному брокеру. Тимчасовий
+// файл прибираємо перед наступним поширенням і на закритті редактора: це знімок
+// екрана користувача, він не має лежати там вічно.
+void EdShareNow(HWND hwnd)
+{
+    EdShareNs::CleanTemp();
+
+    wchar_t dir[MAX_PATH] = {};
+    if (!GetTempPathW(MAX_PATH, dir)) return;
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    wchar_t path[MAX_PATH];
+    wsprintfW(path, L"%slilhelpers-%04d%02d%02d-%02d%02d%02d.png", dir,
+              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+    bool wrote = false;
+    if (Gdiplus::Bitmap* flat = EdRender()) {
+        CLSID enc;
+        if (EdEncoderClsid(L"image/png", &enc))
+            wrote = (flat->Save(path, &enc, nullptr) == Gdiplus::Ok);
+        delete flat;
+    }
+    if (!wrote) {
+        MessageBoxW(hwnd, S(Str::EdErrSave), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    EdShareNs::g_tempFile = path;
+
+    IDataTransferManagerInterop* it = EdShareNs::Interop();
+    if (!it) { MessageBoxW(hwnd, S(Str::EdErrShare), kAppName, MB_OK | MB_ICONWARNING); return; }
+    ABI::Windows::ApplicationModel::DataTransfer::IDataTransferManager* dtm = nullptr;
+    HRESULT hr = it->GetForWindow(hwnd, __uuidof(ABI::Windows::ApplicationModel::DataTransfer::IDataTransferManager),
+                                  (void**)&dtm);
+    if (SUCCEEDED(hr) && dtm) {
+        EdShareNs::Handler* h = new EdShareNs::Handler();
+        h->file  = path;
+        h->title = S(Str::EdTitle);
+        EventRegistrationToken tok = {};
+        hr = dtm->add_DataRequested(h, &tok);
+        h->Release();                       // тримає тепер система
+        if (SUCCEEDED(hr)) hr = it->ShowShareUIForWindow(hwnd);
+        dtm->Release();
+    }
+    it->Release();
+    if (FAILED(hr)) MessageBoxW(hwnd, S(Str::EdErrShare), kAppName, MB_OK | MB_ICONWARNING);
 }
 
 bool EdSaveAs()
