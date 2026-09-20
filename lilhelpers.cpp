@@ -7474,6 +7474,10 @@ struct EdObj {
     // EdObj копіюється у кожен знімок скасування — вказівник там означав би
     // подвійне звільнення, а номер переживає будь-яку кількість копій.
     int      img;
+    // CAPS-43. Кут у градусах, 0..359, навколо ЦЕНТРА позначки. Приховування
+    // й маркер не повертаються: вони беруть пікселі знімка під собою, і
+    // повернута плашка мусила б брати повернуту ділянку — окрема робота.
+    int      rot;
 };
 
 // Чіп називає вид однією назвою і для інструмента, і для вибраного. Префікс
@@ -7539,6 +7543,8 @@ EdKind EdToolKind(EdTool t)
 bool EdIsSegment(EdKind k) { return k == EdKind::Arrow || k == EdKind::Line; }
 // Стиль лінії має сенс лише там, де є сама лінія: у напису, приховування,
 // маркера, лічильника й штампа контуру немає.
+bool EdCanRotate(EdKind k) { return k != EdKind::Hide && k != EdKind::Mark; }
+
 bool EdHasDash(EdKind k)
 {
     return k == EdKind::Rect || k == EdKind::Ellipse || k == EdKind::Line ||
@@ -7681,7 +7687,7 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn };
 
 enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength, Crop, CropMove,
-                    Tone, Compare, Zoom };
+                    Tone, Compare, Zoom, Rotate };
 
 HWND  g_edWnd = nullptr;
 HFONT g_edFont = nullptr, g_edFontBold = nullptr, g_edFontSmall = nullptr;
@@ -7857,6 +7863,18 @@ inline Gdiplus::Color EdC(COLORREF c, int a = 255)
 
 inline int EdMin(int a, int b) { return a < b ? a : b; }
 inline double EdMinD(double a, double b) { return a < b ? a : b; }
+
+// Точка, повернута навколо центра на заданий кут. Одна формула на все:
+// малювання, влучання, ручки.
+void EdRotatePt(double cx, double cy, double deg, double& x, double& y)
+{
+    if (deg == 0.0) return;
+    const double r = deg * 3.14159265358979 / 180.0;
+    const double cs = cos(r), sn = sin(r);
+    const double dx = x - cx, dy = y - cy;
+    x = cx + dx * cs - dy * sn;
+    y = cy + dx * sn + dy * cs;
+}
 
 void EdRoundPath(Gdiplus::GraphicsPath& p, const RECT& r, float rad)
 {
@@ -8489,10 +8507,49 @@ int EdHandleCount(const EdObj& o)
     return EdIsSegment(o.kind) ? 2 : 8;
 }
 
+// Ручка повороту — окремо від восьми ручок розміру, над верхнім краєм.
+// Окремо саме тому, що дія в неї інша: сплутати її з розміром дорого.
+bool EdRotHandle(const EdObj& o, RECT* out)
+{
+    if (!EdCanRotate(o.kind)) return false;
+    const RECT r = EdObjScreen(o);
+    const int h = EdPx(11), k = h / 2;
+    double hx = (r.left + r.right) / 2.0, hy = r.top - EdPx(22);
+    EdRotatePt((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0, o.rot, hx, hy);
+    out->left = (LONG)(hx + 0.5) - k;
+    out->top  = (LONG)(hy + 0.5) - k;
+    out->right = out->left + h;
+    out->bottom = out->top + h;
+    return true;
+}
+
 int EdHandles(const EdObj& o, RECT out[8])
 {
     const int h = EdPx(9), k = h / 2;
     const int n = EdHandleCount(o);
+    // Прямокутники ручок рахуються на НЕПОВЕРНУТІЙ рамці, а наприкінці
+    // повертаються навколо центра — інакше вони лишились би стояти рівно,
+    // поки сама позначка нахилена.
+    struct RotAll {
+        const EdObj& o;
+        RECT* out;
+        int n;
+        ~RotAll() {
+            if (o.rot == 0 || !EdCanRotate(o.kind)) return;
+            const RECT r = EdObjScreen(o);
+            const double cx = (r.left + r.right) / 2.0, cy = (r.top + r.bottom) / 2.0;
+            for (int i = 0; i < n; ++i) {
+                double hx = (out[i].left + out[i].right) / 2.0;
+                double hy = (out[i].top + out[i].bottom) / 2.0;
+                EdRotatePt(cx, cy, o.rot, hx, hy);
+                const int side = out[i].right - out[i].left;
+                out[i].left = (LONG)(hx + 0.5) - side / 2;
+                out[i].top  = (LONG)(hy + 0.5) - side / 2;
+                out[i].right = out[i].left + side;
+                out[i].bottom = out[i].top + side;
+            }
+        }
+    } rotAll{ o, out, n };
     if (o.kind == EdKind::Text || o.kind == EdKind::Mark) {
         const RECT r = EdObjScreen(o);
         const int cy = (r.top + r.bottom) / 2;
@@ -9932,9 +9989,20 @@ void EdTransformAll(int step, int W, int H)
         // сам блок лишається того самого розміру й тієї самої орієнтації.
         const bool upright = (o.kind == EdKind::Text || o.kind == EdKind::Counter ||
                               o.kind == EdKind::Stamp);
+        // ⚠ Позначку, яка вміє власний кут, повертаємо КУТОМ, а не перестановкою
+        // сторін. Зробити і те, і те означає повернути її ДВІЧІ — рівно на цьому
+        // впав tone_test, коли з'явився CAPS-43. У відрізка й олівця точки вже
+        // мапнуті вище, тож їхній власний кут лишається як був.
+        const bool byAngle = EdCanRotate(o.kind) && !upright;
+        if (byAngle) {
+            if (step == 0)      o.rot = (o.rot + 90) % 360;
+            else if (step == 1) o.rot = (o.rot + 270) % 360;
+            else if (step == 2) o.rot = (360 - o.rot) % 360;
+            else                o.rot = (540 - o.rot) % 360;
+        }
         POINT c = { o.x + o.w / 2, o.y + o.h / 2 };
         c = EdMapPt(step, W, H, c);
-        const bool swap = (step <= 1) && !upright;
+        const bool swap = (step <= 1) && !upright && !byAngle;
         const int nw = swap ? o.h : o.w, nh = swap ? o.w : o.h;
         o.x = c.x - nw / 2; o.y = c.y - nh / 2; o.w = nw; o.h = nh;
     }
@@ -10523,6 +10591,8 @@ EdObj EdGlyphObj(const EdObj& o, const wchar_t* glyph, int size, COLORREF col)
     return t;
 }
 
+// Центр позначки в координатах ЗНІМКА. Поворот завжди навколо нього: кут,
+// прив'язаний до кута рамки, робив би обертання схожим на перетягування.
 // Один малювальник на екран і на експорт. Якби їх було два, збережений файл
 // рано чи пізно розійшовся б із тим, що показано на екрані.
 // ⚠ Пунктир із круглими ковпачками перетворюється на низку крапок: кожен
@@ -10588,6 +10658,19 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
     const float half = pw / 2.0f;
     const float x = (float)(ox + o.x * s), y = (float)(oy + o.y * s);
     const float w = (float)(o.w * s), h = (float)(o.h * s);
+
+    // Поворот — це перетворення полотна навколо центра позначки. Так він діє
+    // на ВСЕ, включно з плитками тексту, емодзі й лічильника, які кладуться
+    // через DrawImage: інакше довелося б повертати кожен шлях окремо.
+    Gdiplus::GraphicsState rotState = 0;
+    const bool rotated = (o.rot != 0 && EdCanRotate(o.kind));
+    if (rotated) {
+        rotState = g.Save();
+        const float cx = x + w / 2.0f, cy = y + h / 2.0f;
+        g.TranslateTransform(cx, cy);
+        g.RotateTransform((float)o.rot);
+        g.TranslateTransform(-cx, -cy);
+    }
 
     switch (o.kind) {
     case EdKind::Rect:
@@ -10732,6 +10815,7 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
     }
     default: break;
     }
+    if (rotated) g.Restore(rotState);
 }
 
 void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
@@ -10790,11 +10874,36 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         EdDrawObject(g, g_edNew, s, ox, oy);
 
     if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() && !(g_edEdit && g_edSel == g_edEditIdx)) {
-        const RECT r = EdObjScreen(g_edObjs[g_edSel]);
+        const EdObj& so = g_edObjs[g_edSel];
+        const RECT r = EdObjScreen(so);
         Gdiplus::Pen mark(EdC(RGB(255, 255, 255), 190), 1.0f);
         mark.SetDashStyle(Gdiplus::DashStyleDash);
-        g.DrawRectangle(&mark, (float)r.left, (float)r.top,
-                        (float)(r.right - r.left), (float)(r.bottom - r.top));
+        if (so.rot != 0 && EdCanRotate(so.kind)) {
+            // Рамка повертається разом із позначкою — інакше вона обіцяла б
+            // габарити, яких немає.
+            const double cx = (r.left + r.right) / 2.0, cy = (r.top + r.bottom) / 2.0;
+            double xs[4] = { (double)r.left, (double)r.right, (double)r.right, (double)r.left };
+            double ys[4] = { (double)r.top,  (double)r.top,   (double)r.bottom, (double)r.bottom };
+            Gdiplus::PointF pts[5];
+            for (int i = 0; i < 4; ++i) {
+                EdRotatePt(cx, cy, so.rot, xs[i], ys[i]);
+                pts[i] = Gdiplus::PointF((float)xs[i], (float)ys[i]);
+            }
+            pts[4] = pts[0];
+            g.DrawLines(&mark, pts, 5);
+        } else {
+            g.DrawRectangle(&mark, (float)r.left, (float)r.top,
+                            (float)(r.right - r.left), (float)(r.bottom - r.top));
+        }
+        RECT rh;
+        if (EdRotHandle(so, &rh)) {
+            Gdiplus::SolidBrush rb(EdC(RGB(255, 255, 255)));
+            Gdiplus::Pen rp(EdC(t.accent), 2.0f);
+            g.FillEllipse(&rb, (INT)rh.left, (INT)rh.top,
+                          (INT)(rh.right - rh.left), (INT)(rh.bottom - rh.top));
+            g.DrawEllipse(&rp, (float)rh.left, (float)rh.top,
+                          (float)(rh.right - rh.left), (float)(rh.bottom - rh.top));
+        }
         RECT hs[8];
         const int hn = EdHandles(g_edObjs[g_edSel], hs);
         Gdiplus::SolidBrush wb(EdC(RGB(255, 255, 255)));
@@ -11270,6 +11379,15 @@ bool EdHitObject(const EdObj& o, POINT pt)
 {
     const RECT ir = EdImageRect();
     const double sc = EdScale();
+    // ⚠ Повернуту позначку ловимо, повернувши НАЗАД саму точку: інакше клікати
+    // довелося б по невидимій прямій рамці, а не по тому, що намальовано.
+    if (o.rot != 0 && EdCanRotate(o.kind)) {
+        const RECT r = EdObjScreen(o);
+        double px = pt.x, py = pt.y;
+        EdRotatePt((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0, -o.rot, px, py);
+        pt.x = (LONG)(px + 0.5);
+        pt.y = (LONG)(py + 0.5);
+    }
     const double tol = EdPx(4) + o.thick * sc / 2.0;
     if (EdIsSegment(o.kind)) {
         const double ax = ir.left + o.x * sc, ay = ir.top + o.y * sc;
@@ -11580,6 +11698,8 @@ LPCWSTR EdCursorFor(POINT pt)
     }
     if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) {
         const EdObj& o = g_edObjs[g_edSel];
+        RECT rh;
+        if (EdRotHandle(o, &rh) && PtInRect(&rh, pt)) return IDC_HAND;
         RECT hs[8];
         const int hn = EdHandles(o, hs);
         // ⚠ У відрізка ручка — це КІНЕЦЬ лінії, і тягнеться він куди завгодно, а
@@ -12516,7 +12636,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             } else {
                 g_edNew.w = img.x - g_edNew.x;
                 g_edNew.h = img.y - g_edNew.y;
-                if (GetKeyState(VK_SHIFT) < 0) EdConstrain(g_edNew);
+                if (wp & MK_SHIFT) EdConstrain(g_edNew);   // теж із повідомлення
             }
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -12571,8 +12691,37 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
+        if (g_edDrag == EdDrag::Rotate && g_edSel >= 0) {
+            EdObj& o = g_edObjs[g_edSel];
+            const RECT r = EdObjScreen(g_edDragOrig);
+            const double cx = (r.left + r.right) / 2.0, cy = (r.top + r.bottom) / 2.0;
+            // Кут рахуємо від напрямку «вгору»: ручка стоїть саме там, і на
+            // початку тягнення поворот має дорівнювати нулю, а не дев'яноста.
+            double deg = atan2(pt.x - cx, cy - pt.y) * 180.0 / 3.14159265358979;
+            // ⚠ Shift беремо з wParam повідомлення, а не з GetKeyState: він
+            // ПРИХОДИТЬ разом із рухом миші, і лише так цю гілку можна
+            // перевірити харнесом (той шле повідомлення, а не тисне клавіші).
+            if (wp & MK_SHIFT) deg = floor(deg / 15.0 + 0.5) * 15.0;
+            int d = (int)(deg + 0.5) % 360;
+            if (d < 0) d += 360;
+            o.rot = d;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         if (g_edDrag == EdDrag::Resize && g_edSel >= 0) {
-            EdResizeSel(g_edHandle, EdToImage(pt));
+            // ⚠ Повернуту позначку тягнемо в ЇЇ власних координатах: точку
+            // повертаємо назад, інакше ручка «правий край» тягла б угору.
+            POINT rp = pt;
+            const EdObj& ro = g_edObjs[g_edSel];
+            if (ro.rot != 0 && EdCanRotate(ro.kind)) {
+                const RECT rr = EdObjScreen(ro);
+                double px = rp.x, py = rp.y;
+                EdRotatePt((rr.left + rr.right) / 2.0, (rr.top + rr.bottom) / 2.0,
+                           -ro.rot, px, py);
+                rp.x = (LONG)(px + 0.5);
+                rp.y = (LONG)(py + 0.5);
+            }
+            EdResizeSel(g_edHandle, EdToImage(rp));
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -12988,6 +13137,14 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // й так показував стрілку розміру, а тягнути починало новий об'єкт:
         // обіцянка курсора розходилась із дією. Хто бачить ручку — той її тягне.
         if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) {
+            RECT rh;
+            if (EdRotHandle(g_edObjs[g_edSel], &rh) && PtInRect(&rh, pt)) {
+                EdPushUndo();
+                g_edDrag = EdDrag::Rotate;
+                g_edDragOrig = g_edObjs[g_edSel];
+                SetCapture(hwnd);
+                return 0;
+            }
             RECT hs[8];
             const int hn = EdHandles(g_edObjs[g_edSel], hs);
             for (int i = 0; i < hn; ++i) {
