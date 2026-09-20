@@ -23,7 +23,8 @@ $LIBS = @(
     "bcrypt.lib",                  # CAPS-10: SHA-256 + ECDSA-перевірка оновлень
     "d2d1.lib", "windowscodecs.lib",  # CAPS-16: рендер SVG
     "mf.lib", "mfplat.lib", "mfreadwrite.lib", "mfuuid.lib",  # CAPS-16: кадр відео
-    "runtimeobject.lib", "shcore.lib"   # CAPS-16: PDF через Windows.Data.Pdf
+    "runtimeobject.lib", "shcore.lib",  # CAPS-16: PDF через Windows.Data.Pdf
+    "d3d11.lib", "dxgi.lib"             # CAPS-21: захоплення екрана (Desktop Duplication)
 )
 
 function Find-VcVars {
@@ -92,7 +93,7 @@ function Build-Mingw {
     & $gxx lilhelpers.cpp lilhelpers_res.o -o lilhelpers.exe `
         -municode -mwindows -O2 -s -static -fno-exceptions -fno-rtti `
         -lshell32 -lgdi32 -lgdiplus -lshlwapi -lole32 -loleaut32 -lcomctl32 -ltaskschd -luuid -ladvapi32 `
-        -lwininet -lversion -luxtheme -ldwmapi -lbcrypt -ld2d1 -lwindowscodecs -luuid -lmf -lmfplat -lmfreadwrite -lmfuuid -lruntimeobject -lshcore
+        -lwininet -lversion -luxtheme -ldwmapi -lbcrypt -ld2d1 -lwindowscodecs -luuid -lmf -lmfplat -lmfreadwrite -lmfuuid -lruntimeobject -lshcore -ld3d11 -ldxgi
     if ($LASTEXITCODE -ne 0) { throw "compile failed" }
 
     Remove-Item lilhelpers_res.o -ErrorAction SilentlyContinue

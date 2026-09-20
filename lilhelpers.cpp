@@ -81,6 +81,9 @@
 #include <inspectable.h>
 #include <asyncinfo.h>
 #include <shcore.h>
+// CAPS-21: захоплення екрана через Desktop Duplication — системні DXGI і D3D11.
+#include <dxgi1_6.h>
+#include <d3d11.h>
 // CAPS-16: Markdown і підсвітка коду — через RichEdit, якому згодовується RTF.
 #include <richedit.h>
 
@@ -157,6 +160,8 @@ constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
 constexpr UINT IDM_EXIT        = 2;
 constexpr UINT IDM_EDITOR      = 3;   // CAPS-20: редактор знімків
+constexpr UINT IDM_CAPSCREEN   = 4;   // CAPS-21: знімок екрана
+constexpr UINT IDM_CAPWINDOW   = 5;   // CAPS-21: знімок активного вікна
 constexpr UINT TIMER_MAG_HOLD   = 1;
 constexpr UINT TIMER_MAG_FRAME  = 2;   // кадр оверлейної анімації
 constexpr UINT TIMER_THEME      = 3;   // CAPS-7: перевірка теми раз на хвилину
@@ -418,6 +423,10 @@ X(MsgAutostartFailed, L"Не вдалося змінити задачу авто
 X(MsgRollbackConfirm, L"Повернути попередню версію і перезапустити Little Helpers?",                   \
                       L"Roll back to the previous version and restart Little Helpers?")                \
 X(MenuSettings,       L"Налаштування…",                 L"Settings…")                                  \
+X(EdCapScreen,        L"Знімок екрана",                 L"Screenshot")                                 \
+X(EdCapWindow,        L"Знімок вікна",                  L"Window shot")                                \
+X(EdHdrNote,          L"HDR · тон-мапінг застосовано",  L"HDR · tone-mapped")                          \
+X(EdErrCapture,       L"Не вдалося зробити знімок екрана.", L"Could not capture the screen.")          \
 X(EdMenu,             L"Редактор знімків…",             L"Screenshot editor…")                         \
 X(EdTitle,            L"Редактор знімків",              L"Screenshot editor")                          \
 X(EdToolRect,         L"Прямокутник",                   L"Rectangle")                                  \
@@ -6369,6 +6378,445 @@ void ApplyMode(HWND hwnd, Mode mode)
     UpdateModeHint();
 }
 
+// ===================== CAPS-21: захоплення екрана =====================
+// Чому не BitBlt. У режимі HDR робочий стіл композиційно лежить у scRGB
+// (FP16, лінійний) або PQ, а BitBlt віддає буфер БЕЗ тон-мапінгу в SDR — звідси
+// вицвілі або темні знімки. Лікувати це «потім повзунком» не можна: оригінал
+// уже втрачено. Тому захват іде через Desktop Duplication, яка разом із
+// пікселями віддає й колірний простір виходу.
+//
+// Три речі, виміряні пробами (dupprobe1..3 у scratchpad), а не вгадані:
+//
+//  1. ПЕРШИЙ кадр після DuplicateOutput порожній: AccumulatedFrames = 0 і
+//     суцільний чорний. Справжній приходить наступним. Пропускати кадри, доки
+//     AccumulatedFrames == 0 && LastPresentTime == 0.
+//  2. На НЕРУХОМОМУ екрані другий кадр усе одно приходить за 0..16 мс, тобто за
+//     один інтервал оновлення. Штовхати екран власним вікном не треба — це
+//     перевірено окремим прогоном, де проба мовчала, щоб не міняти екран сама.
+//  3. RowPitch НЕ дорівнює width*4: на цій машині 6272 проти 6256. Той самий
+//     клас помилки, що зрізав кадри відео в CAPS-16.
+//
+// HDR-гілку на цій машині перевірити нічим — тут SDR-вихід (ColorSpace 0,
+// 8 біт). Вона написана за специфікаціями і чекає на живу перевірку власником.
+
+constexpr int   kCapBudgetMs   = 1200;   // скільки чекаємо непорожній кадр
+constexpr float kCapKnee       = 0.80f;  // де починається м'який спад у світлах
+constexpr float kCapScrgbWhite = 80.0f;  // scRGB 1.0 = 80 ніт за визначенням
+
+struct CapShot {
+    Gdiplus::Bitmap* bmp;
+    bool  hdr;          // джерело було HDR
+    bool  toneMapped;   // і ми його звели в SDR
+    float sdrWhite;     // ніт; -1 якщо система не сказала
+    int   w, h;
+};
+
+// Рівень білого SDR: скільки ніт коштує звичайна біла кнопка при ввімкненому
+// HDR. Без нього немає від чого нормалізувати. Система інколи не відповідає
+// (на цій машині саме так) — тоді беремо 80 ніт, тобто множник 1.
+float CapSdrWhiteNits(const wchar_t* gdiDeviceName)
+{
+    UINT32 npath = 0, nmode = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &npath, &nmode) != ERROR_SUCCESS)
+        return -1.0f;
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(npath);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(nmode);
+    float out = -1.0f;
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &npath, paths.data(), &nmode, modes.data(),
+                           nullptr) == ERROR_SUCCESS) {
+        for (UINT32 i = 0; i < npath; ++i) {
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME src = {};
+            src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            src.header.size = sizeof(src);
+            src.header.adapterId = paths[i].sourceInfo.adapterId;
+            src.header.id = paths[i].sourceInfo.id;
+            if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS) continue;
+            if (lstrcmpiW(src.viewGdiDeviceName, gdiDeviceName)) continue;
+            // DISPLAYCONFIG_GET_SDR_WHITE_LEVEL = 26; структури немає в старих SDK
+            struct {
+                DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+                ULONG SDRWhiteLevel;
+            } wl = {};
+            wl.header.type = (DISPLAYCONFIG_DEVICE_INFO_TYPE)26;
+            wl.header.size = sizeof(wl);
+            wl.header.adapterId = paths[i].targetInfo.adapterId;
+            wl.header.id = paths[i].targetInfo.id;
+            if (DisplayConfigGetDeviceInfo(&wl.header) == ERROR_SUCCESS)
+                out = wl.SDRWhiteLevel / 1000.0f * kCapScrgbWhite;
+            break;
+        }
+    }
+    return out;
+}
+
+float CapHalfToFloat(unsigned short h)
+{
+    const unsigned s = (h >> 15) & 1u, e = (h >> 10) & 0x1Fu, m = h & 0x3FFu;
+    float v;
+    if (e == 0)       v = m / 1024.0f * 6.103515625e-5f;          // субнормальні
+    else if (e == 31) v = m ? 0.0f : 65504.0f;                    // NaN міняємо на 0, inf підрізаємо
+    else              v = (1.0f + m / 1024.0f) * (float)pow(2.0, (int)e - 15);
+    return s ? -v : v;
+}
+
+// М'який спад у світлах. Усе до kCapKnee лишається як було — саме тому звичайний
+// інтерфейс на HDR-екрані виглядатиме так само, як бачить око, — а вище
+// асимптотично тиснеться до одиниці, щоб відблиски не зрізало в плоску пляму.
+float CapKnee(float n)
+{
+    if (n <= 0.0f) return 0.0f;
+    if (n <= kCapKnee) return n;
+    const float t = (n - kCapKnee) / (1.0f - kCapKnee);
+    return kCapKnee + (1.0f - kCapKnee) * (1.0f - (float)exp(-t));
+}
+
+BYTE CapToSrgb8(float lin)
+{
+    if (lin <= 0.0f) return 0;
+    if (lin >= 1.0f) return 255;
+    const float s = (lin <= 0.0031308f) ? (12.92f * lin)
+                                        : (1.055f * (float)pow(lin, 1.0 / 2.4) - 0.055f);
+    int v = (int)(s * 255.0f + 0.5f);
+    return (BYTE)(v < 0 ? 0 : (v > 255 ? 255 : v));
+}
+
+// PQ (SMPTE ST 2084) -> ніти.
+float CapPqToNits(float e)
+{
+    const double m1 = 0.1593017578125, m2 = 78.84375;
+    const double c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+    if (e <= 0.0f) return 0.0f;
+    const double p = pow((double)e, 1.0 / m2);
+    double num = p - c1;
+    if (num < 0.0) num = 0.0;
+    const double den = c2 - c3 * p;
+    if (den <= 0.0) return 10000.0f;
+    return (float)(10000.0 * pow(num / den, 1.0 / m1));
+}
+
+struct CapOutput {
+    IDXGIAdapter1* adapter;
+    IDXGIOutput6*  output;
+    RECT           rc;
+    DXGI_COLOR_SPACE_TYPE cs;
+    wchar_t        device[32];
+};
+
+// Знаходимо вихід, якому належить монітор. Перебирати треба ВСІ адаптери:
+// на цій машині та сама відеокарта перелічується двічі, і виходи має лише одна
+// з копій, а третім іде Microsoft Basic Render Driver узагалі без виходів.
+bool CapFindOutput(HMONITOR mon, CapOutput* out)
+{
+    IDXGIFactory1* f = nullptr;
+    if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&f)) || !f) return false;
+    bool found = false;
+    for (UINT ai = 0; !found; ++ai) {
+        IDXGIAdapter1* a = nullptr;
+        if (f->EnumAdapters1(ai, &a) == DXGI_ERROR_NOT_FOUND) break;
+        for (UINT oi = 0; !found; ++oi) {
+            IDXGIOutput* o = nullptr;
+            if (a->EnumOutputs(oi, &o) == DXGI_ERROR_NOT_FOUND) break;
+            DXGI_OUTPUT_DESC od = {};
+            o->GetDesc(&od);
+            if (od.AttachedToDesktop && od.Monitor == mon) {
+                IDXGIOutput6* o6 = nullptr;
+                if (SUCCEEDED(o->QueryInterface(__uuidof(IDXGIOutput6), (void**)&o6)) && o6) {
+                    out->adapter = a;
+                    out->output  = o6;
+                    out->rc      = od.DesktopCoordinates;
+                    lstrcpynW(out->device, od.DeviceName, 32);
+                    DXGI_OUTPUT_DESC1 d1 = {};
+                    out->cs = SUCCEEDED(o6->GetDesc1(&d1)) ? d1.ColorSpace
+                                                           : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+                    a->AddRef();
+                    found = true;
+                }
+            }
+            o->Release();
+        }
+        a->Release();
+    }
+    f->Release();
+    return found;
+}
+
+// Запасний шлях: звичайний BitBlt. Для SDR він дає той самий результат, а
+// потрібен там, де дублювання недоступне — сеанс RDP, деякі віртуалки,
+// захищений робочий стіл.
+Gdiplus::Bitmap* CapBitBlt(const RECT& rc)
+{
+    const int w = rc.right - rc.left, h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) return nullptr;
+    HDC screen = GetDC(nullptr);
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP bmp = CreateCompatibleBitmap(screen, w, h);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    BitBlt(mem, 0, 0, w, h, screen, rc.left, rc.top, SRCCOPY);
+    SelectObject(mem, old);
+    Gdiplus::Bitmap* out = Gdiplus::Bitmap::FromHBITMAP(bmp, nullptr);
+    Gdiplus::Bitmap* cloned = nullptr;
+    if (out && out->GetLastStatus() == Gdiplus::Ok)
+        cloned = out->Clone(0, 0, w, h, PixelFormat32bppPARGB);
+    delete out;
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+    if (cloned) {
+        // BitBlt не дає альфи; без цього знімок вийде прозорим.
+        Gdiplus::BitmapData bd;
+        Gdiplus::Rect all(0, 0, w, h);
+        if (cloned->LockBits(&all, Gdiplus::ImageLockModeWrite, PixelFormat32bppPARGB, &bd) == Gdiplus::Ok) {
+            for (int y = 0; y < h; ++y) {
+                BYTE* row = (BYTE*)bd.Scan0 + (size_t)y * bd.Stride;
+                for (int x = 0; x < w; ++x) row[x * 4 + 3] = 255;
+            }
+            cloned->UnlockBits(&bd);
+        }
+    }
+    return cloned;
+}
+
+// Перетворення кадру в 32-бітний бітмап редактора. Тут і живе весь тон-мапінг.
+Gdiplus::Bitmap* CapConvert(const BYTE* src, UINT srcPitch, UINT w, UINT h,
+                            DXGI_FORMAT fmt, DXGI_COLOR_SPACE_TYPE cs, float sdrWhite,
+                            bool* toneMapped)
+{
+    *toneMapped = false;
+    Gdiplus::Bitmap* bmp = new Gdiplus::Bitmap((INT)w, (INT)h, PixelFormat32bppPARGB);
+    if (!bmp || bmp->GetLastStatus() != Gdiplus::Ok) { delete bmp; return nullptr; }
+    Gdiplus::BitmapData bd;
+    Gdiplus::Rect all(0, 0, (INT)w, (INT)h);
+    if (bmp->LockBits(&all, Gdiplus::ImageLockModeWrite, PixelFormat32bppPARGB, &bd) != Gdiplus::Ok) {
+        delete bmp;
+        return nullptr;
+    }
+
+    const float white = (sdrWhite > 1.0f) ? sdrWhite : kCapScrgbWhite;
+
+    if (fmt == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+        // scRGB: лінійний, 1.0 = 80 ніт. Таблиця на всі 65536 півзначень одразу —
+        // інакше на кадрі 4K вийшло б 24 мільйони викликів pow.
+        *toneMapped = true;
+        const float scale = white / kCapScrgbWhite;
+        std::vector<BYTE> lut(65536);
+        for (int i = 0; i < 65536; ++i)
+            lut[(size_t)i] = CapToSrgb8(CapKnee(CapHalfToFloat((unsigned short)i) / scale));
+        for (UINT y = 0; y < h; ++y) {
+            const unsigned short* s = (const unsigned short*)(src + (size_t)y * srcPitch);
+            BYTE* d = (BYTE*)bd.Scan0 + (size_t)y * bd.Stride;
+            for (UINT x = 0; x < w; ++x) {
+                d[x * 4 + 2] = lut[s[x * 4 + 0]];   // R
+                d[x * 4 + 1] = lut[s[x * 4 + 1]];   // G
+                d[x * 4 + 0] = lut[s[x * 4 + 2]];   // B
+                d[x * 4 + 3] = 255;
+            }
+        }
+    } else if (fmt == DXGI_FORMAT_R10G10B10A2_UNORM) {
+        const bool pq = (cs == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 ||
+                         cs == DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020);
+        if (pq) {
+            *toneMapped = true;
+            float lin[1024];
+            for (int i = 0; i < 1024; ++i) lin[i] = CapPqToNits(i / 1023.0f) / white;
+            for (UINT y = 0; y < h; ++y) {
+                const UINT32* s = (const UINT32*)(src + (size_t)y * srcPitch);
+                BYTE* d = (BYTE*)bd.Scan0 + (size_t)y * bd.Stride;
+                for (UINT x = 0; x < w; ++x) {
+                    const UINT32 v = s[x];
+                    const float r2020 = lin[v & 0x3FF];
+                    const float g2020 = lin[(v >> 10) & 0x3FF];
+                    const float b2020 = lin[(v >> 20) & 0x3FF];
+                    // BT.2020 -> BT.709 у лінійному світлі, інакше кольори попливуть
+                    const float r = 1.6605f * r2020 - 0.5876f * g2020 - 0.0728f * b2020;
+                    const float g = -0.1246f * r2020 + 1.1329f * g2020 - 0.0083f * b2020;
+                    const float b = -0.0182f * r2020 - 0.1006f * g2020 + 1.1187f * b2020;
+                    d[x * 4 + 2] = CapToSrgb8(CapKnee(r));
+                    d[x * 4 + 1] = CapToSrgb8(CapKnee(g));
+                    d[x * 4 + 0] = CapToSrgb8(CapKnee(b));
+                    d[x * 4 + 3] = 255;
+                }
+            }
+        } else {
+            for (UINT y = 0; y < h; ++y) {
+                const UINT32* s = (const UINT32*)(src + (size_t)y * srcPitch);
+                BYTE* d = (BYTE*)bd.Scan0 + (size_t)y * bd.Stride;
+                for (UINT x = 0; x < w; ++x) {
+                    const UINT32 v = s[x];
+                    d[x * 4 + 2] = (BYTE)(((v) & 0x3FF) >> 2);
+                    d[x * 4 + 1] = (BYTE)(((v >> 10) & 0x3FF) >> 2);
+                    d[x * 4 + 0] = (BYTE)(((v >> 20) & 0x3FF) >> 2);
+                    d[x * 4 + 3] = 255;
+                }
+            }
+        }
+    } else {
+        // B8G8R8A8: звичайний SDR, копія рядками з урахуванням RowPitch
+        for (UINT y = 0; y < h; ++y) {
+            const BYTE* s = src + (size_t)y * srcPitch;
+            BYTE* d = (BYTE*)bd.Scan0 + (size_t)y * bd.Stride;
+            for (UINT x = 0; x < w; ++x) {
+                d[x * 4 + 0] = s[x * 4 + 0];
+                d[x * 4 + 1] = s[x * 4 + 1];
+                d[x * 4 + 2] = s[x * 4 + 2];
+                d[x * 4 + 3] = 255;   // у кадрі альфа буває нульова
+            }
+        }
+    }
+
+    bmp->UnlockBits(&bd);
+    return bmp;
+}
+
+bool CapGrabMonitor(HMONITOR mon, CapShot* out)
+{
+    *out = CapShot{};
+    CapOutput co = {};
+    if (!CapFindOutput(mon, &co)) return false;
+
+    out->sdrWhite = CapSdrWhiteNits(co.device);
+    out->hdr = (co.cs != DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+
+    ID3D11Device* dev = nullptr;
+    ID3D11DeviceContext* ctx = nullptr;
+    D3D_FEATURE_LEVEL fl;
+    HRESULT hr = D3D11CreateDevice(co.adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, nullptr, 0,
+                                   D3D11_SDK_VERSION, &dev, &fl, &ctx);
+    if (FAILED(hr)) { co.output->Release(); co.adapter->Release(); return false; }
+
+    const DXGI_FORMAT want[3] = { DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                  DXGI_FORMAT_R10G10B10A2_UNORM,
+                                  DXGI_FORMAT_B8G8R8A8_UNORM };
+    IDXGIOutputDuplication* dup = nullptr;
+    hr = co.output->DuplicateOutput1(dev, 0, 3, want, &dup);
+    if (FAILED(hr) || !dup) {
+        ctx->Release(); dev->Release();
+        co.output->Release(); co.adapter->Release();
+        return false;
+    }
+
+    Gdiplus::Bitmap* bmp = nullptr;
+    const DWORD t0 = GetTickCount();
+    while ((int)(GetTickCount() - t0) < kCapBudgetMs) {
+        IDXGIResource* res = nullptr;
+        DXGI_OUTDUPL_FRAME_INFO fi = {};
+        hr = dup->AcquireNextFrame(60, &fi, &res);
+        if (hr == DXGI_ERROR_WAIT_TIMEOUT) continue;
+        if (FAILED(hr)) break;
+        const bool real = (fi.AccumulatedFrames > 0) || (fi.LastPresentTime.QuadPart != 0);
+        if (!real) {                      // перший кадр порожній — це норма, не помилка
+            if (res) res->Release();
+            dup->ReleaseFrame();
+            continue;
+        }
+        ID3D11Texture2D* tex = nullptr;
+        if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&tex)) && tex) {
+            D3D11_TEXTURE2D_DESC td = {};
+            tex->GetDesc(&td);
+            D3D11_TEXTURE2D_DESC sd = td;
+            sd.Usage = D3D11_USAGE_STAGING;
+            sd.BindFlags = 0;
+            sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            sd.MiscFlags = 0;
+            ID3D11Texture2D* stage = nullptr;
+            if (SUCCEEDED(dev->CreateTexture2D(&sd, nullptr, &stage)) && stage) {
+                ctx->CopyResource(stage, tex);
+                D3D11_MAPPED_SUBRESOURCE m = {};
+                if (SUCCEEDED(ctx->Map(stage, 0, D3D11_MAP_READ, 0, &m))) {
+                    bmp = CapConvert((const BYTE*)m.pData, m.RowPitch, td.Width, td.Height,
+                                     td.Format, co.cs, out->sdrWhite, &out->toneMapped);
+                    ctx->Unmap(stage, 0);
+                }
+                stage->Release();
+            }
+            tex->Release();
+        }
+        if (res) res->Release();
+        dup->ReleaseFrame();
+        break;
+    }
+
+    dup->Release();
+    ctx->Release();
+    dev->Release();
+    co.output->Release();
+    co.adapter->Release();
+
+    if (!bmp) return false;
+    out->bmp = bmp;
+    out->w = (int)bmp->GetWidth();
+    out->h = (int)bmp->GetHeight();
+    return true;
+}
+
+// Обрізає знімок монітора до прямокутника в координатах робочого стола.
+Gdiplus::Bitmap* CapCrop(Gdiplus::Bitmap* whole, const RECT& monRc, const RECT& want)
+{
+    RECT r = want;
+    if (r.left < monRc.left) r.left = monRc.left;
+    if (r.top < monRc.top) r.top = monRc.top;
+    if (r.right > monRc.right) r.right = monRc.right;
+    if (r.bottom > monRc.bottom) r.bottom = monRc.bottom;
+    const int w = r.right - r.left, h = r.bottom - r.top;
+    if (w <= 0 || h <= 0) return nullptr;
+    return whole->Clone(r.left - monRc.left, r.top - monRc.top, w, h, PixelFormat32bppPARGB);
+}
+
+// Знімок монітора, на якому зараз курсор. Увесь віртуальний робочий стіл
+// свідомо не зшиваємо: у сусідніх моніторів можуть бути різні колірні простори
+// й різний рівень білого, і «один знімок» із них був би склейкою двох різних
+// експозицій.
+bool CapScreen(CapShot* out)
+{
+    POINT pt = {};
+    GetCursorPos(&pt);
+    HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+    if (CapGrabMonitor(mon, out)) return true;
+
+    MONITORINFO mi = { sizeof(mi) };
+    if (!GetMonitorInfoW(mon, &mi)) return false;
+    Gdiplus::Bitmap* bmp = CapBitBlt(mi.rcMonitor);     // дублювання недоступне
+    if (!bmp) return false;
+    *out = CapShot{};
+    out->bmp = bmp;
+    out->w = (int)bmp->GetWidth();
+    out->h = (int)bmp->GetHeight();
+    return true;
+}
+
+// Знімок вікна. Беремо межі, які малює DWM: GetWindowRect у Windows 11 віддає
+// ще й невидиме поле для тіні, і знімок вийшов би з прозорими полями.
+bool CapWindow(HWND target, CapShot* out)
+{
+    if (!target || !IsWindow(target)) return false;
+    RECT rc = {};
+    if (FAILED(DwmGetWindowAttribute(target, DWMWA_EXTENDED_FRAME_BOUNDS, &rc, sizeof(rc))) ||
+        rc.right <= rc.left)
+        GetWindowRect(target, &rc);
+
+    HMONITOR mon = MonitorFromWindow(target, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(mi) };
+    if (!GetMonitorInfoW(mon, &mi)) return false;
+
+    CapShot whole = {};
+    if (CapGrabMonitor(mon, &whole)) {
+        Gdiplus::Bitmap* part = CapCrop(whole.bmp, mi.rcMonitor, rc);
+        delete whole.bmp;
+        if (!part) return false;
+        *out = whole;
+        out->bmp = part;
+        out->w = (int)part->GetWidth();
+        out->h = (int)part->GetHeight();
+        return true;
+    }
+    Gdiplus::Bitmap* bmp = CapBitBlt(rc);
+    if (!bmp) return false;
+    *out = CapShot{};
+    out->bmp = bmp;
+    out->w = (int)bmp->GetWidth();
+    out->h = (int)bmp->GetHeight();
+    return true;
+}
+
 // ===================== CAPS-20: редактор знімків =====================
 // Три зони за макетом CAPS-19: ліворуч чим малюю, зверху властивості ВИБРАНОЇ
 // позначки, праворуч сам знімок. Правило просте настільки, що його не треба
@@ -6467,6 +6915,7 @@ bool  g_edPanelOpen = true;
 Gdiplus::Bitmap* g_edImg = nullptr;
 int      g_edImgW = 0, g_edImgH = 0;
 wchar_t  g_edSource[MAX_PATH] = {};
+bool     g_edHdr = false, g_edToneMapped = false;   // CAPS-21: звідки прийшов кадр
 
 std::vector<EdObj> g_edObjs;
 int      g_edSel = -1;
@@ -7172,6 +7621,12 @@ void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         y = l2.bottom + EdPx(6);
     }
 
+    if (g_edHdr) {
+        RECT lh = { x, y, g_edRcPanel.right - EdPx(14), y + EdPx(20) };
+        EdDrawText(dc, lh, S(Str::EdHdrNote), g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        y = lh.bottom + EdPx(6);
+    }
+
     wsprintfW(buf, S(Str::EdFmtMarks), (int)g_edObjs.size());
     RECT l3 = { x, y, g_edRcPanel.right - EdPx(14), y + EdPx(20) };
     EdDrawText(dc, l3, buf, g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -7731,21 +8186,13 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-void EdOpen(HINSTANCE hInst, HWND owner)
+// Редактор приймає ГОТОВИЙ бітмап і стає його власником. Через це той самий
+// шлях обслуговує і файл, і знімок екрана, і буфер обміну — жодне джерело не
+// має привілею.
+void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
+                  bool hdr, bool toneMapped)
 {
-    if (g_edWnd) {
-        ShowWindow(g_edWnd, SW_RESTORE);
-        SetForegroundWindow(g_edWnd);
-        return;
-    }
-    wchar_t path[MAX_PATH] = {};
-    if (!EdPickFile(owner, path, MAX_PATH)) return;
-
-    Gdiplus::Bitmap* bmp = EdBitmapFromFile(path);
-    if (!bmp) {
-        MessageBoxW(owner, S(Str::EdErrOpen), kAppName, MB_OK | MB_ICONWARNING);
-        return;
-    }
+    if (!bmp) return;
 
     static bool registered = false;
     if (!registered) {
@@ -7760,10 +8207,13 @@ void EdOpen(HINSTANCE hInst, HWND owner)
         registered = true;
     }
 
+    delete g_edImg;
     g_edImg  = bmp;
     g_edImgW = (int)bmp->GetWidth();
     g_edImgH = (int)bmp->GetHeight();
-    lstrcpynW(g_edSource, PathFindFileNameW(path), MAX_PATH);
+    g_edHdr        = hdr;
+    g_edToneMapped = toneMapped;
+    lstrcpynW(g_edSource, label ? label : L"", MAX_PATH);
     g_edObjs.clear();
     g_edUndo.clear();
     g_edRedo.clear();
@@ -7772,6 +8222,15 @@ void EdOpen(HINSTANCE hInst, HWND owner)
     g_edZoom = 1.0f;
     g_edPanX = g_edPanY = 0;
     g_edPanelOpen = true;
+
+    if (g_edWnd) {                      // уже відкрите — просто новий вміст
+        EdFitView();
+        EdLayout(g_edWnd);
+        InvalidateRect(g_edWnd, nullptr, TRUE);
+        ShowWindow(g_edWnd, SW_RESTORE);
+        SetForegroundWindow(g_edWnd);
+        return;
+    }
 
     wchar_t caption[160];
     wsprintfW(caption, L"%s — %s", S(Str::EdTitle), kAppName);
@@ -7798,6 +8257,58 @@ void EdOpen(HINSTANCE hInst, HWND owner)
     SetForegroundWindow(g_edWnd);
 }
 
+void EdOpen(HINSTANCE hInst, HWND owner)
+{
+    if (g_edWnd) {
+        ShowWindow(g_edWnd, SW_RESTORE);
+        SetForegroundWindow(g_edWnd);
+        return;
+    }
+    wchar_t path[MAX_PATH] = {};
+    if (!EdPickFile(owner, path, MAX_PATH)) return;
+
+    Gdiplus::Bitmap* bmp = EdBitmapFromFile(path);
+    if (!bmp) {
+        MessageBoxW(owner, S(Str::EdErrOpen), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    EdOpenBitmap(hInst, bmp, PathFindFileNameW(path), false, false);
+}
+
+// Активне вікно на момент знімка. Якщо попереду наше власне (меню трею саме
+// його й піднімає), беремо наступне чуже за порядком Z.
+HWND CapForegroundTarget()
+{
+    DWORD me = GetCurrentProcessId();
+    HWND h = GetForegroundWindow();
+    for (int guard = 0; h && guard < 40; ++guard) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(h, &pid);
+        if (pid != me && IsWindowVisible(h) && !IsIconic(h)) {
+            RECT rc = {};
+            GetWindowRect(h, &rc);
+            if (rc.right - rc.left > 16 && rc.bottom - rc.top > 16) return h;
+        }
+        h = GetWindow(h, GW_HWNDNEXT);
+    }
+    return nullptr;
+}
+
+// target != nullptr — знімаємо саме це вікно. Нуль означає «активне»: так
+// приходить і з меню, і з гарячої клавіші.
+void CapTake(HINSTANCE hInst, HWND owner, bool wholeScreen, HWND target)
+{
+    CapShot shot = {};
+    const bool ok = wholeScreen ? CapScreen(&shot)
+                                : CapWindow(target ? target : CapForegroundTarget(), &shot);
+    if (!ok || !shot.bmp) {
+        MessageBoxW(owner, S(Str::EdErrCapture), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    EdOpenBitmap(hInst, shot.bmp, S(wholeScreen ? Str::EdCapScreen : Str::EdCapWindow),
+                 shot.hdr, shot.toneMapped);
+}
+
 // =================== кінець редактора знімків (CAPS-20) ===================
 
 void ShowTrayMenu(HWND hwnd)
@@ -7806,6 +8317,8 @@ void ShowTrayMenu(HWND hwnd)
     GetCursorPos(&pt);
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, IDM_SETTINGS, S(Str::MenuSettings));
+    AppendMenuW(menu, MF_STRING, IDM_CAPSCREEN, S(Str::EdCapScreen));
+    AppendMenuW(menu, MF_STRING, IDM_CAPWINDOW, S(Str::EdCapWindow));
     AppendMenuW(menu, MF_STRING, IDM_EDITOR, S(Str::EdMenu));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, IDM_EXIT, S(Str::MenuExit));
@@ -8162,6 +8675,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case IDM_EDITOR:
             EdOpen(GetModuleHandleW(nullptr), hwnd);
+            break;
+        case IDM_CAPSCREEN:
+            CapTake(GetModuleHandleW(nullptr), hwnd, true, nullptr);
+            break;
+        case IDM_CAPWINDOW:
+            CapTake(GetModuleHandleW(nullptr), hwnd, false, (HWND)lp);
             break;
         case IDM_EXIT:
             DestroyWindow(hwnd);
