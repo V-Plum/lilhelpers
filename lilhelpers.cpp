@@ -485,6 +485,17 @@ X(EdToolMark,         L"Маркер",                        L"Marker")        
 X(EdToolCounter,      L"Лічильник",                     L"Counter")                                    \
 X(EdToolStamp,        L"Штамп",                         L"Stamp")                                      \
 X(EdKindImage,        L"Зображення",                    L"Image")                                      \
+X(EdFmtPicked,        L"Вибрано: %d",                   L"Selected: %d")                               \
+X(EdTipAlL,           L"Вирівняти за лівим краєм",      L"Align left edges")                           \
+X(EdTipAlCx,          L"Вирівняти по центру вертикалі", L"Align vertical centres")                     \
+X(EdTipAlR,           L"Вирівняти за правим краєм",     L"Align right edges")                          \
+X(EdTipAlT,           L"Вирівняти за верхнім краєм",    L"Align top edges")                            \
+X(EdTipAlCy,          L"Вирівняти по центру горизонталі", L"Align horizontal centres")                 \
+X(EdTipAlB,           L"Вирівняти за нижнім краєм",     L"Align bottom edges")                         \
+X(EdTipDistX,         L"Рівні проміжки по горизонталі", L"Even gaps across")                           \
+X(EdTipDistY,         L"Рівні проміжки по вертикалі",   L"Even gaps down")                             \
+X(EdTipMakeGroup,     L"Згрупувати",                    L"Group")                                      \
+X(EdTipUngroup,       L"Розгрупувати",                  L"Ungroup")                                    \
 X(EdToolCrop,         L"Кадр",                          L"Crop")                                       \
 X(EdCropApply,        L"Застосувати",                   L"Apply")                                      \
 X(EdCropCancel,       L"Скасувати",                     L"Cancel")                                     \
@@ -7478,6 +7489,11 @@ struct EdObj {
     // й маркер не повертаються: вони беруть пікселі знімка під собою, і
     // повернута плашка мусила б брати повернуту ділянку — окрема робота.
     int      rot;
+    // CAPS-35. Номер групи, 0 — поза групою. Клік по будь-якому учаснику
+    // вибирає всю групу; сама група — це просто спільний номер, а не окремий
+    // об'єкт-контейнер: контейнер довелося б проводити крізь порядок, кадр,
+    // поворот знімка й скасування.
+    int      grp;
 };
 
 // Чіп називає вид однією назвою і для інструмента, і для вибраного. Префікс
@@ -7643,6 +7659,7 @@ double EdDistToSeg(double px, double py, double ax, double ay, double bx, double
 struct EdSnap {
     std::vector<EdObj> objs;
     int sel;
+    std::vector<int> selMore;   // CAPS-35: скасування має повертати ВЕСЬ вибір
     RECT crop;        // кадр — теж частина стану, інакше Ctrl+Z повертав би не все
     // Тон і геометрія — так само стан, а не «налаштування»: поворот зсуває
     // кожну позначку, і повернути самі позначки без нього означало б покласти
@@ -7668,7 +7685,8 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    NumStart, NumReset, StampPick, StampMore, NumGroup, NumNext,
                    Aspect, CropReset, CropOk, CropNo,
                    RotL, RotR, FlipH, FlipV, Exposure, Gamma, Contrast,
-                   ToneReset, Compare, GroupEdit, GroupDel, Pick, PickItem };
+                   ToneReset, Compare, GroupEdit, GroupDel, Pick, PickItem,
+                   SelAlign, SelGroup };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7684,6 +7702,8 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoCounter, IcoStamp, IcoNewGroup, IcoMore, IcoCrop,
              IcoRotL, IcoRotR, IcoFlipH, IcoFlipV, IcoCompare,
              IcoGroupEdit, IcoGroupDel,
+             IcoAlL, IcoAlCx, IcoAlR, IcoAlT, IcoAlCy, IcoAlB, IcoDistX, IcoDistY,
+             IcoGroup, IcoUngroup,
              IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn };
 
 enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength, Crop, CropMove,
@@ -7768,7 +7788,12 @@ void EdImageBankClear()
 }
 
 std::vector<EdObj> g_edObjs;
+// g_edSel лишається ГОЛОВНИМ вибраним: його властивості показує смуга, його
+// ручки видно. Решта вибраних живуть окремо — так увесь наявний код, який
+// знає про один вибраний, працює далі без переписування.
 int      g_edSel = -1;
+std::vector<int> g_edSelMore;
+int      g_edNextGrp = 1;
 
 // ---- CAPS-27: кадр ------------------------------------------------------
 // Кроп — ВЛАСТИВІСТЬ кадру, а не дія над пікселями. Знімок лишається цілим,
@@ -8063,6 +8088,56 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
         g.DrawPolygon(&pen, d, 3);
         break;
     }
+    // Вирівнювання: вісь і дві плитки, притиснуті до неї. Плитки різної
+    // довжини — інакше не видно, ЩО саме вирівнялось.
+    case IcoAlL: case IcoAlCx: case IcoAlR: {
+        Gdiplus::SolidBrush b(c);
+        const float ax = (id == IcoAlL) ? 2.6f : (id == IcoAlR) ? 17.4f : 10.0f;
+        g.DrawLine(&pen, ax, 2.0f, ax, 18.0f);
+        const float w1 = 10.0f, w2 = 6.0f;
+        const float x1 = (id == IcoAlL) ? ax + 1.4f : (id == IcoAlR) ? ax - 1.4f - w1 : ax - w1 / 2;
+        const float x2 = (id == IcoAlL) ? ax + 1.4f : (id == IcoAlR) ? ax - 1.4f - w2 : ax - w2 / 2;
+        g.FillRectangle(&b, x1, 4.6f, w1, 4.4f);
+        g.FillRectangle(&b, x2, 11.0f, w2, 4.4f);
+        break;
+    }
+    case IcoAlT: case IcoAlCy: case IcoAlB: {
+        Gdiplus::SolidBrush b(c);
+        const float ay = (id == IcoAlT) ? 2.6f : (id == IcoAlB) ? 17.4f : 10.0f;
+        g.DrawLine(&pen, 2.0f, ay, 18.0f, ay);
+        const float h1 = 10.0f, h2 = 6.0f;
+        const float y1 = (id == IcoAlT) ? ay + 1.4f : (id == IcoAlB) ? ay - 1.4f - h1 : ay - h1 / 2;
+        const float y2 = (id == IcoAlT) ? ay + 1.4f : (id == IcoAlB) ? ay - 1.4f - h2 : ay - h2 / 2;
+        g.FillRectangle(&b, 4.6f, y1, 4.4f, h1);
+        g.FillRectangle(&b, 11.0f, y2, 4.4f, h2);
+        break;
+    }
+    case IcoDistX: {
+        Gdiplus::SolidBrush b(c);
+        g.FillRectangle(&b, 2.0f, 4.0f, 3.2f, 12.0f);
+        g.FillRectangle(&b, 8.4f, 4.0f, 3.2f, 12.0f);
+        g.FillRectangle(&b, 14.8f, 4.0f, 3.2f, 12.0f);
+        break;
+    }
+    case IcoDistY: {
+        Gdiplus::SolidBrush b(c);
+        g.FillRectangle(&b, 4.0f, 2.0f, 12.0f, 3.2f);
+        g.FillRectangle(&b, 4.0f, 8.4f, 12.0f, 3.2f);
+        g.FillRectangle(&b, 4.0f, 14.8f, 12.0f, 3.2f);
+        break;
+    }
+    // Група — рамка навколо двох плиток; розгрупування — ті самі плитки без неї.
+    case IcoGroup: case IcoUngroup: {
+        Gdiplus::SolidBrush b(c);
+        g.FillRectangle(&b, 4.6f, 4.6f, 5.2f, 5.2f);
+        g.FillRectangle(&b, 10.2f, 10.2f, 5.2f, 5.2f);
+        if (id == IcoGroup) {
+            Gdiplus::Pen fr(c, 1.2f);
+            fr.SetDashStyle(Gdiplus::DashStyleDot);
+            g.DrawRectangle(&fr, 2.0f, 2.0f, 16.0f, 16.0f);
+        }
+        break;
+    }
     // Група лічильників: два кружечки — те саме, що ставить інструмент, але не
     // один. Перекреслені — та сама група, але видалена.
     // ⚠ Між кружечками потрібен зазор: дотичні читаються як знак нескінченності.
@@ -8348,6 +8423,8 @@ int EdTextWidth(HDC dc, const wchar_t* s, HFONT f)
 
 // Одне місце, де знімок дізнається про тон і геометрію: три копії цього
 // присвоєння вже встигли б розійтися.
+void EdSelMoreSnap(EdSnap& s);   // нижче: список вибраних живе далі за знімком
+
 void EdSnapTone(EdSnap& s)
 {
     s.exposure = g_edExposure; s.gamma = g_edGamma; s.contrast = g_edContrast;
@@ -8361,6 +8438,7 @@ void EdPushUndo()
     s.sel  = g_edSel;
     s.crop = g_edCrop;
     EdSnapTone(s);
+    EdSelMoreSnap(s);
     g_edUndo.push_back(s);
     if ((int)g_edUndo.size() > kEdUndoMax) g_edUndo.erase(g_edUndo.begin());
     g_edRedo.clear();
@@ -8370,6 +8448,7 @@ void EdApply(const EdSnap& s)
 {
     g_edObjs = s.objs;
     g_edSel  = s.sel;
+    g_edSelMore = s.selMore;
     g_edCrop = s.crop;
     if (g_edSel >= (int)g_edObjs.size()) g_edSel = -1;
 
@@ -8390,6 +8469,7 @@ void EdUndoAction()
     cur.sel  = g_edSel;
     cur.crop = g_edCrop;
     EdSnapTone(cur);
+    EdSelMoreSnap(cur);
     g_edRedo.push_back(cur);
     EdApply(g_edUndo.back());
     g_edUndo.pop_back();
@@ -8404,6 +8484,7 @@ void EdRedoAction()
     cur.sel  = g_edSel;
     cur.crop = g_edCrop;
     EdSnapTone(cur);
+    EdSelMoreSnap(cur);
     g_edUndo.push_back(cur);
     EdApply(g_edRedo.back());
     g_edRedo.pop_back();
@@ -8719,7 +8800,9 @@ int EdPanelInfoBottom()
     return y + EdPx(20);                           // «Позначок: N»
 }
 
-// Потрібна вже в розкладці — розкритий селект ставиться під своєю кнопкою.
+// Потрібні вже в розкладці й у чіпі — тіла нижче, біля решти дій над вибором.
+int  EdSelCount();
+bool EdManySel();
 const RECT* EdRegionRect(EdHit what, int idx);
 
 void EdLayout(HWND hwnd)
@@ -8817,7 +8900,24 @@ void EdLayout(HWND hwnd)
             x = r.right + gap;
         }
 
-        const bool showProps = hasSel || g_edTool != EdTool::Select;
+        // CAPS-35: коли вибрано кілька, смуга ІНША — у ній лише дії над ними
+        // (рішення власника 21.09). Властивостей окремої позначки тут немає,
+        // тож і питання про брак місця не виникає.
+        const bool many = (EdSelCount() >= 2);
+        if (many) {
+            for (int i = 0; i < 8; ++i) {
+                RECT r = EdPill(x, cy, EdPx(32), EdPx(28));
+                EdAdd(r, EdHit::SelAlign, i);
+                x = r.right + ((i == 2 || i == 5) ? EdPx(10) : EdPx(3));
+            }
+            x += gap - EdPx(3);
+            const bool grouped = (g_edSel >= 0 && g_edObjs[g_edSel].grp != 0);
+            RECT rg = EdPill(x, cy, EdPx(32), EdPx(28));
+            EdAdd(rg, EdHit::SelGroup, grouped ? 1 : 0);
+            x = rg.right + gap;
+        }
+
+        const bool showProps = (hasSel || g_edTool != EdTool::Select) && !many;
         if (showProps) {
             const EdKind kk = hasSel ? g_edObjs[g_edSel].kind : EdToolKind(g_edTool);
             const int curMode = (hasSel && kk == EdKind::Hide) ? g_edObjs[g_edSel].mode : g_edHideMode;
@@ -9549,6 +9649,25 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
             EdIcon(g, IcoStroke0 + i, EdIconBox(*r), EdC(on ? t.accent : t.text), 1.5f);
         }
     }
+    // CAPS-35: смуга кількох вибраних.
+    {
+        static const int alIco[8] = { IcoAlL, IcoAlCx, IcoAlR, IcoAlT, IcoAlCy, IcoAlB,
+                                      IcoDistX, IcoDistY };
+        for (int i = 0; i < 8; ++i) {
+            const RECT* r = EdRegionRect(EdHit::SelAlign, i);
+            if (!r) break;
+            EdPaintButton(g, *r, t, false, g_edHotWhat == EdHit::SelAlign && g_edHotIdx == i, false);
+            EdIcon(g, alIco[i], EdIconBox(*r), EdC(t.text), 1.5f);
+        }
+        for (int gi = 0; gi < 2; ++gi) {
+            const RECT* r = EdRegionRect(EdHit::SelGroup, gi);
+            if (!r) continue;
+            EdPaintButton(g, *r, t, gi == 1, g_edHotWhat == EdHit::SelGroup, false);
+            EdIcon(g, gi == 1 ? IcoUngroup : IcoGroup, EdIconBox(*r),
+                   EdC(gi == 1 ? t.accent : t.text), 1.5f);
+        }
+    }
+
     // CAPS-34: кнопки випадних селектів. Кожна показує поточний вибір.
     for (int gi = 0; gi < 4; ++gi) {
         const RECT* r = EdRegionRect(EdHit::Pick, gi);
@@ -10464,6 +10583,11 @@ int EdGroupStart(int grp)
 
 const wchar_t* EdChipLabel()
 {
+    if (EdSelCount() >= 2) {
+        static wchar_t many[48];
+        wsprintfW(many, S(Str::EdFmtPicked), EdSelCount());
+        return many;
+    }
     if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) {
         const EdKind k = g_edObjs[g_edSel].kind;
         return k == EdKind::Counter ? nullptr : S(EdKindName(k));
@@ -10873,6 +10997,17 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     if (g_edDrag == EdDrag::New)
         EdDrawObject(g, g_edNew, s, ox, oy);
 
+    // Решта вибраних — тонкою рамкою без ручок: ручки має лише головний,
+    // інакше незрозуміло, що саме потягнеться.
+    for (size_t k = 0; k < g_edSelMore.size(); ++k) {
+        const int idx2 = g_edSelMore[k];
+        if (idx2 < 0 || idx2 >= (int)g_edObjs.size()) continue;
+        const RECT rr = EdObjScreen(g_edObjs[idx2]);
+        Gdiplus::Pen more(EdC(t.accent, 200), 1.0f);
+        more.SetDashStyle(Gdiplus::DashStyleDot);
+        g.DrawRectangle(&more, (float)rr.left, (float)rr.top,
+                        (float)(rr.right - rr.left), (float)(rr.bottom - rr.top));
+    }
     if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() && !(g_edEdit && g_edSel == g_edEditIdx)) {
         const EdObj& so = g_edObjs[g_edSel];
         const RECT r = EdObjScreen(so);
@@ -11216,16 +11351,167 @@ void EdSetColor(COLORREF c)
     InvalidateRect(g_edWnd, nullptr, FALSE);
 }
 
+void EdSelMoreSnap(EdSnap& s) { s.selMore = g_edSelMore; }
+
+bool EdManySel() { return !g_edSelMore.empty(); }
+
+int EdSelCount()
+{
+    if (g_edSel < 0) return 0;
+    return 1 + (int)g_edSelMore.size();
+}
+
+bool EdIsSelected(int i)
+{
+    if (i == g_edSel) return true;
+    for (size_t k = 0; k < g_edSelMore.size(); ++k) if (g_edSelMore[k] == i) return true;
+    return false;
+}
+
+void EdSelClear()
+{
+    g_edSel = -1;
+    g_edSelMore.clear();
+}
+
+// Усі вибрані одним списком — щоб дії над ними писались один раз.
+std::vector<int> EdSelAll()
+{
+    std::vector<int> v;
+    if (g_edSel >= 0) v.push_back(g_edSel);
+    for (size_t k = 0; k < g_edSelMore.size(); ++k) v.push_back(g_edSelMore[k]);
+    return v;
+}
+
+// Вибір ОДНОГО об'єкта: якщо він у групі — вибираємо всю групу. Саме тут
+// група й перетворюється на «кілька вибраних», як вирішив власник.
+void EdSelectOne(int i)
+{
+    EdSelClear();
+    if (i < 0 || i >= (int)g_edObjs.size()) return;
+    g_edSel = i;
+    const int grp = g_edObjs[i].grp;
+    if (grp == 0) return;
+    for (int k = 0; k < (int)g_edObjs.size(); ++k)
+        if (k != i && g_edObjs[k].grp == grp) g_edSelMore.push_back(k);
+}
+
+void EdSelToggle(int i)
+{
+    if (i < 0 || i >= (int)g_edObjs.size()) return;
+    if (g_edSel < 0) { EdSelectOne(i); return; }
+    // Повторний Shift-клік прибирає з вибору; якщо прибрали головного —
+    // головним стає перший із решти.
+    for (size_t k = 0; k < g_edSelMore.size(); ++k) {
+        if (g_edSelMore[k] == i) { g_edSelMore.erase(g_edSelMore.begin() + k); return; }
+    }
+    if (i == g_edSel) {
+        if (g_edSelMore.empty()) { EdSelClear(); return; }
+        g_edSel = g_edSelMore.front();
+        g_edSelMore.erase(g_edSelMore.begin());
+        return;
+    }
+    g_edSelMore.push_back(i);
+}
+
+// Спільні габарити вибраного — по них вирівнюють і малюють зовнішню рамку.
+bool EdSelBounds(RECT* out)
+{
+    const std::vector<int> all = EdSelAll();
+    if (all.empty()) return false;
+    bool first = true;
+    for (size_t k = 0; k < all.size(); ++k) {
+        const EdObj& o = g_edObjs[all[k]];
+        RECT r = { o.x, o.y, o.x + o.w, o.y + o.h };
+        if (r.right < r.left) { const LONG t = r.left; r.left = r.right; r.right = t; }
+        if (r.bottom < r.top) { const LONG t = r.top; r.top = r.bottom; r.bottom = t; }
+        if (first) { *out = r; first = false; continue; }
+        if (r.left < out->left) out->left = r.left;
+        if (r.top < out->top) out->top = r.top;
+        if (r.right > out->right) out->right = r.right;
+        if (r.bottom > out->bottom) out->bottom = r.bottom;
+    }
+    return !first;
+}
+
+// Зсув однієї позначки разом із її слідом — потрібен і стрілкам, і спільному
+// переміщенню, і вирівнюванню.
+void EdMoveObj(EdObj& o, int dx, int dy)
+{
+    o.x += dx;
+    o.y += dy;
+    for (size_t i = 0; i < o.pts.size(); ++i) { o.pts[i].x += dx; o.pts[i].y += dy; }
+}
+
+// Вирівнювання: 0 ліворуч, 1 по центру вертикалі, 2 праворуч,
+// 3 верх, 4 по центру горизонталі, 5 низ, 6 розподіл по X, 7 розподіл по Y.
+void EdAlignSel(int what)
+{
+    std::vector<int> all = EdSelAll();
+    if ((int)all.size() < 2) return;
+    RECT b;
+    if (!EdSelBounds(&b)) return;
+    EdPushUndo();
+    if (what >= 6) {
+        // Розподіл: крайні лишаються на місці, решта лягає рівними проміжками
+        // між ними — інакше «розподілити» тягло б усю групу кудись убік.
+        const bool byX = (what == 6);
+        for (size_t i = 0; i + 1 < all.size(); ++i)
+            for (size_t j = 0; j + 1 < all.size() - i; ++j) {
+                const EdObj& a = g_edObjs[all[j]];
+                const EdObj& c = g_edObjs[all[j + 1]];
+                const int av = byX ? a.x + a.w / 2 : a.y + a.h / 2;
+                const int cv = byX ? c.x + c.w / 2 : c.y + c.h / 2;
+                if (av > cv) { const int t = all[j]; all[j] = all[j + 1]; all[j + 1] = t; }
+            }
+        const EdObj& f = g_edObjs[all.front()];
+        const EdObj& l = g_edObjs[all.back()];
+        const int from = byX ? f.x + f.w / 2 : f.y + f.h / 2;
+        const int to   = byX ? l.x + l.w / 2 : l.y + l.h / 2;
+        const int n = (int)all.size() - 1;
+        for (int i = 1; i < n; ++i) {
+            EdObj& o = g_edObjs[all[i]];
+            const int want = from + (to - from) * i / n;
+            const int have = byX ? o.x + o.w / 2 : o.y + o.h / 2;
+            EdMoveObj(o, byX ? want - have : 0, byX ? 0 : want - have);
+        }
+    } else {
+        for (size_t k = 0; k < all.size(); ++k) {
+            EdObj& o = g_edObjs[all[k]];
+            int dx = 0, dy = 0;
+            switch (what) {
+            case 0: dx = b.left - o.x; break;
+            case 1: dx = (b.left + b.right) / 2 - (o.x + o.w / 2); break;
+            case 2: dx = b.right - (o.x + o.w); break;
+            case 3: dy = b.top - o.y; break;
+            case 4: dy = (b.top + b.bottom) / 2 - (o.y + o.h / 2); break;
+            default: dy = b.bottom - (o.y + o.h); break;
+            }
+            EdMoveObj(o, dx, dy);
+        }
+    }
+    if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
+}
+
+void EdGroupSel(bool group)
+{
+    const std::vector<int> all = EdSelAll();
+    if (all.size() < 2 && group) return;
+    if (all.empty()) return;
+    EdPushUndo();
+    const int id = group ? g_edNextGrp++ : 0;
+    for (size_t k = 0; k < all.size(); ++k) g_edObjs[all[k]].grp = id;
+    if (g_edWnd) { EdLayout(g_edWnd); InvalidateRect(g_edWnd, nullptr, FALSE); }
+}
+
 // Зсув вибраної позначки на крок у пікселях ЗНІМКА, а не екрана: інакше та
 // сама клавіша рухала б по-різному на різних масштабах.
 void EdNudgeSel(int dx, int dy)
 {
     if (g_edSel < 0 || g_edSel >= (int)g_edObjs.size()) return;
     if (!g_edNudging) { EdPushUndo(); g_edNudging = true; }
-    EdObj& o = g_edObjs[g_edSel];
-    o.x += dx;
-    o.y += dy;
-    for (size_t i = 0; i < o.pts.size(); ++i) { o.pts[i].x += dx; o.pts[i].y += dy; }
+    const std::vector<int> all = EdSelAll();
+    for (size_t k = 0; k < all.size(); ++k) EdMoveObj(g_edObjs[all[k]], dx, dy);
     if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
 }
 
@@ -11264,10 +11550,18 @@ void EdPlaceImage(Gdiplus::Bitmap* bmp, POINT imgPt)
 
 void EdDeleteSel()
 {
-    if (g_edSel < 0 || g_edSel >= (int)g_edObjs.size()) return;
+    std::vector<int> all = EdSelAll();
+    if (all.empty()) return;
     EdPushUndo();
-    g_edObjs.erase(g_edObjs.begin() + g_edSel);
-    g_edSel = -1;
+    // ⚠ Видаляємо З КІНЦЯ: після кожного erase індекси за ним зсуваються, і
+    // список, зібраний наперед, почав би вказувати не на тих.
+    for (size_t i = 0; i + 1 < all.size(); ++i)
+        for (size_t j = 0; j + 1 < all.size() - i; ++j)
+            if (all[j] < all[j + 1]) { const int t = all[j]; all[j] = all[j + 1]; all[j + 1] = t; }
+    for (size_t k = 0; k < all.size(); ++k)
+        if (all[k] >= 0 && all[k] < (int)g_edObjs.size())
+            g_edObjs.erase(g_edObjs.begin() + all[k]);
+    EdSelClear();
     InvalidateRect(g_edWnd, nullptr, FALSE);
 }
 
@@ -11757,6 +12051,13 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::Pick:
         return idx == 0 ? Str::EdTipDash : idx == 1 ? Str::EdTipHead
              : idx == 2 ? Str::EdTipHeadSize : Str::EdTipHeadEnds;
+    case EdHit::SelAlign: {
+        static const Str al[8] = { Str::EdTipAlL, Str::EdTipAlCx, Str::EdTipAlR,
+                                   Str::EdTipAlT, Str::EdTipAlCy, Str::EdTipAlB,
+                                   Str::EdTipDistX, Str::EdTipDistY };
+        return (idx >= 0 && idx < 8) ? al[idx] : Str::Empty;
+    }
+    case EdHit::SelGroup: return idx == 1 ? Str::EdTipUngroup : Str::EdTipMakeGroup;
     case EdHit::GroupEdit: return Str::EdTipGroupEdit;
     case EdHit::GroupDel:  return Str::EdTipGroupDel;
     case EdHit::Thick:
@@ -12645,6 +12946,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             const double s = EdScale();
             const int dx = (int)((pt.x - g_edDragFrom.x) / (s > 0 ? s : 1.0) + (pt.x >= g_edDragFrom.x ? 0.5 : -0.5));
             const int dy = (int)((pt.y - g_edDragFrom.y) / (s > 0 ? s : 1.0) + (pt.y >= g_edDragFrom.y ? 0.5 : -0.5));
+            const int px = g_edObjs[g_edSel].x, py = g_edObjs[g_edSel].y;
             g_edObjs[g_edSel].x = g_edDragOrig.x + dx;
             g_edObjs[g_edSel].y = g_edDragOrig.y + dy;
             if (g_edObjs[g_edSel].kind == EdKind::Pen) {
@@ -12653,6 +12955,13 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                     g_edObjs[g_edSel].pts[i].y = g_edDragOrig.pts[i].y + dy;
                 }
             }
+            // Решта вибраних їдуть на ту саму різницю, що й головний: так група
+            // рухається як ціле, не накопичуючи розбіжності від округлень.
+            const int mdx = g_edObjs[g_edSel].x - px, mdy = g_edObjs[g_edSel].y - py;
+            if (mdx || mdy)
+                for (size_t k = 0; k < g_edSelMore.size(); ++k)
+                    if (g_edSelMore[k] >= 0 && g_edSelMore[k] < (int)g_edObjs.size())
+                        EdMoveObj(g_edObjs[g_edSelMore[k]], mdx, mdy);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -13020,6 +13329,12 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             SetCapture(hwnd);
             EdSetAlphaAt(pt.x);
             return 0;
+        case EdHit::SelAlign:
+            EdAlignSel(r->idx);
+            return 0;
+        case EdHit::SelGroup:
+            EdGroupSel(r->idx == 0);
+            return 0;
         case EdHit::Pick:
             g_edPickOpen = (g_edPickOpen == r->idx) ? -1 : r->idx;
             EdLayout(hwnd);
@@ -13222,7 +13537,23 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // Ручки вже перевірено вище; лишилось підняти сам об'єкт зверху вниз.
         {
             const int hit = EdPick(pt);
-            if (hit != g_edSel) { g_edSel = hit; InvalidateRect(hwnd, nullptr, FALSE); }
+            if (wp & MK_SHIFT) {
+                // Shift додає до вибору й прибирає з нього. Модифікатор беремо
+                // з повідомлення — так само, як усюди після CAPS-46.
+                if (hit >= 0) {
+                    EdSelToggle(hit);
+                    EdLayout(hwnd);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+                return 0;
+            }
+            if (hit >= 0 && EdIsSelected(hit) && EdManySel()) {
+                // Клік по вже вибраному в групі не збиває вибір — інакше
+                // групу неможливо було б потягнути.
+            } else if (hit != g_edSel || EdManySel()) {
+                EdSelectOne(hit);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
             if (hit >= 0) {
                 EdPushUndo();
                 g_edDrag = EdDrag::Move;
@@ -13540,7 +13871,8 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edObjs.clear();
     g_edUndo.clear();
     g_edRedo.clear();
-    g_edSel = -1;
+    EdSelClear();
+    g_edNextGrp = 1;
     g_edTool = EdTool::Select;
     g_edZoom = 1.0f;
     g_edPanX = g_edPanY = 0;
