@@ -484,6 +484,7 @@ X(EdToolHide,         L"Приховати",                     L"Hide")       
 X(EdToolMark,         L"Маркер",                        L"Marker")                                     \
 X(EdToolCounter,      L"Лічильник",                     L"Counter")                                    \
 X(EdToolStamp,        L"Штамп",                         L"Stamp")                                      \
+X(EdKindImage,        L"Зображення",                    L"Image")                                      \
 X(EdToolCrop,         L"Кадр",                          L"Crop")                                       \
 X(EdCropApply,        L"Застосувати",                   L"Apply")                                      \
 X(EdCropCancel,       L"Скасувати",                     L"Cancel")                                     \
@@ -7424,7 +7425,8 @@ const COLORREF kEdPalette[8] = {
 };
 
 enum class EdTool { Select, Rect, Ellipse, Arrow, Line, Pen, Text, Hide, Mark, Counter, Stamp, Crop };
-enum class EdKind { Rect, Ellipse, Arrow, Line, Pen, Text, Hide, Mark, Counter, Stamp };
+enum class EdKind { Rect, Ellipse, Arrow, Line, Pen, Text, Hide, Mark, Counter, Stamp,
+                    Image };
 
 struct EdObj {
     EdKind   kind;
@@ -7468,6 +7470,10 @@ struct EdObj {
     // headEnds: 0 у кінці, 1 з обох боків, 2 на початку.
     int      dash;
     int      head, headSize, headEnds;
+    // CAPS-42. Лише Image: НОМЕР бітмапа в реєстрі, а не сам вказівник.
+    // EdObj копіюється у кожен знімок скасування — вказівник там означав би
+    // подвійне звільнення, а номер переживає будь-яку кількість копій.
+    int      img;
 };
 
 // Чіп називає вид однією назвою і для інструмента, і для вибраного. Префікс
@@ -7482,6 +7488,7 @@ const wchar_t* EdChipLabel();
 Str EdKindName(EdKind k)
 {
     switch (k) {
+    case EdKind::Image:   return Str::EdKindImage;
     case EdKind::Ellipse: return Str::EdToolEllipse;
     case EdKind::Arrow:   return Str::EdToolArrow;
     case EdKind::Line:    return Str::EdToolLine;
@@ -7543,7 +7550,8 @@ bool EdCanFill(EdKind k)   { return k == EdKind::Rect || k == EdKind::Ellipse; }
 bool EdIsEffect(EdKind k)  { return k == EdKind::Hide || k == EdKind::Mark; }
 // У напису товщини немає: її роль грає кегль. У приховування — теж: там сила.
 // У маркера ті самі три кнопки означають висоту смуги.
-bool EdHasThick(EdKind k)  { return k != EdKind::Text && k != EdKind::Hide; }
+bool EdHasThick(EdKind k)  { return k != EdKind::Text && k != EdKind::Hide &&
+                                    k != EdKind::Image; }
 // Лічильник і штамп ставляться одним кліком, а не тягненням: у них немає
 // «намалюй рамку», є лише розмір із трьох значень.
 bool EdIsStamped(EdKind k) { return k == EdKind::Counter || k == EdKind::Stamp; }
@@ -7727,6 +7735,31 @@ void EdDoCopy();
 void EdDoSave();
 bool EdConfirmClose();
 void EdDuplicateSel();
+
+// Бітмапи вкинутих зображень. Звідси нічого не видаляється: видалений об'єкт
+// має повертатися по Ctrl+Z, а отже, його пікселі мусять дожити до кінця
+// роботи над знімком. Чиститься разом із новим знімком.
+std::vector<Gdiplus::Bitmap*> g_edImgBank;
+
+int EdAddImage(Gdiplus::Bitmap* b)
+{
+    if (!b) return -1;
+    g_edImgBank.push_back(b);
+    return (int)g_edImgBank.size() - 1;
+}
+
+Gdiplus::Bitmap* EdImageOf(const EdObj& o)
+{
+    if (o.kind != EdKind::Image) return nullptr;
+    if (o.img < 0 || o.img >= (int)g_edImgBank.size()) return nullptr;
+    return g_edImgBank[o.img];
+}
+
+void EdImageBankClear()
+{
+    for (size_t i = 0; i < g_edImgBank.size(); ++i) delete g_edImgBank[i];
+    g_edImgBank.clear();
+}
 
 std::vector<EdObj> g_edObjs;
 int      g_edSel = -1;
@@ -8821,7 +8854,8 @@ void EdLayout(HWND hwnd)
             // Емодзі мають власний колір, палітра на них не діє.
             const bool emojiStamp = (kk == EdKind::Stamp) &&
                 ((hasSel ? g_edObjs[g_edSel].stamp : g_edStamp) >= kEdEmojiBase);
-            const bool showPal = ((kk != EdKind::Hide) || (curMode == 2)) && !emojiStamp && !cropMode;
+            const bool showPal = ((kk != EdKind::Hide) || (curMode == 2)) && !emojiStamp &&
+                                 !cropMode && kk != EdKind::Image;
             if (showPal) {
                 const int sw = EdPx(22), sg = EdPx(5);
                 for (int i = 0; i < npal; ++i) {
@@ -10591,6 +10625,30 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
         if (atStart) EdDrawHead(g, col, x,              y,              -dx, -dy, hl, pw, o.head);
         break;
     }
+    case EdKind::Image: {
+        Gdiplus::Bitmap* bmp = EdImageOf(o);
+        if (!bmp) break;
+        // ⚠ Прямокутник призначення ЗАВЖДИ явний: без нього GDI+ перераховує
+        // 96 крапок на дюйм у роздільність поверхні — та сама пастка, що з
+        // плитками тексту.
+        const Gdiplus::Rect dst((INT)(x + 0.5f), (INT)(y + 0.5f), (INT)w, (INT)h);
+        if (o.alpha >= 100) {
+            g.DrawImage(bmp, dst, 0, 0, (INT)bmp->GetWidth(), (INT)bmp->GetHeight(),
+                        Gdiplus::UnitPixel);
+        } else {
+            // Прозорість — матрицею кольору: множити самі пікселі означало б
+            // псувати оригінал, який ще знадобиться на наступному перемалюванні.
+            Gdiplus::ColorMatrix cm = {};
+            cm.m[0][0] = cm.m[1][1] = cm.m[2][2] = 1.0f;
+            cm.m[3][3] = o.alpha / 100.0f;
+            cm.m[4][4] = 1.0f;
+            Gdiplus::ImageAttributes ia;
+            ia.SetColorMatrix(&cm);
+            g.DrawImage(bmp, dst, 0, 0, (INT)bmp->GetWidth(), (INT)bmp->GetHeight(),
+                        Gdiplus::UnitPixel, &ia);
+        }
+        break;
+    }
     case EdKind::Pen: {
         EdApplyDash(pen, o.dash);
         const size_t n = o.pts.size();
@@ -11060,6 +11118,39 @@ void EdNudgeSel(int dx, int dy)
     o.y += dy;
     for (size_t i = 0; i < o.pts.size(); ++i) { o.pts[i].x += dx; o.pts[i].y += dy; }
     if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
+}
+
+// Вкинуте чи вставлене зображення лягає позначкою: у ту точку, куди його
+// відпустили, і зменшеним, якщо воно більше за сам знімок — інакше воно накрило
+// б кадр цілком, і першою дією користувача було б «зменшити».
+void EdPlaceImage(Gdiplus::Bitmap* bmp, POINT imgPt)
+{
+    if (!bmp) return;
+    int w = (int)bmp->GetWidth(), h = (int)bmp->GetHeight();
+    if (w < 1 || h < 1) { delete bmp; return; }
+    const int maxW = EdViewW() * 4 / 5, maxH = EdViewH() * 4 / 5;
+    if (maxW > 0 && maxH > 0 && (w > maxW || h > maxH)) {
+        const double k = EdMinD((double)maxW / w, (double)maxH / h);
+        w = (int)(w * k + 0.5);
+        h = (int)(h * k + 0.5);
+        if (w < 1) w = 1;
+        if (h < 1) h = 1;
+    }
+    const int id = EdAddImage(bmp);
+    if (id < 0) return;
+    EdObj o = EdObj{};
+    o.kind  = EdKind::Image;
+    o.img   = id;
+    o.alpha = 100;
+    o.color = g_edColor;
+    o.w = w; o.h = h;
+    o.x = imgPt.x - w / 2;
+    o.y = imgPt.y - h / 2;
+    EdPushUndo();
+    g_edObjs.push_back(o);
+    g_edSel = (int)g_edObjs.size() - 1;
+    g_edTool = EdTool::Select;
+    if (g_edWnd) { EdLayout(g_edWnd); InvalidateRect(g_edWnd, nullptr, FALSE); }
 }
 
 void EdDeleteSel()
@@ -12251,6 +12342,9 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // перепитати з wParam = TRUE — і аж тоді підпис переходить клієнту.
         SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                      SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        // CAPS-42: вікно приймає файли. Вкинуте лягає ПОЗНАЧКОЮ, а не заміняє
+        // знімок — заміна лишилась свідомим вибором у списку біля «Відкрити».
+        DragAcceptFiles(hwnd, TRUE);
         return 0;
 
     // ---- власний заголовок: підпис віддаємо клієнту ----------------------
@@ -12513,6 +12607,31 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == VK_LEFT || wp == VK_RIGHT || wp == VK_UP || wp == VK_DOWN)
             g_edNudging = false;
         return 0;
+
+    case WM_DROPFILES: {
+        HDROP drop = (HDROP)wp;
+        wchar_t path[MAX_PATH] = {};
+        POINT pt = {};
+        DragQueryPoint(drop, &pt);
+        const UINT n = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+        // Кілька файлів кладемо сходинкою: рівно один на одного вони лягли б
+        // так, ніби вкинувся лише останній.
+        int step = 0;
+        for (UINT i = 0; i < n && i < 8; ++i) {
+            if (!DragQueryFileW(drop, i, path, MAX_PATH)) continue;
+            Gdiplus::Bitmap* b = EdBitmapFromFile(path);
+            if (!b) continue;
+            POINT where = pt;
+            where.x += step * EdPx(18);
+            where.y += step * EdPx(18);
+            ++step;
+            EdPlaceImage(b, EdToImage(where));
+        }
+        if (!step) MessageBoxW(hwnd, S(Str::EdErrOpen), kAppName, MB_OK | MB_ICONWARNING);
+        DragFinish(drop);
+        SetForegroundWindow(hwnd);
+        return 0;
+    }
 
     case WM_MOUSELEAVE:
         g_edTracking = false;
@@ -13104,11 +13223,22 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (g_edLastAction == 1) EdDoSave(); else EdDoCopy();
             return 0;
         case 'V':
-            if (!ctrl) {
-                if (g_edCropping) EdCropFinish(false);
-                g_edTool = EdTool::Select;
-                InvalidateRect(hwnd, nullptr, FALSE);
+            if (ctrl) {
+                // Ctrl+V вставляє ОКРЕМИМ ОБ'ЄКТОМ (рішення власника 21.09).
+                // Заміна всього вмісту лишилась у списку біля «Відкрити»:
+                // це різні наміри, і плутати їх однією клавішею не можна.
+                if (g_edCropping) return 0;
+                if (Gdiplus::Bitmap* b = CapFromClipboard()) {
+                    POINT c = EdCanvasCentre();
+                    EdPlaceImage(b, EdToImage(c));
+                } else {
+                    MessageBoxW(hwnd, S(Str::EdErrOpen), kAppName, MB_OK | MB_ICONWARNING);
+                }
+                return 0;
             }
+            if (g_edCropping) EdCropFinish(false);
+            g_edTool = EdTool::Select;
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         case 'O':
             // Літера більше не інструмент — лише Ctrl+O, і лише «Відкрити».
@@ -13199,6 +13329,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         delete g_edSrc; g_edSrc = nullptr;
         delete g_edCmp; g_edCmp = nullptr;
         g_edCompare = false;
+        EdImageBankClear();
         g_edObjs.clear();
         g_edUndo.clear();
         g_edRedo.clear();
@@ -13241,6 +13372,7 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edExposure = 0; g_edGamma = 100; g_edContrast = 0;
     g_edRot = 0; g_edMirror = false; g_edCompare = false;
     delete g_edCmp; g_edCmp = nullptr;
+    EdImageBankClear();          // новий знімок — нові вкладені зображення
     EdRebuildImage();
     g_edHdr        = hdr;
     g_edToneMapped = toneMapped;
