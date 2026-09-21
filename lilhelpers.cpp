@@ -69,10 +69,7 @@
 // нам потрібні зовсім інші інтерфейси, а MSVC цей рядок просто не помітить.
 #define ____FIReference_1_boolean_INTERFACE_DEFINED__
 #include <windows.foundation.h>
-#include <windows.storage.streams.h>
-#include <windows.storage.h>
-#include <windows.applicationmodel.datatransfer.h>
-#include <shobjidl.h>            // CAPS-36: IDataTransferManagerInterop
+#include <shobjidl.h>
 #include <d2d1_3.h>
 #include <d2d1svg.h>
 // CAPS-24: текст і кольорові емодзі — DirectWrite. GDI+ не знає ні COLR/CBDT,
@@ -94,7 +91,6 @@
 #include <inspectable.h>
 #include <asyncinfo.h>
 #include <shcore.h>
-#include <sddl.h>
 // CAPS-21: захоплення екрана через Desktop Duplication — системні DXGI і D3D11.
 #include <dxgi1_6.h>
 #include <d3d11.h>
@@ -174,7 +170,6 @@ constexpr int  IDC_PEEK_ENABLE   = 180;
 constexpr int  IDC_CAP_HK1       = 190;   // CAPS-21: три поля перехоплення
 constexpr int  IDC_CAP_HKRESET   = 193;
 constexpr int  IDC_CAP_KEEPTOOL  = 194;   // CAPS-23
-constexpr int  IDC_CAP_SHAREUNLOCK = 195; // CAPS-52
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -198,11 +193,6 @@ const wchar_t* kRegMode  = L"Mode";
 const wchar_t* kRegPassthrough = L"PassthroughRemote";
 const wchar_t* kRegLayoutSwitch = L"LayoutSwitch";   // CAPS-9: перемикання розкладок увімкнено (1)
 const wchar_t* kRegWindowTheme  = L"WindowTheme";    // CAPS-8: 0 авто / 1 світла / 2 темна
-// CAPS-52: 1 = дозволити непривілейованим процесам викликати наші COM-обʼєкти.
-// Типово 0: це послаблення захисту елевейтованого процесу, і вмикати його має
-// сенс лише тому, кому справді потрібне системне меню поширення.
-const wchar_t* kRegShareUnlock  = L"ShareUnlock";
-bool g_shareUnlock = false;
 const wchar_t* kRegLang         = L"Language";       // CAPS-12: 0 системна / 1 укр / 2 англ
 const wchar_t* kRegUpdDaily     = L"UpdateCheckDaily";  // CAPS-10
 const wchar_t* kRegUpdLast      = L"UpdateLastCheck";   // unix (DWORD)
@@ -521,40 +511,6 @@ X(EdSizeNoteImg,      L"Товщина ліній, кружечки й штам�
 X(EdSizeNoteCan,      L"Знімок стане окремим об\x2019єктом, а тло навколо — прозорим.",                  \
                       L"The shot becomes a separate object and the space around it stays clear.")      \
 X(EdBtnSizeImg,       L"Розмір зображення…",            L"Image size…")                                \
-X(EdShare,            L"Поділитися",                    L"Share")                                      \
-X(EdTipShare,         L"Системне меню поширення Windows", L"The Windows share menu")                   \
-X(EdErrShare,         L"Системне меню поширення не відкрилось.",                                       \
-                                                        L"The system share menu did not open.")        \
-X(CapShareUnlock,     L"Дозволити меню поширення діставати до програми",                               \
-                      L"Let the share menu reach into this program")                                   \
-X(CapShareUnlockHint, L"Потрібно для «Поділитися». Відкриває виклики до програми процесам зі "           \
-                      L"звичайними правами — вмикайте лише за потреби. Діє після перезапуску.",         \
-                      L"Needed for Share. It opens calls into this program to normal-privilege "        \
-                      L"processes — turn it on only if you need it. Takes effect after a restart.")     \
-X(EdErrShareQuiet,    L"Windows відкрила меню поширення, але даних у програми так і не спитала — "      \
-                      L"приймач отримав би порожнечу.\n\nПричина: програма працює з правами "          \
-                      L"адміністратора (це потрібно для перехоплення CapsLock), а меню поширення й "    \
-                      L"самі приймачі — ні, і без окремого дозволу дістати до неї не можуть.\n\n"      \
-                      L"Увімкніть «Дозволити меню поширення діставати до програми» в налаштуваннях, "   \
-                      L"на вкладці «Знімки», і перезапустіть програму. Прочитайте там опис: дозвіл "    \
-                      L"послаблює захист, тож вмикайте його, лише якщо потрібне саме поширення.\n\n"   \
-                      L"Без нього робочі шляхи ті самі: «Копіювати» (Ctrl+C) або «Експорт».",           \
-                      L"Windows opened the share menu but never asked this program for the data, "      \
-                      L"so the target would have received nothing.\n\nThe cause: this program runs "   \
-                      L"elevated (needed for the CapsLock hook) while the share menu and the targets "  \
-                      L"do not, and without an explicit permission they cannot reach it.\n\n"          \
-                      L"Turn on \"Let the share menu reach into this program\" in Settings, on the "     \
-                      L"Snapshots tab, then restart. Read the note there: it weakens protection, so "   \
-                      L"enable it only if you need sharing.\n\n"                                       \
-                      L"Without it, use Copy (Ctrl+C) or Export.")                                     \
-X(EdErrShareStill,    L"Windows відкрила меню поширення, але даних у програми так і не спитала.\n\n"   \
-                      L"Дозвіл для меню поширення вже ввімкнено, отже справа не в ньому — причина "     \
-                      L"інша. Скажіть про це, будь ласка: це потрібно розбирати окремо.\n\n"           \
-                      L"Поки що: «Копіювати» (Ctrl+C) або «Експорт».",                                 \
-                      L"Windows opened the share menu but never asked this program for the data.\n\n"  \
-                      L"The share permission is already on, so that is not the cause — something "      \
-                      L"else is. Please report it; this needs a separate look.\n\n"                    \
-                      L"For now: Copy (Ctrl+C) or Export.")                                            \
 X(EdBtnSizeCan,       L"Розмір полотна…",               L"Canvas size…")                               \
 X(EdTipSizeImg,       L"Змінити розмір самого зображення", L"Resize the image itself")                 \
 X(EdTipSizeCan,       L"Змінити розмір полотна",        L"Resize the canvas")                          \
@@ -7759,7 +7715,7 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Aspect, CropReset, CropOk, CropNo,
                    RotL, RotR, FlipH, FlipV, Exposure, Gamma, Contrast,
                    ToneReset, Compare, GroupEdit, GroupDel, Pick, PickItem,
-                   SelAlign, SelGroup, SizeImg, SizeCan, Share };
+                   SelAlign, SelGroup, SizeImg, SizeCan };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -8940,8 +8896,6 @@ int EdPanelInfoBottom()
 }
 
 // Потрібна вже в розкладці: кнопки поширення немає там, де меню недоступне.
-bool EdShareAvailable();
-void EdShareNow(HWND hwnd);
 
 // Потрібні вже в розкладці й у чіпі — тіла нижче, біля решти дій над вибором.
 int  EdSelCount();
@@ -9306,14 +9260,6 @@ void EdLayout(HWND hwnd)
         rx -= EdPx(8) + ws;
         RECT rcSave = { rx, cy - bh / 2, rx + ws, cy + bh / 2 };
         EdAdd(rcSave, EdHit::Save, 0);
-        // CAPS-36: кнопки немає там, де системне меню поширення недоступне —
-        // під адміністратором брокер може не відповісти взагалі.
-        if (EdShareAvailable()) {
-            const int wsh = EdTextWidth(dc, S(Str::EdShare), g_edFont) + EdPx(26);
-            rx -= EdPx(8) + wsh;
-            RECT rcShare = { rx, cy - bh / 2, rx + wsh, cy + bh / 2 };
-            EdAdd(rcShare, EdHit::Share, 0);
-        }
         ReleaseDC(hwnd, dc);
     }
 
@@ -11615,12 +11561,6 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         EdDrawText(dc, *rf, S(Str::EdFit), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-    if (const RECT* rsh = EdRegionRect(EdHit::Share, 0)) {
-        EdPaintButton(g, *rsh, t, false, g_edHotWhat == EdHit::Share, false);
-        EdDrawText(dc, *rsh, S(Str::EdShare), g_edFont, t.text,
-                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
-
     // Дві рівноправні кнопки. Підсвічена — та, якою користувалися востаннє:
     // вона ж спрацює на Enter. Друга нікуди не дівається.
     struct { EdHit what; Str label; int ico; bool primary; } outs[2] = {
@@ -12521,342 +12461,6 @@ LPCWSTR EdCursorFor(POINT pt)
 bool EdResizeImage(int nw, int nh, bool scaleText, bool sharp);
 bool EdResizeCanvas(int nw, int nh);
 
-// ---- CAPS-36: системне меню поширення -----------------------------------
-//
-// Ми НЕ хостимо чужого коду (запобіжник 20.09): дані віддаються системному
-// брокеру, а весь інтерфейс малює сама Windows. Межа проходить саме тут.
-//
-// ⚠ Процес запускається requireAdministrator, і меню поширення в елевейтованому
-// процесі історично не з'являється. Тому доступність перевіряється на льоту, і
-// кнопки просто немає там, де вона не працює, — замість кнопки, яка мовчить.
-
-namespace EdShareNs {
-
-using namespace ABI::Windows::ApplicationModel::DataTransfer;
-using namespace ABI::Windows::Foundation;
-using namespace ABI::Windows::Storage;
-using namespace ABI::Windows::Storage::Streams;
-
-std::wstring g_tempFile;     // останній тимчасовий PNG — прибираємо за собою
-// Скільки разів система СПРАВДІ спитала в нас дані. Нуль після показу меню —
-// це діагноз, а не дрібниця: пакет був би порожній, хоч би що ми в нього клали.
-int g_asked = 0;
-
-void CleanTemp()
-{
-    if (g_tempFile.empty()) return;
-    DeleteFileW(g_tempFile.c_str());
-    g_tempFile.clear();
-}
-
-// ⚠ Заголовки MinGW оголошують IStorageFileStatics лише ВПЕРЕД — тіла в них
-// немає. Описуємо рівно перший метод: у таблиці він стоїть одразу після
-// IInspectable, тож зсув правильний, а решти ми не викликаємо.
-// ⚠ Ідентифікатор інтерфейсу здобуто НА ЖИВІЙ СИСТЕМІ (IActivationFactory →
-// GetIids), а не з памʼяті: перша ж спроба «згадати» його дала E_NOINTERFACE.
-// ⚠ Усі три наші обʼєкти віддаються БРОКЕРУ, тобто в інший процес. Системні
-// колекції WinRT (те, що в C++/WinRT робить single_threaded_vector) агільні —
-// наші мусять бути теж, інакше кожен виклик із чужої квартири йде через
-// маршалінг параметризованого інтерфейсу й має всі шанси не дійти.
-// Ідентифікатор беремо константою: __uuidof(IAgileObject) у MinGW дає
-// невизначений символ на етапі компонування.
-const GUID kIID_IAgileObject =
-    { 0x94ea2b94, 0xe9cc, 0x49e0, { 0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90 } };
-
-const GUID kIID_StorageFileStatics =
-    { 0x5984c710, 0xdaf2, 0x43c8, { 0x8b, 0xb4, 0xa4, 0xd3, 0xea, 0xcf, 0xd0, 0x3f } };
-
-struct IStorageFileStaticsMin : public IInspectable
-{
-    virtual HRESULT STDMETHODCALLTYPE GetFileFromPathAsync(
-        HSTRING path, __FIAsyncOperation_1_Windows__CStorage__CStorageFile** op) = 0;
-};
-
-typedef ABI::Windows::Foundation::Collections::IIterable<IStorageItem*> ItemIterableBase;
-typedef ABI::Windows::Foundation::Collections::IIterator<IStorageItem*> ItemIteratorBase;
-
-// Список із ОДНОГО файлу. Готового вектора в ABI-шарі WinRT немає — у C++/WinRT
-// його дає single_threaded_vector, якого тут нема, — тож пишемо власний
-// перелічувач. Він короткий саме тому, що елемент завжди один.
-struct ItemIterator : ItemIteratorBase
-{
-    LONG rc = 1;
-    IStorageItem* item = nullptr;
-    bool done = false;
-    ~ItemIterator() { if (item) item->Release(); }
-
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override
-    {
-        if (!out) return E_POINTER;
-        if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, __uuidof(IInspectable)) ||
-            IsEqualIID(riid, kIID_IAgileObject) ||
-            IsEqualIID(riid, __uuidof(ItemIteratorBase))) {
-            *out = static_cast<ItemIteratorBase*>(this);
-            AddRef();
-            return S_OK;
-        }
-        *out = nullptr;
-        return E_NOINTERFACE;
-    }
-    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&rc); }
-    ULONG STDMETHODCALLTYPE Release() override
-    {
-        const LONG n = InterlockedDecrement(&rc);
-        if (n == 0) delete this;
-        return (ULONG)n;
-    }
-    HRESULT STDMETHODCALLTYPE GetIids(ULONG* n, IID** p) override { *n = 0; *p = nullptr; return S_OK; }
-    HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING* h) override { *h = nullptr; return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel* t) override { *t = BaseTrust; return S_OK; }
-
-    HRESULT STDMETHODCALLTYPE get_Current(IStorageItem** value) override
-    {
-        if (!value) return E_POINTER;
-        if (done || !item) { *value = nullptr; return E_BOUNDS; }
-        *value = item;
-        item->AddRef();
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE get_HasCurrent(boolean* value) override
-    {
-        if (!value) return E_POINTER;
-        *value = (!done && item) ? 1 : 0;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE MoveNext(boolean* value) override
-    {
-        done = true;                         // елемент один: після нього кінець
-        if (value) *value = 0;
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE GetMany(UINT32 cap, IStorageItem** items, UINT32* got) override
-    {
-        if (!got) return E_POINTER;
-        *got = 0;
-        if (done || !item || cap == 0) return S_OK;
-        items[0] = item;
-        item->AddRef();
-        *got = 1;
-        done = true;
-        return S_OK;
-    }
-};
-
-struct ItemList : ItemIterableBase
-{
-    LONG rc = 1;
-    IStorageItem* item = nullptr;
-    ~ItemList() { if (item) item->Release(); }
-
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override
-    {
-        if (!out) return E_POINTER;
-        if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, __uuidof(IInspectable)) ||
-            IsEqualIID(riid, kIID_IAgileObject) ||
-            IsEqualIID(riid, __uuidof(ItemIterableBase))) {
-            *out = static_cast<ItemIterableBase*>(this);
-            AddRef();
-            return S_OK;
-        }
-        *out = nullptr;
-        return E_NOINTERFACE;
-    }
-    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&rc); }
-    ULONG STDMETHODCALLTYPE Release() override
-    {
-        const LONG n = InterlockedDecrement(&rc);
-        if (n == 0) delete this;
-        return (ULONG)n;
-    }
-    HRESULT STDMETHODCALLTYPE GetIids(ULONG* n, IID** p) override { *n = 0; *p = nullptr; return S_OK; }
-    HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING* h) override { *h = nullptr; return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel* t) override { *t = BaseTrust; return S_OK; }
-
-    HRESULT STDMETHODCALLTYPE First(ItemIteratorBase** value) override
-    {
-        if (!value) return E_POINTER;
-        ItemIterator* it = new ItemIterator();
-        it->item = item;
-        if (item) item->AddRef();
-        *value = it;
-        return S_OK;
-    }
-};
-
-// StorageFile за шляхом. Операція асинхронна, але чекаємо ми її ЗАЗДАЛЕГІДЬ —
-// до показу меню, а не в обробнику запиту: там доведення (deferral) коштувало б
-// ще одного COM-класу заради того самого файлу.
-IStorageFile* OpenStorageFile(const std::wstring& path)
-{
-    IStorageFileStaticsMin* sf = nullptr;
-    HSTRING_HEADER ch; HSTRING cls = nullptr;
-    const wchar_t* n = RuntimeClass_Windows_Storage_StorageFile;
-    if (FAILED(WindowsCreateStringReference(n, (UINT32)wcslen(n), &ch, &cls))) return nullptr;
-    if (FAILED(RoGetActivationFactory(cls, kIID_StorageFileStatics, (void**)&sf)) || !sf)
-        return nullptr;
-
-    HSTRING_HEADER ph; HSTRING ps = nullptr;
-    __FIAsyncOperation_1_Windows__CStorage__CStorageFile* op = nullptr;
-    IStorageFile* file = nullptr;
-    if (SUCCEEDED(WindowsCreateStringReference(path.c_str(), (UINT32)path.size(), &ph, &ps)) &&
-        SUCCEEDED(sf->GetFileFromPathAsync(ps, &op)) && op) {
-        IAsyncInfo* info = nullptr;
-        if (SUCCEEDED(op->QueryInterface(__uuidof(IAsyncInfo), (void**)&info)) && info) {
-            AsyncStatus st = AsyncStatus::Started;
-            // Опитуємо, а не вішаємо обробник завершення: операція живе на
-            // пулі потоків і до нашого циклу повідомлень діла не має. Стеля в
-            // три секунди — щоб редактор не завис, якщо файлова система стала.
-            for (int i = 0; i < 600; ++i) {
-                if (FAILED(info->get_Status(&st)) || st != AsyncStatus::Started) break;
-                Sleep(5);
-            }
-            if (st == AsyncStatus::Completed) op->GetResults(&file);
-            info->Release();
-        }
-        op->Release();
-    }
-    sf->Release();
-    return file;
-}
-
-// Посилання на потік для SetBitmap. Перший шлях — із самого StorageFile;
-// запасний — синхронний потік ShCore просто за шляхом.
-IRandomAccessStreamReference* StreamRef(IStorageFile* file, const std::wstring& path)
-{
-    IRandomAccessStreamReferenceStatics* st = nullptr;
-    HSTRING_HEADER sh; HSTRING scls = nullptr;
-    const wchar_t* n = RuntimeClass_Windows_Storage_Streams_RandomAccessStreamReference;
-    if (FAILED(WindowsCreateStringReference(n, (UINT32)wcslen(n), &sh, &scls))) return nullptr;
-    if (FAILED(RoGetActivationFactory(scls, __uuidof(IRandomAccessStreamReferenceStatics),
-                                      (void**)&st)) || !st) return nullptr;
-    IRandomAccessStreamReference* ref = nullptr;
-    if (file) st->CreateFromFile(file, &ref);
-    if (!ref) {
-        IRandomAccessStream* ras = nullptr;
-        if (SUCCEEDED(CreateRandomAccessStreamOnFile(path.c_str(), STGM_READ,
-                                                     __uuidof(IRandomAccessStream), (void**)&ras)) && ras) {
-            st->CreateFromStream(ras, &ref);
-            ras->Release();
-        }
-    }
-    st->Release();
-    return ref;
-}
-
-// ⚠ Псевдонім потрібен не для краси: __uuidof у MinGW — МАКРОС, і кома між
-// параметрами шаблону всередині нього розбирається як кома аргументів макроса.
-typedef ITypedEventHandler<DataTransferManager*, DataRequestedEventArgs*> ShareHandlerBase;
-
-// Обробник запиту даних. Живе рівно стільки, скільки система його тримає, і
-// НІЧОГО не добуває сам: усе готове ще до показу меню, тож Invoke синхронний.
-struct Handler : public ShareHandlerBase
-{
-    LONG rc = 1;
-    std::wstring title;
-    IStorageFile* file = nullptr;
-    IRandomAccessStreamReference* ref = nullptr;
-
-    ~Handler()
-    {
-        if (file) file->Release();
-        if (ref) ref->Release();
-    }
-
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override
-    {
-        if (!out) return E_POINTER;
-        if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, kIID_IAgileObject) ||
-            IsEqualIID(riid, __uuidof(ShareHandlerBase))) {
-            *out = static_cast<IUnknown*>(this);
-            AddRef();
-            return S_OK;
-        }
-        *out = nullptr;
-        return E_NOINTERFACE;
-    }
-    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&rc); }
-    ULONG STDMETHODCALLTYPE Release() override
-    {
-        const LONG n = InterlockedDecrement(&rc);
-        if (n == 0) delete this;
-        return (ULONG)n;
-    }
-
-    HRESULT STDMETHODCALLTYPE Invoke(IDataTransferManager*, IDataRequestedEventArgs* args) override
-    {
-        ++g_asked;
-        if (!args) return S_OK;
-        IDataRequest* req = nullptr;
-        if (FAILED(args->get_Request(&req)) || !req) return S_OK;
-        IDataPackage* pkg = nullptr;
-        if (SUCCEEDED(req->get_Data(&pkg)) && pkg) {
-            IDataPackagePropertySet* props = nullptr;
-            if (SUCCEEDED(pkg->get_Properties(&props)) && props) {
-                HSTRING_HEADER th; HSTRING ts = nullptr;
-                if (SUCCEEDED(WindowsCreateStringReference(title.c_str(), (UINT32)title.size(), &th, &ts)))
-                    props->put_Title(ts);
-                props->Release();
-            }
-            // ⚠ Кладемо ОБИДВА формати. Одні цілі (месенджери, пошта) беруть
-            // зображення, інші (редактори, Провідник) — файл; той, хто вміє
-            // лише щось одне, мовчки отримував порожнечу.
-            if (file) {
-                IStorageItem* item = nullptr;
-                if (SUCCEEDED(file->QueryInterface(__uuidof(IStorageItem), (void**)&item)) && item) {
-                    ItemList* list = new ItemList();
-                    list->item = item;          // посилання переходить до списку
-                    pkg->SetStorageItems(list, true);
-                    list->Release();
-                }
-            }
-            if (ref) pkg->SetBitmap(ref);
-            pkg->Release();
-        }
-        req->Release();
-        return S_OK;
-    }
-};
-
-IDataTransferManagerInterop* Interop()
-{
-    IDataTransferManagerInterop* it = nullptr;
-    HSTRING_HEADER hh; HSTRING cls = nullptr;
-    const wchar_t* name = RuntimeClass_Windows_ApplicationModel_DataTransfer_DataTransferManager;
-    if (FAILED(WindowsCreateStringReference(name, (UINT32)wcslen(name), &hh, &cls))) return nullptr;
-    if (FAILED(RoGetActivationFactory(cls, IID_IDataTransferManagerInterop, (void**)&it))) return nullptr;
-    return it;
-}
-
-// ⚠ Менеджер у вікна ОДИН, і кожне поширення додавало б іще один обробник.
-// Тримаємо реєстрацію рівно одну: попередню знімаємо перед новою.
-IDataTransferManager* g_dtm = nullptr;
-EventRegistrationToken g_tok = {};
-
-void Unhook()
-{
-    if (!g_dtm) return;
-    if (g_tok.value) g_dtm->remove_DataRequested(g_tok);
-    g_dtm->Release();
-    g_dtm = nullptr;
-    g_tok.value = 0;
-}
-
-}  // namespace EdShareNs
-
-// Чи має сенс показувати кнопку. Питаємо систему ОДИН раз: під адміністратором
-// брокер поширення може бути недоступний, і тоді кнопка лише збивала б з пантелику.
-bool EdShareAvailable()
-{
-    static int cached = -1;
-    if (cached >= 0) return cached != 0;
-    cached = 0;
-    if (IDataTransferManagerInterop* it = EdShareNs::Interop()) {
-        cached = 1;
-        it->Release();
-    }
-    return cached != 0;
-}
-
 // ---- CAPS-44: діалог розміру -------------------------------------------
 //
 // Власне вікно з дочірніми контролами, а не DLGTEMPLATE: шаблон довелося б
@@ -13154,8 +12758,6 @@ HWND g_edTip = nullptr;
 // (lParam, lpReserved) ми все одно не використовуємо.
 const UINT kEdTipInfoSize = TTTOOLINFOW_V1_SIZE;   // макет, а не constexpr: макрос рахує зсув поля
 constexpr UINT kEdTipTimer = 8;
-constexpr UINT kEdShareTimer = 9;      // контроль: чи спитали в нас дані
-int g_edShareAskedAt = 0;              // скільки запитів було до показу меню
 constexpr UINT kEdTipDelay = 450;
 
 // Підказка більше не одна константа: до інструментів і виходів дописується
@@ -13213,7 +12815,6 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::NumReset: return Str::EdTipNumReset;
     case EdHit::StampMore: return Str::EdTipStampMore;
     case EdHit::Strength: return Str::EdTipStrength;
-    case EdHit::Share:     return Str::EdTipShare;
     case EdHit::SizeImg:   return Str::EdTipSizeImg;
     case EdHit::SizeCan:   return Str::EdTipSizeCan;
     case EdHit::RotL:      return Str::EdTipRotL;
@@ -14689,7 +14290,6 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case EdHit::GroupDel:
             EdGroupDelete();
             return 0;
-        case EdHit::Share:   if (!g_edCropping) EdShareNow(hwnd); return 0;
         case EdHit::SizeImg: EdSizeDialog(hwnd, false); return 0;
         case EdHit::SizeCan: EdSizeDialog(hwnd, true);  return 0;
         case EdHit::RotL:  EdRotateBy(false); return 0;
@@ -15175,16 +14775,6 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_TIMER:
-        // ⚠ Поширення або спрацює, або промовчить — третього не буває, і саме
-        // мовчання коштувало двох релізів наосліп. Через чотири секунди після
-        // показу меню перевіряємо, чи система ВЗАГАЛІ спитала дані.
-        if (wp == kEdShareTimer) {
-            KillTimer(hwnd, kEdShareTimer);
-            if (EdShareNs::g_asked == g_edShareAskedAt)
-                MessageBoxW(hwnd, S(g_shareUnlock ? Str::EdErrShareStill : Str::EdErrShareQuiet),
-                            kAppName, MB_OK | MB_ICONINFORMATION);
-            return 0;
-        }
         if (wp == kEdTipTimer) {
             KillTimer(hwnd, kEdTipTimer);
             EdTipShow(hwnd);
@@ -15213,8 +14803,6 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         delete g_edCmp; g_edCmp = nullptr;
         g_edCompare = false;
         EdImageBankClear();
-        EdShareNs::Unhook();
-        EdShareNs::CleanTemp();
         g_edObjs.clear();
         g_edUndo.clear();
         g_edRedo.clear();
@@ -15571,80 +15159,6 @@ bool EdWriteFile(const wchar_t* path)
     if (ok) EdSaveDirRemember(path);
     else MessageBoxW(g_edWnd, S(Str::EdErrSave), kAppName, MB_OK | MB_ICONWARNING);
     return ok;
-}
-
-// CAPS-36. Знімок лягає в %TEMP% і звідти йде системному брокеру. Тимчасовий
-// файл прибираємо перед наступним поширенням і на закритті редактора: це знімок
-// екрана користувача, він не має лежати там вічно.
-void EdShareNow(HWND hwnd)
-{
-    EdShareNs::CleanTemp();
-
-    wchar_t dir[MAX_PATH] = {};
-    if (!GetTempPathW(MAX_PATH, dir)) return;
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    wchar_t path[MAX_PATH];
-    wsprintfW(path, L"%slilhelpers-%04d%02d%02d-%02d%02d%02d.png", dir,
-              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-
-    bool wrote = false;
-    if (Gdiplus::Bitmap* flat = EdRender()) {
-        CLSID enc;
-        if (EdEncoderClsid(L"image/png", &enc))
-            wrote = (flat->Save(path, &enc, nullptr) == Gdiplus::Ok);
-        delete flat;
-    }
-    if (!wrote) {
-        MessageBoxW(hwnd, S(Str::EdErrSave), kAppName, MB_OK | MB_ICONWARNING);
-        return;
-    }
-    EdShareNs::g_tempFile = path;
-
-    // ⚠ Файл і потік добуваємо ЗАРАЗ, поки можна чекати: обробник запиту
-    // мусить бути синхронним, інакше довелося б доведення (deferral).
-    ABI::Windows::Storage::IStorageFile* sfile = EdShareNs::OpenStorageFile(path);
-    ABI::Windows::Storage::Streams::IRandomAccessStreamReference* sref =
-        EdShareNs::StreamRef(sfile, path);
-    if (!sfile && !sref) {
-        if (sfile) sfile->Release();
-        MessageBoxW(hwnd, S(Str::EdErrShare), kAppName, MB_OK | MB_ICONWARNING);
-        return;
-    }
-
-    IDataTransferManagerInterop* it = EdShareNs::Interop();
-    if (!it) {
-        if (sfile) sfile->Release();
-        if (sref) sref->Release();
-        MessageBoxW(hwnd, S(Str::EdErrShare), kAppName, MB_OK | MB_ICONWARNING);
-        return;
-    }
-    EdShareNs::Unhook();
-    ABI::Windows::ApplicationModel::DataTransfer::IDataTransferManager* dtm = nullptr;
-    HRESULT hr = it->GetForWindow(hwnd, __uuidof(ABI::Windows::ApplicationModel::DataTransfer::IDataTransferManager),
-                                  (void**)&dtm);
-    if (SUCCEEDED(hr) && dtm) {
-        EdShareNs::Handler* h = new EdShareNs::Handler();
-        h->title = S(Str::EdTitle);
-        h->file  = sfile;                   // посилання переходять до обробника
-        h->ref   = sref;
-        sfile = nullptr;
-        sref = nullptr;
-        hr = dtm->add_DataRequested(h, &EdShareNs::g_tok);
-        h->Release();                       // тримає тепер система
-        if (SUCCEEDED(hr)) {
-            EdShareNs::g_dtm = dtm;         // знімемо реєстрацію наступного разу
-            g_edShareAskedAt = EdShareNs::g_asked;
-            hr = it->ShowShareUIForWindow(hwnd);
-            if (SUCCEEDED(hr)) SetTimer(hwnd, kEdShareTimer, 4000, nullptr);
-        } else {
-            dtm->Release();
-        }
-    }
-    it->Release();
-    if (sfile) sfile->Release();
-    if (sref) sref->Release();
-    if (FAILED(hr)) MessageBoxW(hwnd, S(Str::EdErrShare), kAppName, MB_OK | MB_ICONWARNING);
 }
 
 bool EdSaveAs()
@@ -16367,11 +15881,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_EDITOR:
             EdOpen(GetModuleHandleW(nullptr), hwnd);
             break;
-        case IDC_CAP_SHAREUNLOCK:
-            // Саме послаблення вмикається лише на старті — тут тільки памʼять.
-            g_shareUnlock = SendMessageW(GetDlgItem(hwnd, IDC_CAP_SHAREUNLOCK), BM_GETCHECK, 0, 0) == BST_CHECKED;
-            RegSaveInt(kRegShareUnlock, g_shareUnlock ? 1 : 0);
-            return 0;
         case IDC_CAP_KEEPTOOL:
             g_edKeepTool = SendMessageW(GetDlgItem(hwnd, IDC_CAP_KEEPTOOL), BM_GETCHECK, 0, 0) == BST_CHECKED;
             RegSaveInt(kRegEdKeepTool, g_edKeepTool ? 1 : 0);
@@ -16509,26 +16018,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
-    // CAPS-52. Типово COM елевейтованого процесу не пускає викликів «знизу
-    // вгору», і меню поширення, яке живе БЕЗ підвищення, не може спитати в нас
-    // даних — воно й не питало. Дозвіл вмикається лише свідомо, чекбоксом.
-    // ⚠ Викликати можна РІВНО ОДИН раз і тільки тут: після першого ж виклику,
-    // що потребує безпеки, COM виставляє її сам, і пізніше вже не змінити.
-    // Дескриптор: право COM_RIGHTS_EXECUTE усім (WD) і пакетним застосункам
-    // (AC, бо приймачі бувають із Магазину), мітка цілісності НИЗЬКА з NX —
-    // тобто пускаємо середній рівень, але не недовірений.
-    g_shareUnlock = RegLoadInt(kRegShareUnlock, 0, 0, 1) != 0;
-    if (g_shareUnlock) {
-        PSECURITY_DESCRIPTOR sd = nullptr;
-        if (ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                L"O:BAG:BAD:(A;;0x1;;;WD)(A;;0x1;;;AC)S:(ML;;NX;;;LW)",
-                SDDL_REVISION_1, &sd, nullptr) && sd) {
-            CoInitializeSecurity(sd, -1, nullptr, nullptr, RPC_C_AUTHN_LEVEL_DEFAULT,
-                                 RPC_C_IMP_LEVEL_IDENTIFY, nullptr, EOAC_NONE, nullptr);
-            LocalFree(sd);
-        }
-    }
-
     INITCOMMONCONTROLSEX icc = { sizeof(icc),
                                  ICC_STANDARD_CLASSES | ICC_TAB_CLASSES | ICC_BAR_CLASSES |
                                  ICC_DATE_CLASSES | ICC_LINK_CLASS };   // CAPS-7: time picker, SysLink
@@ -16583,9 +16072,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // 20 px від краю полотна, крок 8 px між елементами, підказка одразу під
     // своїм контролом, між групами 6–8 px повітря плюс заголовок групи.
     // ⚠ Сторінки НЕ прокручуються, тож висота вікна — це межа вмісту.
-    // 2.6.0: вкладка «Перегляд» переросла попередню; 3.23.0: «Знімки» переросли
-    // цю, коли туди додався дозвіл для меню поширення з його поясненням.
-    constexpr int W = 500, H = 690;
+    constexpr int W = 500, H = 634;   // 2.6.0: вкладка «Перегляд» переросла попередню висоту
     constexpr int TAB_X = 20, TAB_Y = 74, FOOT_H = 42;    // таб-контрол під шапкою, підвал під табом
     constexpr int PX = TAB_X + 20, PW = 420, PY = 116;    // сторінка: лівий край, ширина, перший рядок
     const int w = sc(W), h = sc(H);
@@ -16851,8 +16338,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     y += 38;
     sec(addK, Str::CapSecOutput);
     check(addK, Str::CapKeepTool, IDC_CAP_KEEPTOOL, g_edKeepTool, 2);
-    check(addK, Str::CapShareUnlock, IDC_CAP_SHAREUNLOCK, g_shareUnlock, 2);
-    hint(addK, Str::CapShareUnlockHint, 3);
 
     // ---- вкладка «Налаштування» (CAPS-9) ----
     y = PY;
