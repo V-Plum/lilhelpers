@@ -94,6 +94,7 @@
 #include <inspectable.h>
 #include <asyncinfo.h>
 #include <shcore.h>
+#include <sddl.h>
 // CAPS-21: захоплення екрана через Desktop Duplication — системні DXGI і D3D11.
 #include <dxgi1_6.h>
 #include <d3d11.h>
@@ -173,6 +174,7 @@ constexpr int  IDC_PEEK_ENABLE   = 180;
 constexpr int  IDC_CAP_HK1       = 190;   // CAPS-21: три поля перехоплення
 constexpr int  IDC_CAP_HKRESET   = 193;
 constexpr int  IDC_CAP_KEEPTOOL  = 194;   // CAPS-23
+constexpr int  IDC_CAP_SHAREUNLOCK = 195; // CAPS-52
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -196,6 +198,11 @@ const wchar_t* kRegMode  = L"Mode";
 const wchar_t* kRegPassthrough = L"PassthroughRemote";
 const wchar_t* kRegLayoutSwitch = L"LayoutSwitch";   // CAPS-9: перемикання розкладок увімкнено (1)
 const wchar_t* kRegWindowTheme  = L"WindowTheme";    // CAPS-8: 0 авто / 1 світла / 2 темна
+// CAPS-52: 1 = дозволити непривілейованим процесам викликати наші COM-обʼєкти.
+// Типово 0: це послаблення захисту елевейтованого процесу, і вмикати його має
+// сенс лише тому, кому справді потрібне системне меню поширення.
+const wchar_t* kRegShareUnlock  = L"ShareUnlock";
+bool g_shareUnlock = false;
 const wchar_t* kRegLang         = L"Language";       // CAPS-12: 0 системна / 1 укр / 2 англ
 const wchar_t* kRegUpdDaily     = L"UpdateCheckDaily";  // CAPS-10
 const wchar_t* kRegUpdLast      = L"UpdateLastCheck";   // unix (DWORD)
@@ -518,16 +525,36 @@ X(EdShare,            L"Поділитися",                    L"Share")     
 X(EdTipShare,         L"Системне меню поширення Windows", L"The Windows share menu")                   \
 X(EdErrShare,         L"Системне меню поширення не відкрилось.",                                       \
                                                         L"The system share menu did not open.")        \
+X(CapShareUnlock,     L"Дозволити меню поширення діставати до програми",                               \
+                      L"Let the share menu reach into this program")                                   \
+X(CapShareUnlockHint, L"Потрібно для «Поділитися». Відкриває виклики до програми процесам зі "           \
+                      L"звичайними правами — вмикайте лише за потреби. Діє після перезапуску.",         \
+                      L"Needed for Share. It opens calls into this program to normal-privilege "        \
+                      L"processes — turn it on only if you need it. Takes effect after a restart.")     \
 X(EdErrShareQuiet,    L"Windows відкрила меню поширення, але даних у програми так і не спитала — "      \
-                      L"приймач отримав би порожнечу.\n\nНайімовірніша причина: програма працює з "     \
-                      L"правами адміністратора (це потрібно для перехоплення CapsLock), а меню "        \
-                      L"поширення й самі приймачі — ні, і дістати до нас вони не можуть.\n\n"           \
-                      L"Поки що надійні шляхи ті самі: «Копіювати» (Ctrl+C) або «Експорт».",            \
+                      L"приймач отримав би порожнечу.\n\nПричина: програма працює з правами "          \
+                      L"адміністратора (це потрібно для перехоплення CapsLock), а меню поширення й "    \
+                      L"самі приймачі — ні, і без окремого дозволу дістати до неї не можуть.\n\n"      \
+                      L"Увімкніть «Дозволити меню поширення діставати до програми» в налаштуваннях, "   \
+                      L"на вкладці «Знімки», і перезапустіть програму. Прочитайте там опис: дозвіл "    \
+                      L"послаблює захист, тож вмикайте його, лише якщо потрібне саме поширення.\n\n"   \
+                      L"Без нього робочі шляхи ті самі: «Копіювати» (Ctrl+C) або «Експорт».",           \
                       L"Windows opened the share menu but never asked this program for the data, "      \
-                      L"so the target would have received nothing.\n\nThe likely cause: this program "  \
-                      L"runs elevated (needed for the CapsLock hook) while the share menu and the "     \
-                      L"targets do not, and they cannot reach into it.\n\n"                            \
-                      L"For now use Copy (Ctrl+C) or Export.")                                         \
+                      L"so the target would have received nothing.\n\nThe cause: this program runs "   \
+                      L"elevated (needed for the CapsLock hook) while the share menu and the targets "  \
+                      L"do not, and without an explicit permission they cannot reach it.\n\n"          \
+                      L"Turn on \"Let the share menu reach into this program\" in Settings, on the "     \
+                      L"Snapshots tab, then restart. Read the note there: it weakens protection, so "   \
+                      L"enable it only if you need sharing.\n\n"                                       \
+                      L"Without it, use Copy (Ctrl+C) or Export.")                                     \
+X(EdErrShareStill,    L"Windows відкрила меню поширення, але даних у програми так і не спитала.\n\n"   \
+                      L"Дозвіл для меню поширення вже ввімкнено, отже справа не в ньому — причина "     \
+                      L"інша. Скажіть про це, будь ласка: це потрібно розбирати окремо.\n\n"           \
+                      L"Поки що: «Копіювати» (Ctrl+C) або «Експорт».",                                 \
+                      L"Windows opened the share menu but never asked this program for the data.\n\n"  \
+                      L"The share permission is already on, so that is not the cause — something "      \
+                      L"else is. Please report it; this needs a separate look.\n\n"                    \
+                      L"For now: Copy (Ctrl+C) or Export.")                                            \
 X(EdBtnSizeCan,       L"Розмір полотна…",               L"Canvas size…")                               \
 X(EdTipSizeImg,       L"Змінити розмір самого зображення", L"Resize the image itself")                 \
 X(EdTipSizeCan,       L"Змінити розмір полотна",        L"Resize the canvas")                          \
@@ -15154,7 +15181,8 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == kEdShareTimer) {
             KillTimer(hwnd, kEdShareTimer);
             if (EdShareNs::g_asked == g_edShareAskedAt)
-                MessageBoxW(hwnd, S(Str::EdErrShareQuiet), kAppName, MB_OK | MB_ICONINFORMATION);
+                MessageBoxW(hwnd, S(g_shareUnlock ? Str::EdErrShareStill : Str::EdErrShareQuiet),
+                            kAppName, MB_OK | MB_ICONINFORMATION);
             return 0;
         }
         if (wp == kEdTipTimer) {
@@ -16339,6 +16367,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_EDITOR:
             EdOpen(GetModuleHandleW(nullptr), hwnd);
             break;
+        case IDC_CAP_SHAREUNLOCK:
+            // Саме послаблення вмикається лише на старті — тут тільки памʼять.
+            g_shareUnlock = SendMessageW(GetDlgItem(hwnd, IDC_CAP_SHAREUNLOCK), BM_GETCHECK, 0, 0) == BST_CHECKED;
+            RegSaveInt(kRegShareUnlock, g_shareUnlock ? 1 : 0);
+            return 0;
         case IDC_CAP_KEEPTOOL:
             g_edKeepTool = SendMessageW(GetDlgItem(hwnd, IDC_CAP_KEEPTOOL), BM_GETCHECK, 0, 0) == BST_CHECKED;
             RegSaveInt(kRegEdKeepTool, g_edKeepTool ? 1 : 0);
@@ -16476,6 +16509,26 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
+    // CAPS-52. Типово COM елевейтованого процесу не пускає викликів «знизу
+    // вгору», і меню поширення, яке живе БЕЗ підвищення, не може спитати в нас
+    // даних — воно й не питало. Дозвіл вмикається лише свідомо, чекбоксом.
+    // ⚠ Викликати можна РІВНО ОДИН раз і тільки тут: після першого ж виклику,
+    // що потребує безпеки, COM виставляє її сам, і пізніше вже не змінити.
+    // Дескриптор: право COM_RIGHTS_EXECUTE усім (WD) і пакетним застосункам
+    // (AC, бо приймачі бувають із Магазину), мітка цілісності НИЗЬКА з NX —
+    // тобто пускаємо середній рівень, але не недовірений.
+    g_shareUnlock = RegLoadInt(kRegShareUnlock, 0, 0, 1) != 0;
+    if (g_shareUnlock) {
+        PSECURITY_DESCRIPTOR sd = nullptr;
+        if (ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                L"O:BAG:BAD:(A;;0x1;;;WD)(A;;0x1;;;AC)S:(ML;;NX;;;LW)",
+                SDDL_REVISION_1, &sd, nullptr) && sd) {
+            CoInitializeSecurity(sd, -1, nullptr, nullptr, RPC_C_AUTHN_LEVEL_DEFAULT,
+                                 RPC_C_IMP_LEVEL_IDENTIFY, nullptr, EOAC_NONE, nullptr);
+            LocalFree(sd);
+        }
+    }
+
     INITCOMMONCONTROLSEX icc = { sizeof(icc),
                                  ICC_STANDARD_CLASSES | ICC_TAB_CLASSES | ICC_BAR_CLASSES |
                                  ICC_DATE_CLASSES | ICC_LINK_CLASS };   // CAPS-7: time picker, SysLink
@@ -16529,7 +16582,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // CAPS-11: шапка з логотипом, назвою і версією; сторінки на єдиній сітці —
     // 20 px від краю полотна, крок 8 px між елементами, підказка одразу під
     // своїм контролом, між групами 6–8 px повітря плюс заголовок групи.
-    constexpr int W = 500, H = 634;   // 2.6.0: вкладка «Перегляд» переросла попередню висоту
+    // ⚠ Сторінки НЕ прокручуються, тож висота вікна — це межа вмісту.
+    // 2.6.0: вкладка «Перегляд» переросла попередню; 3.23.0: «Знімки» переросли
+    // цю, коли туди додався дозвіл для меню поширення з його поясненням.
+    constexpr int W = 500, H = 690;
     constexpr int TAB_X = 20, TAB_Y = 74, FOOT_H = 42;    // таб-контрол під шапкою, підвал під табом
     constexpr int PX = TAB_X + 20, PW = 420, PY = 116;    // сторінка: лівий край, ширина, перший рядок
     const int w = sc(W), h = sc(H);
@@ -16795,6 +16851,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     y += 38;
     sec(addK, Str::CapSecOutput);
     check(addK, Str::CapKeepTool, IDC_CAP_KEEPTOOL, g_edKeepTool, 2);
+    check(addK, Str::CapShareUnlock, IDC_CAP_SHAREUNLOCK, g_shareUnlock, 2);
+    hint(addK, Str::CapShareUnlockHint, 3);
 
     // ---- вкладка «Налаштування» (CAPS-9) ----
     y = PY;
