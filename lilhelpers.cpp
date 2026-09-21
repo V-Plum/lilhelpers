@@ -110,6 +110,7 @@ constexpr UINT WMAPP_MAGDONE      = WM_APP + 5;   // потік анімації
 constexpr UINT WMAPP_THEMELOC     = WM_APP + 6;   // потік геолокації: lp = LocResult* (heap)
 constexpr UINT WMAPP_UPDATE       = WM_APP + 7;   // потік оновлення: lp = UpdResult* (heap)
 constexpr UINT WMAPP_PEEK         = WM_APP + 8;   // CAPS-16: від хука — пробіл/Esc у списку файлів; lp = SHELLDLL_DefView
+constexpr UINT WMAPP_OPENEDITOR   = WM_APP + 10;  // CAPS-59: --editor від другого екземпляра
 constexpr UINT WMAPP_EDTEXT       = WM_APP + 9;   // CAPS-24: поле вводу напису; wp = 1 зафіксувати, 0 скасувати
 constexpr UINT HKW_INSTALL        = WM_APP + 20;  // до вікна потоку хука
 constexpr UINT HKW_UNINSTALL      = WM_APP + 21;
@@ -180,6 +181,7 @@ constexpr int  IDC_LIB_MB        = 199;
 constexpr int  IDC_LIB_SHOW      = 200;
 constexpr int  IDC_LIB_CLEAR     = 201;
 constexpr int  IDC_LIB_NOW       = 202;
+constexpr int  IDC_CAP_HK4       = 203;   // CAPS-59: четверте поле — «Порожній редактор»
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -459,6 +461,7 @@ X(CapHkBusy,          L"Частину гарячих клавіш тримає 
 X(TabShots,           L"Знімки",                        L"Shots")                                      \
 X(CapSecHotkeys,      L"Гарячі клавіші",                L"Hotkeys")                                    \
 X(CapHkClipL,         L"Зображення з буфера",           L"From clipboard")                             \
+X(CapHkEditorL,       L"Порожній редактор",             L"Blank editor")                               \
 X(CapHkPress,         L"натисніть комбінацію…",         L"press a combination…")                       \
 X(CapHkTaken,         L"зайнято іншою програмою",       L"held by another app")                        \
 X(CapHkOff,           L"вимкнено",                      L"off")                                        \
@@ -553,7 +556,7 @@ X(EdFmtHdr,           L"HDR · біле SDR %d ніт · зведено",       
                       L"HDR · SDR white %d nits · mapped")                                            \
 X(EdHdrNote,          L"HDR · тон-мапінг застосовано",  L"HDR · tone-mapped")                          \
 X(EdErrCapture,       L"Не вдалося зробити знімок екрана.", L"Could not capture the screen.")          \
-X(EdMenu,             L"Редактор знімків…",             L"Screenshot editor…")                         \
+X(EdMenu,             L"Редактор знімків",              L"Screenshot editor")                          \
 X(EdTitle,            L"Редактор знімків",              L"Screenshot editor")                          \
 X(EdToolEllipse,      L"Еліпс",                         L"Ellipse")                                    \
 X(EdToolLine,         L"Лінія",                         L"Line")                                       \
@@ -611,6 +614,17 @@ X(CapKeepTool,        L"Лишати інструмент активним пі�
 X(EdToolRect,         L"Прямокутник",                   L"Rectangle")                                  \
 X(EdSelHint,          L"Виберіть позначку, щоб змінити її колір, прозорість або розмір.",              \
                       L"Select a mark to change its colour, opacity or size.")                         \
+X(EdNoMarksHint,      L"Знімок ще без позначок. Виберіть інструмент на рейці ліворуч або натисніть "    \
+                      L"його клавішу — тут з'являться його властивості.",                              \
+                      L"No marks yet. Pick a tool on the left rail or press its key; its "             \
+                      L"properties will appear here.")                                                 \
+X(EdBlankLabel,       L"Порожнє полотно",                L"Blank canvas")                              \
+X(EdBlankHint,        L"Порожнє полотно. Ctrl+V — вставити зображення з буфера обміну, "               \
+                      L"«Відкрити» — знімок із бібліотеки, список поруч — імпорт файлу "               \
+                      L"або новий знімок.",                                                            \
+                      L"Blank canvas. Ctrl+V pastes an image from the clipboard, “Open” picks "        \
+                      L"a snapshot from the library, the list next to it imports a file "              \
+                      L"or takes a new shot.")                                                         \
 X(EdNoSel,            L"Нічого не вибрано",             L"Nothing selected")                           \
 X(EdFmtSel,           L"Вибране %d × %d",               L"Picked %d × %d")                             \
 X(EdFit,              L"Вписати",                       L"Fit")                                        \
@@ -801,7 +815,7 @@ bool  g_layoutOn = true;
 HWND  g_layoutCheckbox = nullptr;
 HWND  g_pageSettings[32] = {};  int g_pageSettingsN = 0;
 HWND  g_pagePeek[24]     = {};  int g_pagePeekN = 0;   // CAPS-16
-HWND  g_pageShots[24]    = {};  int g_pageShotsN = 0;  // CAPS-21
+HWND  g_pageShots[32]    = {};  int g_pageShotsN = 0;  // CAPS-21; CAPS-59: 25 контролів, 24 не вміщало
 
 // ---------- CAPS-8: тема самого вікна ----------
 //
@@ -7828,6 +7842,10 @@ bool  g_edPanelOpen = true;
 
 Gdiplus::Bitmap* g_edImg = nullptr;
 int      g_edImgW = 0, g_edImgH = 0;
+// CAPS-59: полотно — прозора підкладка «порожнього входу», а не знімок. Поки
+// на ньому нічого немає, Ctrl+V кладе картинку НА полотно (замінює підкладку),
+// а полотно саме каже, що з ним робити. Будь-який справжній вміст скидає прапорець.
+bool     g_edBlank = false;
 wchar_t  g_edSource[MAX_PATH] = {};
 // CAPS-39: де лежить цей документ у бібліотеці й як він зветься. Порожній шлях
 // означає «ще ніде»: Ctrl+S тоді заводить новий запис, а не перезаписує.
@@ -9845,6 +9863,17 @@ void EdPickSample(Gdiplus::Graphics& g, const RECT& r, int group, int value,
     if (back)  EdDrawHead(g, c, x0, cy, -1.0, 0.0, len, 1.6f, back - 1);
 }
 
+// CAPS-59: що каже смуга, коли показувати нема чого. Без позначок — як їх
+// додати; з позначками, але без вибраного — що вибрати. Порожня смуга
+// читалась як поломка (зауваження власника 21.09). Одна функція і для
+// малювання, і для тестового хука — щоб перевірялось саме те, що видно.
+Str EdStripHint()
+{
+    const bool hasSel = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size());
+    if (hasSel || g_edTool != EdTool::Select || EdSelCount() >= 2) return Str::Empty;
+    return g_edObjs.empty() ? Str::EdNoMarksHint : Str::EdSelHint;
+}
+
 void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     HBRUSH b = CreateSolidBrush(t.surface);
@@ -9882,9 +9911,11 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         EdDrawText(dc, r, chip, g_edFontBold, t.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-    if (!hasSel && g_edTool == EdTool::Select && !g_edObjs.empty()) {
-        RECT r = { EdPx(14), g_edRcStrip.top, g_edRcStrip.right, g_edRcStrip.bottom };
-        EdDrawText(dc, r, S(Str::EdSelHint), g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    const Str hint = EdStripHint();
+    if (hint != Str::Empty) {
+        RECT r = { EdPx(14), g_edRcStrip.top, limit - EdPx(8), g_edRcStrip.bottom };
+        EdDrawText(dc, r, S(hint), g_edFont, t.text2,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
 
     const EdKind kkp = hasSel ? g_edObjs[g_edSel].kind : EdToolKind(g_edTool);
@@ -10350,6 +10381,12 @@ bool EdToneDefault()
 bool EdGeomDefault()
 {
     return g_edRot == 0 && !g_edMirror;
+}
+
+// Полотно ЩЕ порожнє: підкладка від порожнього входу і жодної роботи поверх.
+bool EdIsBlank()
+{
+    return g_edBlank && g_edObjs.empty() && !EdHasCrop() && EdToneDefault() && EdGeomDefault();
 }
 
 // Уся арифметика тону вміщується в таблицю на 256 значень: канал 8-бітний, тож
@@ -11458,6 +11495,30 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         Gdiplus::Pen edge(EdC(g_edDark ? RGB(120, 120, 126) : RGB(150, 150, 156)), 1.0f);
         g.DrawRectangle(&edge, (float)ir.left - 0.5f, (float)ir.top - 0.5f,
                         (float)(ir.right - ir.left), (float)(ir.bottom - ir.top));
+    }
+
+    // CAPS-59: порожнє полотно каже, що з ним робити. Табличка поверх
+    // шахівниці — на самій шахівниці текст не читається.
+    if (EdIsBlank() && g_edDrag == EdDrag::None && !g_edLibOpen) {
+        const int pad = EdPx(24);
+        int w = (ir.right - ir.left) - 2 * pad;
+        if (w > EdPx(520)) w = EdPx(520);
+        if (w > EdPx(120)) {
+            RECT box = { 0, 0, w, 0 };
+            HFONT old = (HFONT)SelectObject(dc, g_edFont);
+            DrawTextW(dc, S(Str::EdBlankHint), -1, &box, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+            SelectObject(dc, old);
+            const int th = box.bottom - box.top;
+            const int cxm = (ir.left + ir.right) / 2, cym = (ir.top + ir.bottom) / 2;
+            RECT r = { cxm - w / 2, cym - th / 2, cxm + w / 2, cym + th / 2 };
+            RECT plate = { r.left - EdPx(20), r.top - EdPx(16), r.right + EdPx(20), r.bottom + EdPx(16) };
+            Gdiplus::Color pf = EdC(t.surface), pb = EdC(t.border);
+            EdFillRound(g, plate, (float)EdPx(10), &pf, &pb);
+            const int saved = SaveDC(dc);
+            IntersectClipRect(dc, g_edRcCanvas.left, g_edRcCanvas.top, g_edRcCanvas.right, g_edRcCanvas.bottom);
+            EdDrawText(dc, r, S(Str::EdBlankHint), g_edFont, t.text2, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+            RestoreDC(dc, saved);
+        }
     }
 
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
@@ -13799,6 +13860,7 @@ void EdAdoptSource(Gdiplus::Bitmap* fresh)
 bool EdResizeImage(int nw, int nh, bool scaleText, bool sharp)
 {
     if (!g_edImg || nw < 1 || nh < 1 || nw > 20000 || nh > 20000) return false;
+    g_edBlank = false;                  // розмір задано свідомо — це вже не підкладка
     const int ow = g_edImgW, oh = g_edImgH;
     if (nw == ow && nh == oh) return false;
     Gdiplus::Bitmap* out = new Gdiplus::Bitmap(nw, nh, PixelFormat32bppPARGB);
@@ -13847,6 +13909,7 @@ bool EdBaseHasPixels()
 bool EdResizeCanvas(int nw, int nh)
 {
     if (!g_edImg || nw < 1 || nh < 1 || nw > 20000 || nh > 20000) return false;
+    g_edBlank = false;                  // розмір задано свідомо — це вже не підкладка
     const int ow = g_edImgW, oh = g_edImgH;
     if (nw == ow && nh == oh) return false;
     Gdiplus::Bitmap* fresh = new Gdiplus::Bitmap(nw, nh, PixelFormat32bppPARGB);
@@ -15289,6 +15352,18 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 // Заміна всього вмісту лишилась у списку біля «Відкрити»:
                 // це різні наміри, і плутати їх однією клавішею не можна.
                 if (g_edCropping) return 0;
+                // CAPS-59: на ЩЕ порожньому полотні вставка — це «покласти
+                // картинку на полотно», тобто замінити підкладку, а не додати
+                // об'єкт у порожнечу 1280×800. Щойно на полотні щось є —
+                // знову окремий об'єкт, як і вирішено.
+                if (EdIsBlank()) {
+                    if (Gdiplus::Bitmap* b = CapFromClipboard())
+                        EdOpenBitmap((HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), b,
+                                     S(Str::EdCapClip), false, false, -1.0f);
+                    else
+                        MessageBoxW(hwnd, S(Str::EdErrClip), kAppName, MB_OK | MB_ICONWARNING);
+                    return 0;
+                }
                 if (Gdiplus::Bitmap* b = CapFromClipboard()) {
                     POINT c = EdCanvasCentre();
                     EdPlaceImage(b, EdToImage(c));
@@ -15456,6 +15531,7 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edToneMapped = toneMapped;
     g_edSdrWhite   = sdrWhite;
     g_edSaved      = false;
+    g_edBlank      = false;             // справжній вміст; порожній вхід сам поставить прапорець після
     g_edToast      = Str::Empty;
     // ⚠ Новий знімок — НОВИЙ документ. Без цього Ctrl+S мовчки перезаписав би
     // попередній запис бібліотеки вмістом свіжого знімка.
@@ -15518,22 +15594,24 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     SetForegroundWindow(g_edWnd);
 }
 
-void EdOpen(HINSTANCE hInst, HWND owner)
+// CAPS-59: «порожній вхід». Редактор без знімка — прозоре полотно, на яке
+// можна вставити з буфера, з якого відкрити бібліотеку чи імпортувати файл.
+// Три двері: пункт трея, гаряча клавіша, ключ --editor. Раніше пункт трея
+// відкривав діалог файлу — тепер імпорт живе всередині, у списку біля
+// «Відкрити». Уже відкритий редактор лише піднімаємо: вміст не чіпаємо.
+constexpr int kEdBlankW = 1280, kEdBlankH = 800;
+
+void EdOpenBlank(HINSTANCE hInst)
 {
     if (g_edWnd) {
         ShowWindow(g_edWnd, SW_RESTORE);
         SetForegroundWindow(g_edWnd);
         return;
     }
-    wchar_t path[MAX_PATH] = {};
-    if (!EdPickFile(owner, path, MAX_PATH)) return;
-
-    Gdiplus::Bitmap* bmp = EdBitmapFromFile(path);
-    if (!bmp) {
-        MessageBoxW(owner, S(Str::EdErrOpen), kAppName, MB_OK | MB_ICONWARNING);
-        return;
-    }
-    EdOpenBitmap(hInst, bmp, PathFindFileNameW(path), false, false);
+    Gdiplus::Bitmap* bmp = new Gdiplus::Bitmap(kEdBlankW, kEdBlankH, PixelFormat32bppARGB);
+    if (!bmp || bmp->GetLastStatus() != Gdiplus::Ok) { delete bmp; return; }
+    EdOpenBitmap(hInst, bmp, S(Str::EdBlankLabel), false, false);
+    g_edBlank = (g_edWnd != nullptr);
 }
 
 // Активне вікно на момент знімка. Якщо попереду наше власне (меню трею саме
@@ -16280,6 +16358,7 @@ void EdDocApply(EdDoc& d, const wchar_t* path)
     g_edSrcId = 0;
     g_edSrc = d.src;
     d.src = nullptr;                    // власність перейшла
+    g_edBlank = false;
 
     g_edImgBank = d.bank;
     d.bank.clear();
@@ -16938,23 +17017,29 @@ bool EdConfirmClose()
 // Уся родина Win+модифікатор+цифра належить оболонці (помилка 1409) і для нас
 // недоступна в принципі.
 
-constexpr int kHkIdClip = 11, kHkIdRegion = 12, kHkIdScreen = 13;
+constexpr int kHkIdClip = 11, kHkIdRegion = 12, kHkIdScreen = 13, kHkIdEditor = 14;
 const wchar_t* kRegHkClip   = L"CapHotkeyClipboard";
 const wchar_t* kRegHkRegion = L"CapHotkeyRegion";
 const wchar_t* kRegHkScreen = L"CapHotkeyScreen";
+const wchar_t* kRegHkEditor = L"CapHotkeyEditor";     // CAPS-59
 
 constexpr int kHkDefClip   = (int)(((MOD_CONTROL | MOD_ALT) << 16) | '4');
 constexpr int kHkDefRegion = (int)(((MOD_ALT | MOD_SHIFT) << 16) | '4');
 constexpr int kHkDefScreen = (int)(((MOD_ALT | MOD_SHIFT) << 16) | '3');
+// CAPS-59: порожній редактор. Літера, а не цифра: це не «знімок №4», а інший
+// вхід. Ctrl+Alt+E на PLUM-MEDIA вільна (виміряно 21.09.2026).
+constexpr int kHkDefEditor = (int)(((MOD_CONTROL | MOD_ALT) << 16) | 'E');
 
-int  g_hk[3]   = { kHkDefClip, kHkDefRegion, kHkDefScreen };
-bool g_hkOk[3] = { false, false, false };
+constexpr int kHkCount = 4;
+int  g_hk[kHkCount]   = { kHkDefClip, kHkDefRegion, kHkDefScreen, kHkDefEditor };
+bool g_hkOk[kHkCount] = { false, false, false, false };
 
 void CapLoadHotkeys()
 {
     g_hk[0] = RegLoadInt(kRegHkClip,   kHkDefClip,   0, 0x7FFFFFFF);
     g_hk[1] = RegLoadInt(kRegHkRegion, kHkDefRegion, 0, 0x7FFFFFFF);
     g_hk[2] = RegLoadInt(kRegHkScreen, kHkDefScreen, 0, 0x7FFFFFFF);
+    g_hk[3] = RegLoadInt(kRegHkEditor, kHkDefEditor, 0, 0x7FFFFFFF);
 }
 
 void CapSaveHotkeys()
@@ -16962,6 +17047,7 @@ void CapSaveHotkeys()
     RegSaveInt(kRegHkClip,   g_hk[0]);
     RegSaveInt(kRegHkRegion, g_hk[1]);
     RegSaveInt(kRegHkScreen, g_hk[2]);
+    RegSaveInt(kRegHkEditor, g_hk[3]);
 }
 
 // Повертає true, якщо всі ввімкнені клавіші зайнялись. Мовчазна невдача тут
@@ -16969,9 +17055,9 @@ void CapSaveHotkeys()
 // програма вдає, що все гаразд.
 bool CapApplyHotkeys(HWND hwnd)
 {
-    const int ids[3] = { kHkIdClip, kHkIdRegion, kHkIdScreen };
+    const int ids[kHkCount] = { kHkIdClip, kHkIdRegion, kHkIdScreen, kHkIdEditor };
     bool all = true;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < kHkCount; ++i) {
         UnregisterHotKey(hwnd, ids[i]);
         g_hkOk[i] = false;
         if (!g_hk[i]) continue;
@@ -17056,12 +17142,12 @@ struct CapDpiScope {
 
 // ---- CAPS-21: поля перехоплення гарячих клавіш --------------------------
 
-HWND g_capHkEdit[3] = {};
+HWND g_capHkEdit[kHkCount] = {};
 HWND g_capHkStatus  = nullptr;
 
 void CapHkRefresh()
 {
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < kHkCount; ++i) {
         if (!g_capHkEdit[i]) continue;
         wchar_t buf[128];
         CapHotkeyText(g_hk[i], buf, 128);
@@ -17071,8 +17157,8 @@ void CapHkRefresh()
     // Один рядок стану на всі три: місця на сторінці 420 px, а окрема колонка
     // під кожним полем не вміщає жодного осмисленого тексту.
     wchar_t line[512] = {};
-    const Str names[3] = { Str::CapHkClipL, Str::EdCapRegion, Str::EdCapScreen };
-    for (int i = 0; i < 3; ++i) {
+    const Str names[kHkCount] = { Str::CapHkClipL, Str::EdCapRegion, Str::EdCapScreen, Str::CapHkEditorL };
+    for (int i = 0; i < kHkCount; ++i) {
         const wchar_t* what = nullptr;
         if (!g_hk[i])         what = S(Str::CapHkOff);
         else if (!g_hkOk[i])  what = S(Str::CapHkTaken);
@@ -17225,6 +17311,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case kHkIdClip:   CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Clipboard, nullptr); return 0;
         case kHkIdRegion: CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Region,    nullptr); return 0;
         case kHkIdScreen: CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Screen,    nullptr); return 0;
+        case kHkIdEditor: EdOpenBlank(GetModuleHandleW(nullptr)); return 0;   // CAPS-59
         default: break;
         }
         SwitchLayout();   // запасний режим розкладки (HOTKEY_ID)
@@ -17232,6 +17319,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WMAPP_SHOWSETTINGS:
         ShowSettings(hwnd);
+        return 0;
+
+    case WMAPP_OPENEDITOR:   // CAPS-59: --editor від другого екземпляра або зі старту
+        EdOpenBlank(GetModuleHandleW(nullptr));
         return 0;
 
     case WMAPP_SHAKE:    // від мишачого хука
@@ -17561,7 +17652,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             ShowSettings(hwnd);
             return 0;
         case IDM_EDITOR:
-            EdOpen(GetModuleHandleW(nullptr), hwnd);
+            EdOpenBlank(GetModuleHandleW(nullptr));
             break;
         case IDC_CAP_KEEPTOOL:
             g_edKeepTool = SendMessageW(GetDlgItem(hwnd, IDC_CAP_KEEPTOOL), BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -17607,6 +17698,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_hk[0] = kHkDefClip;
             g_hk[1] = kHkDefRegion;
             g_hk[2] = kHkDefScreen;
+            g_hk[3] = kHkDefEditor;
             CapApplyHotkeys(hwnd);
             CapSaveHotkeys();
             CapHkRefresh();
@@ -17724,8 +17816,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     CreateMutexW(nullptr, TRUE, L"lilhelpers_single_instance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         // Другий запуск — показуємо вікно першого екземпляра
+        // CAPS-59: «lilhelpers.exe --editor» — відкрити порожній редактор у
+        // вже запущеному екземплярі (ярлик, командний рядок), інакше — налаштування.
         if (HWND prev = FindWindowW(kWndClass, nullptr))
-            PostMessageW(prev, WMAPP_SHOWSETTINGS, 0, 0);
+            PostMessageW(prev, wcsstr(GetCommandLineW(), L"--editor") ? WMAPP_OPENEDITOR
+                                                                        : WMAPP_SHOWSETTINGS, 0, 0);
         return 0;
     }
     // CAPS-12: мова — до будь-якого тексту (перша ж — опис задачі автозапуску нижче)
@@ -17802,6 +17897,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         (GetSystemMetrics(SM_CYSCREEN) - h) / 2,
         rc.right - rc.left, rc.bottom - rc.top,
         nullptr, nullptr, hInst, nullptr);
+    // CAPS-59: ярлик без UAC запускає другий екземпляр БЕЗ підвищення (ярлик
+    // через __COMPAT_LAYER=RunAsInvoker), і UIPI мовчки викинув би його
+    // повідомлення «знизу вгору» — точковий дозвіл, як для трею й перетягування.
+    ChangeWindowMessageFilterEx(hwnd, WMAPP_OPENEDITOR, MSGFLT_ALLOW, nullptr);
 
     HFONT font      = CreateUIFont(100, FW_NORMAL);
     HFONT fontSemi  = CreateUIFont(100, FW_SEMIBOLD);   // заголовки груп
@@ -18040,13 +18139,15 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     y = PY;
     sec(addK, Str::CapSecHotkeys);
     {
-        const Str names[3] = { Str::CapHkClipL, Str::EdCapRegion, Str::EdCapScreen };
-        for (int i = 0; i < 3; ++i) {
+        const Str names[kHkCount] = { Str::CapHkClipL, Str::EdCapRegion, Str::EdCapScreen, Str::CapHkEditorL };
+        // ⚠ IDC_CAP_HK1+3 — це IDC_CAP_HKRESET; четвертому полю свій номер.
+        const int ids[kHkCount] = { IDC_CAP_HK1, IDC_CAP_HK1 + 1, IDC_CAP_HK1 + 2, IDC_CAP_HK4 };
+        for (int i = 0; i < kHkCount; ++i) {
             addK(mkS(L"STATIC", names[i], 0, PX, y + 5, 186, 20, 0));
             g_capHkEdit[i] = addK(mk(L"EDIT", L"", ES_CENTER | ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP,
-                                     PX + 192, y, 224, 26, IDC_CAP_HK1 + i));
+                                     PX + 192, y, 224, 26, ids[i]));
             SetWindowSubclass(g_capHkEdit[i], CapHkSubclass, (UINT_PTR)i, 0);
-            y += 32;
+            y += 30;
         }
     }
     y += 6;
@@ -18177,6 +18278,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     CapLoadHotkeys();
     if (!CapApplyHotkeys(hwnd)) TrayBalloon(kAppName, S(Str::CapHkBusy));
     CapHkRefresh();
+    // CAPS-59: перший запуск із --editor — редактор одразу, але вже з циклу
+    // повідомлень: вікно й GDI+ на цей момент готові, а порядок — той самий,
+    // що й для команди від другого екземпляра.
+    if (wcsstr(GetCommandLineW(), L"--editor")) PostMessageW(hwnd, WMAPP_OPENEDITOR, 0, 0);
     ApplyCursorFeature();  // CAPS-2: мишачий хук на тому ж потоці
     g_mode = LoadMode();
     // CAPS-9: перехоплення лише якщо перемикання ввімкнено; інакше програма живе
