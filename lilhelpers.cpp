@@ -60,6 +60,9 @@
 // CAPS-16: перегляд по пробілу — виділення Провідника (IShellWindows → IShellView → CF_HDROP), значки.
 #include <exdisp.h>
 #include <shlobj.h>
+// ⚠ MSVC не тягне сюди FOLDERID_* сам, а MinGW тягне — і збірка мовчки
+// розходилась: локально збиралось, у CI падало (CAPS-39).
+#include <knownfolders.h>
 #include <servprov.h>
 #include <windowsx.h>
 // CAPS-16: рендер SVG — системний Direct2D (ніякого чужого коду в процесі).
