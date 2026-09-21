@@ -460,7 +460,15 @@ X(CapHkHint,          L"Клацніть поле і натисніть комб
                       L"app already holds it, the field stays as it was and says so. Backspace "       \
                       L"turns the shortcut off.")                                                       \
 X(EdCopy,             L"Копіювати",                     L"Copy")                                       \
-X(EdSaveAs,           L"Зберегти як",                   L"Save as")                                    \
+X(EdSaveAs,           L"Експорт",                       L"Export")                                     \
+X(EdStore,            L"Зберегти",                      L"Save")                                       \
+X(EdTipStore,         L"Зберегти в бібліотеку разом із позначками",                                     \
+                      L"Save to the library together with the marks")                                  \
+X(EdStored,           L"У бібліотеці",                  L"In the library")                             \
+X(EdErrStore,         L"Не вдалося зберегти знімок у бібліотеку.",                                      \
+                      L"Could not save the snapshot to the library.")                                  \
+X(EdAskSave,          L"Зберегти зміни в бібліотеку перед закриттям?",                                  \
+                      L"Save changes to the library before closing?")                                  \
 X(EdSaveName,         L"Знімок",                        L"Shot")                                       \
 X(EdSaveTitle,        L"Зберегти знімок",               L"Save screenshot")                            \
 X(EdFmtPng,           L"Зображення PNG",                L"PNG image")                                  \
@@ -626,7 +634,13 @@ X(EdTipTextBox,       L"Ручками з боків — ширина блока
                       L"Side handles set the block width; type size has a stepper")                    \
 X(EdAskReplace,       L"Відкрити інше зображення? Позначки не збережено.",                             \
                       L"Open another image? Marks are not saved.")                                     \
-X(EdOpenFilter,       L"Зображення",                    L"Images")                                     \
+X(EdOpenFilter,       L"Знімки й зображення",           L"Snapshots and images")                       \
+X(EdErrDocNew,        L"Цей знімок зроблено НОВІШОЮ версією програми — вона вміє те, чого ця ще "       \
+                      L"не розуміє. Оновіть Little Helpers.",                                           \
+                      L"This snapshot was made by a NEWER version of the program, which can do "        \
+                      L"things this one does not understand yet. Update Little Helpers.")               \
+X(EdErrDocBad,        L"Файл знімка пошкоджено — прочитати його не вдалося.",                            \
+                      L"The snapshot file is damaged and could not be read.")                          \
 X(EdErrOpen,          L"Не вдалося відкрити зображення.", L"Could not open the image.")                \
 X(EdHelpTitle,        L"Редактор знімків",              L"Screenshot editor")                          \
 X(EdHelpBody,         L"Інструменти: V вибір, R прямокутник, E еліпс, L лінія,\n"                   \
@@ -7715,7 +7729,7 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Aspect, CropReset, CropOk, CropNo,
                    RotL, RotR, FlipH, FlipV, Exposure, Gamma, Contrast,
                    ToneReset, Compare, GroupEdit, GroupDel, Pick, PickItem,
-                   SelAlign, SelGroup, SizeImg, SizeCan };
+                   SelAlign, SelGroup, SizeImg, SizeCan, Store };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7748,6 +7762,10 @@ bool  g_edPanelOpen = true;
 Gdiplus::Bitmap* g_edImg = nullptr;
 int      g_edImgW = 0, g_edImgH = 0;
 wchar_t  g_edSource[MAX_PATH] = {};
+// CAPS-39: де лежить цей документ у бібліотеці й як він зветься. Порожній шлях
+// означає «ще ніде»: Ctrl+S тоді заводить новий запис, а не перезаписує.
+wchar_t  g_edDocPath[MAX_PATH] = {};
+wchar_t  g_edDocName[128] = {};
 bool     g_edHdr = false, g_edToneMapped = false;   // CAPS-21: звідки прийшов кадр
 float    g_edSdrWhite = -1.0f;                      // ніт; -1 = система не сказала
 
@@ -7782,6 +7800,13 @@ int      g_edPickOpen   = -1;
 
 void EdRebuildImage();                // тіло далеко нижче: йому потрібні плитки
 void EdFitView();                     // поворот міняє сторони — вид доводиться вписувати
+// CAPS-39: власний формат. Тіла — у блоці формату нижче, а потрібні вони вже
+// у віконній процедурі.
+bool EdDocSaveTo(const wchar_t* path);
+int  EdDocOpen(const wchar_t* path);
+bool EdStoreNow();                    // зберегти в бібліотеку
+const wchar_t* EdLibDir();            // тека бібліотеки, створюється на місці
+void EdToast(Str s);
 bool EdSelBounds(RECT* out);          // спільні габарити вибраного
 bool EdManySel();                     // вибрано двоє й більше
 std::vector<int> EdSelAll();          // головний вибраний плюс решта
@@ -9229,6 +9254,14 @@ void EdLayout(HWND hwnd)
         HDC dc = GetDC(hwnd);
         const int cy = (g_edRcStatus.top + g_edRcStatus.bottom) / 2;
         int x = EdPx(14);
+
+        // CAPS-39: «Зберегти» стоїть ПЕРЕД «Відкрити» — дві дії над самим
+        // документом поряд, а «Копіювати» й «Експорт» лишаються праворуч як
+        // дії над результатом.
+        const int stw = EdTextWidth(dc, S(Str::EdStore), g_edFont) + EdPx(40);
+        RECT sb = EdPill(x, cy, stw, EdPx(30));
+        EdAdd(sb, EdHit::Store, 0);
+        x = sb.right + EdPx(8);
 
         const int ow = EdTextWidth(dc, S(Str::EdOpenBtn), g_edFont) + EdPx(40);
         RECT ob = EdPill(x, cy, ow, EdPx(30));
@@ -11488,6 +11521,17 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     FillRect(dc, &line, b);
     DeleteObject(b);
 
+    if (const RECT* sb = EdRegionRect(EdHit::Store, 0)) {
+        const bool hot = (g_edHotWhat == EdHit::Store);
+        EdPaintButton(g, *sb, t, false, hot, false);
+        RECT ib = EdIconBox(*sb);
+        ib.right = ib.left + EdPx(18);
+        EdIcon(g, IcoSave, ib, EdC(t.text), 1.6f);
+        RECT tr = *sb;
+        tr.left = ib.right + EdPx(4);
+        EdDrawText(dc, tr, S(Str::EdStore), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
     // «Відкрити» і стрілка списку — одна кнопка на вигляд, дві на дотик.
     if (const RECT* ob = EdRegionRect(EdHit::Open, 0)) {
         const RECT* om = EdRegionRect(EdHit::OpenMenu, 0);
@@ -12367,7 +12411,9 @@ bool EdPickFile(HWND owner, wchar_t* out, size_t cch)
         return false;
     COMDLG_FILTERSPEC fs[1];
     fs[0].pszName = S(Str::EdOpenFilter);
-    fs[0].pszSpec = L"*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp";
+    // Власний формат стоїть ПЕРШИМ у масці: у списку файлів свої знімки мають
+    // бути видні одразу, а не губитися серед чужих картинок.
+    fs[0].pszSpec = L"*.lhshot;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp";
     dlg->SetFileTypes(1, fs);
     dlg->SetTitle(S(Str::EdOpenTitle));
     if (SUCCEEDED(dlg->Show(owner))) {
@@ -12414,6 +12460,7 @@ void EdMakeFonts()
 enum class CapMode { Screen, Window, Region, Clipboard };
 void CapTake(HINSTANCE hInst, HWND owner, CapMode mode, HWND target);
 bool EdPickFile(HWND owner, wchar_t* out, size_t cch);
+bool EdIsDocFile(const wchar_t* path);
 void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
                   bool hdr, bool toneMapped, float sdrWhite);
 
@@ -12845,6 +12892,7 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::Panel:   return g_edPanelOpen ? Str::EdTipPanelHide : Str::EdTipPanelShow;
     case EdHit::Copy:    return Str::EdCopy;
     case EdHit::Save:    return Str::EdSaveAs;
+    case EdHit::Store:   return Str::EdTipStore;
     case EdHit::Min:     return Str::EdTipMin;
     case EdHit::Max:     return IsZoomed(g_edWnd) ? Str::EdTipRestore : Str::EdTipMax;
     case EdHit::Close:   return Str::EdTipClose;
@@ -12867,7 +12915,8 @@ void EdTipText(EdHit what, int idx, wchar_t* out, int cch)
     const wchar_t* key = nullptr;
     if (what == EdHit::Tool && idx >= 0 && idx < 11) key = kEdToolKeys[idx];
     else if (what == EdHit::Copy) key = L"Ctrl+C";
-    else if (what == EdHit::Save) key = L"Ctrl+S";
+    else if (what == EdHit::Save) key = L"Ctrl+Shift+S";
+    else if (what == EdHit::Store) key = L"Ctrl+S";
     if (key) {
         lstrcpynW(out, S(st), cch);
         const int len = lstrlenW(out);
@@ -13100,6 +13149,12 @@ void EdOpenFileHere(HWND hwnd)
     if (!EdConfirmReplace()) return;
     wchar_t path[MAX_PATH] = {};
     if (!EdPickFile(hwnd, path, MAX_PATH)) return;
+    if (EdIsDocFile(path)) {
+        const int rc = EdDocOpen(path);
+        if (rc == 2)      MessageBoxW(hwnd, S(Str::EdErrDocNew), kAppName, MB_OK | MB_ICONWARNING);
+        else if (rc != 0) MessageBoxW(hwnd, S(Str::EdErrDocBad), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
     Gdiplus::Bitmap* bmp = EdBitmapFromFile(path);
     if (!bmp) {
         MessageBoxW(hwnd, S(Str::EdErrOpen), kAppName, MB_OK | MB_ICONWARNING);
@@ -14290,6 +14345,12 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case EdHit::GroupDel:
             EdGroupDelete();
             return 0;
+        case EdHit::Store:
+            if (!g_edCropping) {
+                if (EdStoreNow()) EdToast(Str::EdStored);
+                else MessageBoxW(hwnd, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
+            }
+            return 0;
         case EdHit::SizeImg: EdSizeDialog(hwnd, false); return 0;
         case EdHit::SizeCan: EdSizeDialog(hwnd, true);  return 0;
         case EdHit::RotL:  EdRotateBy(false); return 0;
@@ -14732,7 +14793,14 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             // ⚠ Еліпс переїхав із 'O' на 'E' саме для того, щоб звільнити Ctrl+O
             // під «Відкрити»: раніше Ctrl+O потрапляв сюди й мовчки з'їдався.
             if (ctrl) {
-                if (wp == 'S') EdDoSave();
+                // ⚠ Ctrl+S — саме ЗБЕРЕГТИ (у бібліотеку, з позначками), а не
+                // експорт: у решті програм ця клавіша означає «не втратити
+                // роботу», і експорт під нею збивав би з пантелику.
+                if (wp == 'S') {
+                    if (GetKeyState(VK_SHIFT) < 0 || (lp & 0x0200)) EdDoSave();
+                    else if (EdStoreNow()) EdToast(Str::EdStored);
+                    else MessageBoxW(hwnd, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
+                }
                 return 0;
             }
             if (g_edCropping) EdCropFinish(false);
@@ -14855,6 +14923,10 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edSdrWhite   = sdrWhite;
     g_edSaved      = false;
     g_edToast      = Str::Empty;
+    // ⚠ Новий знімок — НОВИЙ документ. Без цього Ctrl+S мовчки перезаписав би
+    // попередній запис бібліотеки вмістом свіжого знімка.
+    g_edDocPath[0] = 0;
+    g_edDocName[0] = 0;
     lstrcpynW(g_edSource, label ? label : L"", MAX_PATH);
     g_edObjs.clear();
     g_edUndo.clear();
@@ -15161,6 +15233,550 @@ bool EdWriteFile(const wchar_t* path)
     return ok;
 }
 
+// ---- CAPS-39: власний формат знімка (.lhshot) ---------------------------
+//
+// Файл — послідовність БЛОКІВ: чотирилітерний тег, довжина, вміст. Невідомий
+// блок читач пропускає за довжиною; усередині блоку позначок так само поля з
+// тегами, і невідоме поле теж пропускається. Так новіші версії лишаються
+// читабельними в старих межах, а старі файли — назавжди читабельними.
+//
+// ⚠ ЖОДНОГО дампу структур і ЖОДНОГО порядкового номера enum. Коли з програми
+// прибрали окрему стрілку (CAPS-48), ordinal'и EdKind зсунулись — і еліпс мовчки
+// взяв підказку кадру. Якби файли писали тип позначки номером, кожен знімок,
+// збережений до того, читався б із переплутаними типами. Тому тип — ТЕКСТОВИЙ
+// тег, а таблиця тегів охороняється static_assert: додав вид позначки — збірка
+// падає, поки не дописав його сюди.
+
+const char kEdDocMagic[8] = { 'L', 'H', 'S', 'H', 'O', 'T', 0x1A, '\n' };
+constexpr WORD kEdDocVerMajor = 1;   // ламає сумісність
+constexpr WORD kEdDocVerMinor = 0;   // лише додає поля
+
+struct EdKindTag { EdKind kind; const char* tag; };
+const EdKindTag kEdKindTags[] = {
+    { EdKind::Rect,    "rect" }, { EdKind::Ellipse, "elps" },
+    { EdKind::Line,    "line" }, { EdKind::Pen,     "pen " },
+    { EdKind::Text,    "text" }, { EdKind::Hide,    "hide" },
+    { EdKind::Mark,    "mark" }, { EdKind::Counter, "cnt " },
+    { EdKind::Stamp,   "stmp" }, { EdKind::Image,   "img " },
+};
+// ⚠ Саме ця перевірка й тримає обіцянку формату. Новий вид позначки без тега
+// зберігся б як «невідомий» і тихо зник при відкритті.
+static_assert(sizeof(kEdKindTags) / sizeof(kEdKindTags[0]) == (size_t)EdKind::Image + 1,
+              "кожен вид позначки мусить мати свій тег у файлі");
+
+const char* EdKindTagOf(EdKind k)
+{
+    for (size_t i = 0; i < sizeof(kEdKindTags) / sizeof(kEdKindTags[0]); ++i)
+        if (kEdKindTags[i].kind == k) return kEdKindTags[i].tag;
+    return nullptr;
+}
+
+bool EdKindFromTag(const char* t, EdKind* out)
+{
+    for (size_t i = 0; i < sizeof(kEdKindTags) / sizeof(kEdKindTags[0]); ++i)
+        if (!memcmp(kEdKindTags[i].tag, t, 4)) { *out = kEdKindTags[i].kind; return true; }
+    return false;
+}
+
+// ---- дописувач і читач ---------------------------------------------------
+
+struct EdWr {
+    std::vector<BYTE> b;
+    void raw(const void* p, size_t n) { const BYTE* q = (const BYTE*)p; b.insert(b.end(), q, q + n); }
+    void u8v(BYTE v)    { b.push_back(v); }
+    void u32v(DWORD v)  { raw(&v, 4); }
+    void i32v(int v)    { raw(&v, 4); }
+    void u64v(ULONGLONG v) { raw(&v, 8); }
+    void tag(const char* t) { raw(t, 4); }
+    // Рядок у файлі — завжди UTF-8 із довжиною: wchar_t на диску залежав би від
+    // платформи, а довжина рятує від рядків без нуля.
+    void str(const std::wstring& w)
+    {
+        const int n = w.empty() ? 0 : WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(),
+                                                          nullptr, 0, nullptr, nullptr);
+        std::vector<char> u8((size_t)(n > 0 ? n : 0));
+        if (n > 0) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), u8.data(), n, nullptr, nullptr);
+        u32v((DWORD)u8.size());
+        if (!u8.empty()) raw(u8.data(), u8.size());
+    }
+    // Блок пишемо в два заходи: спершу заголовок із нулем, потім справжня
+    // довжина. Рахувати її наперед означало б формувати вміст двічі.
+    size_t open(const char* t) { tag(t); u32v(0); return b.size(); }
+    void close(size_t at)
+    {
+        const DWORD n = (DWORD)(b.size() - at);
+        memcpy(&b[at - 4], &n, 4);
+    }
+};
+
+struct EdRd {
+    const BYTE* p = nullptr;
+    size_t n = 0, at = 0;
+    bool bad = false;
+    bool need(size_t k) { if (bad || at + k > n) { bad = true; return false; } return true; }
+    void raw(void* out, size_t k) { if (!need(k)) return; memcpy(out, p + at, k); at += k; }
+    BYTE  u8v()  { BYTE v = 0;  raw(&v, 1); return v; }
+    DWORD u32v() { DWORD v = 0; raw(&v, 4); return v; }
+    int   i32v() { int v = 0;   raw(&v, 4); return v; }
+    ULONGLONG u64v() { ULONGLONG v = 0; raw(&v, 8); return v; }
+    std::wstring str()
+    {
+        const DWORD len = u32v();
+        if (!need(len) || len > (1u << 20)) { bad = true; return L""; }
+        const int w = MultiByteToWideChar(CP_UTF8, 0, (const char*)(p + at), (int)len, nullptr, 0);
+        std::wstring out((size_t)(w > 0 ? w : 0), L'\0');
+        if (w > 0) MultiByteToWideChar(CP_UTF8, 0, (const char*)(p + at), (int)len, &out[0], w);
+        at += len;
+        return out;
+    }
+    void skip(size_t k) { if (need(k)) at += k; }
+};
+
+// ---- бітмап у PNG і назад -------------------------------------------------
+
+bool EdPngEncode(Gdiplus::Bitmap* bmp, std::vector<BYTE>& out)
+{
+    out.clear();
+    if (!bmp) return false;
+    CLSID enc;
+    if (!EdEncoderClsid(L"image/png", &enc)) return false;
+    IStream* st = nullptr;
+    if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &st)) || !st) return false;
+    bool ok = (bmp->Save(st, &enc, nullptr) == Gdiplus::Ok);
+    if (ok) {
+        HGLOBAL h = nullptr;
+        if (SUCCEEDED(GetHGlobalFromStream(st, &h)) && h) {
+            const SIZE_T n = GlobalSize(h);
+            if (const void* q = GlobalLock(h)) {
+                out.assign((const BYTE*)q, (const BYTE*)q + n);
+                GlobalUnlock(h);
+            } else ok = false;
+        } else ok = false;
+    }
+    st->Release();
+    return ok && !out.empty();
+}
+
+Gdiplus::Bitmap* EdPngDecode(const BYTE* data, size_t n)
+{
+    if (!data || !n) return nullptr;
+    IStream* st = SHCreateMemStream(data, (UINT)n);
+    if (!st) return nullptr;
+    Gdiplus::Bitmap* out = ImageDecodeWic(st);
+    if (!out) {
+        LARGE_INTEGER zero = {};
+        st->Seek(zero, STREAM_SEEK_SET, nullptr);
+        Gdiplus::Bitmap* src = Gdiplus::Bitmap::FromStream(st);
+        if (src && src->GetLastStatus() == Gdiplus::Ok && src->GetWidth() && src->GetHeight()) {
+            out = src->Clone(0, 0, (INT)src->GetWidth(), (INT)src->GetHeight(), PixelFormat32bppPARGB);
+            if (out && out->GetLastStatus() != Gdiplus::Ok) { delete out; out = nullptr; }
+        }
+        delete src;
+    }
+    st->Release();
+    return out;
+}
+
+// ---- запис документа ------------------------------------------------------
+
+void EdWriteObj(EdWr& w, const EdObj& o)
+{
+    const char* kt = EdKindTagOf(o.kind);
+    if (!kt) return;                       // static_assert вище робить це неможливим
+    const size_t obj = w.open("OBJ ");
+
+    auto fi = [&](const char* t, int v) { w.tag(t); w.u32v(4); w.i32v(v); };
+    auto fb = [&](const char* t, bool v) { w.tag(t); w.u32v(1); w.u8v(v ? 1 : 0); };
+
+    w.tag("kind"); w.u32v(4); w.raw(kt, 4);
+    w.tag("rect"); w.u32v(16); w.i32v(o.x); w.i32v(o.y); w.i32v(o.w); w.i32v(o.h);
+    fi("colr", (int)o.color);
+    fi("thck", o.thick);
+    fi("alph", o.alpha);
+    fb("fill", o.filled);
+    fi("rot ", o.rot);
+    fi("grp ", o.grp);
+
+    if (!o.pts.empty()) {
+        const size_t at = w.open("pts ");
+        w.u32v((DWORD)o.pts.size());
+        for (size_t i = 0; i < o.pts.size(); ++i) { w.i32v(o.pts[i].x); w.i32v(o.pts[i].y); }
+        w.close(at);
+    }
+    if (!o.text.empty()) { const size_t at = w.open("text"); w.str(o.text); w.close(at); }
+    if (o.kind == EdKind::Text) {
+        fi("size", o.size);
+        fb("bold", o.bold);
+        fb("ital", o.italic);
+        fi("algn", o.align);
+        fi("outl", o.outline);
+        fi("boxw", o.boxw);
+    }
+    if (o.kind == EdKind::Hide) { fi("mode", o.mode); fi("strn", o.strength); }
+    if (o.kind == EdKind::Counter) { fi("cseq", o.seq); fi("cgrp", o.group); fi("cstr", o.start); }
+    if (o.kind == EdKind::Stamp) fi("stmp", o.stamp);
+    if (EdIsSegment(o.kind) || EdHasDash(o.kind)) fi("dash", o.dash);
+    if (EdIsSegment(o.kind)) { fi("hdf ", o.headFront); fi("hdb ", o.headBack); fi("hds ", o.headSize); }
+    if (o.kind == EdKind::Image) fi("img ", o.img);
+
+    w.close(obj);
+}
+
+bool EdDocWrite(const wchar_t* path, const std::wstring& name)
+{
+    if (!g_edSrc) return false;
+    EdWr w;
+    w.raw(kEdDocMagic, sizeof(kEdDocMagic));
+    w.raw(&kEdDocVerMajor, 2);
+    w.raw(&kEdDocVerMinor, 2);
+
+    {   // хто, коли, звідки
+        const size_t at = w.open("META");
+        FILETIME ft = {};
+        GetSystemTimeAsFileTime(&ft);
+        w.u64v(((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime);
+        w.str(name);
+        w.str(g_edSource);
+        wchar_t ver[32] = {};
+        ExeVersionString(ver, 32);
+        w.str(ver);
+        w.close(at);
+    }
+    {   // ОРИГІНАЛ, а не показане: рецепт лишається живим і після відкриття
+        std::vector<BYTE> png;
+        if (!EdPngEncode(g_edSrc, png)) return false;
+        const size_t at = w.open("SRC ");
+        w.raw(png.data(), png.size());
+        w.close(at);
+    }
+    {   // ⚠ Вкладені зображення мусять їхати В ФАЙЛІ: позначка тримає НОМЕР у
+        // банку, і без самих пікселів документ розвалиться, щойно зникне джерело.
+        const size_t at = w.open("BANK");
+        w.u32v((DWORD)g_edImgBank.size());
+        for (size_t i = 0; i < g_edImgBank.size(); ++i) {
+            std::vector<BYTE> png;
+            if (!EdPngEncode(g_edImgBank[i], png)) png.clear();
+            w.u32v((DWORD)png.size());
+            if (!png.empty()) w.raw(png.data(), png.size());
+        }
+        w.close(at);
+    }
+    {   const size_t at = w.open("RCPE");
+        w.i32v(g_edExposure); w.i32v(g_edGamma); w.i32v(g_edContrast);
+        w.i32v(g_edRot); w.u8v(g_edMirror ? 1 : 0);
+        w.close(at);
+    }
+    {   const size_t at = w.open("CROP");
+        w.i32v(g_edCrop.left); w.i32v(g_edCrop.top); w.i32v(g_edCrop.right); w.i32v(g_edCrop.bottom);
+        w.close(at);
+    }
+    {   const size_t at = w.open("NUMS");
+        w.i32v(g_edSeq); w.i32v(g_edStartNum); w.i32v(g_edCounterGroup); w.i32v(g_edNextGrp);
+        w.close(at);
+    }
+    {   const size_t at = w.open("OBJS");
+        w.u32v((DWORD)g_edObjs.size());
+        for (size_t i = 0; i < g_edObjs.size(); ++i) EdWriteObj(w, g_edObjs[i]);
+        w.close(at);
+    }
+
+    // ⚠ Пишемо у сусідній тимчасовий файл і аж потім підміняємо: обрив на
+    // половині не має перетворювати вчорашню роботу на сміття.
+    std::wstring tmp = std::wstring(path) + L".part";
+    HANDLE f = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    DWORD put = 0;
+    const BOOL ok = WriteFile(f, w.b.data(), (DWORD)w.b.size(), &put, nullptr) && put == w.b.size();
+    FlushFileBuffers(f);
+    CloseHandle(f);
+    if (!ok) { DeleteFileW(tmp.c_str()); return false; }
+    if (!MoveFileExW(tmp.c_str(), path, MOVEFILE_REPLACE_EXISTING)) {
+        DeleteFileW(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
+// ---- читання документа ----------------------------------------------------
+
+void EdReadObj(EdRd& r, size_t end, EdObj& o)
+{
+    while (!r.bad && r.at + 8 <= end) {
+        char t[4];
+        r.raw(t, 4);
+        const DWORD len = r.u32v();
+        if (r.bad || r.at + len > end) { r.bad = true; return; }
+        const size_t next = r.at + len;
+        if      (!memcmp(t, "kind", 4)) { char k[4]; r.raw(k, 4); EdKindFromTag(k, &o.kind); }
+        else if (!memcmp(t, "rect", 4)) { o.x = r.i32v(); o.y = r.i32v(); o.w = r.i32v(); o.h = r.i32v(); }
+        else if (!memcmp(t, "colr", 4)) o.color = (COLORREF)r.i32v();
+        else if (!memcmp(t, "thck", 4)) o.thick = r.i32v();
+        else if (!memcmp(t, "alph", 4)) o.alpha = r.i32v();
+        else if (!memcmp(t, "fill", 4)) o.filled = r.u8v() != 0;
+        else if (!memcmp(t, "rot ", 4)) o.rot = r.i32v();
+        else if (!memcmp(t, "grp ", 4)) o.grp = r.i32v();
+        else if (!memcmp(t, "size", 4)) o.size = r.i32v();
+        else if (!memcmp(t, "bold", 4)) o.bold = r.u8v() != 0;
+        else if (!memcmp(t, "ital", 4)) o.italic = r.u8v() != 0;
+        else if (!memcmp(t, "algn", 4)) o.align = r.i32v();
+        else if (!memcmp(t, "outl", 4)) o.outline = r.i32v();
+        else if (!memcmp(t, "boxw", 4)) o.boxw = r.i32v();
+        else if (!memcmp(t, "mode", 4)) o.mode = r.i32v();
+        else if (!memcmp(t, "strn", 4)) o.strength = r.i32v();
+        else if (!memcmp(t, "cseq", 4)) o.seq = r.i32v();
+        else if (!memcmp(t, "cgrp", 4)) o.group = r.i32v();
+        else if (!memcmp(t, "cstr", 4)) o.start = r.i32v();
+        else if (!memcmp(t, "stmp", 4)) o.stamp = r.i32v();
+        else if (!memcmp(t, "dash", 4)) o.dash = r.i32v();
+        else if (!memcmp(t, "hdf ", 4)) o.headFront = r.i32v();
+        else if (!memcmp(t, "hdb ", 4)) o.headBack = r.i32v();
+        else if (!memcmp(t, "hds ", 4)) o.headSize = r.i32v();
+        else if (!memcmp(t, "img ", 4)) o.img = r.i32v();
+        else if (!memcmp(t, "text", 4)) o.text = r.str();
+        else if (!memcmp(t, "pts ", 4)) {
+            const DWORD n = r.u32v();
+            if (n > (1u << 20)) { r.bad = true; return; }
+            o.pts.resize(n);
+            for (DWORD i = 0; i < n && !r.bad; ++i) { o.pts[i].x = r.i32v(); o.pts[i].y = r.i32v(); }
+        }
+        r.at = next;                       // невідоме поле просто пропускаємо
+    }
+}
+
+// Результат читання окремо від застосування: поки файл не розібрано ПОВНІСТЮ,
+// поточний документ не чіпаємо: недочитаний файл не має стирати роботу.
+struct EdDoc {
+    Gdiplus::Bitmap* src = nullptr;
+    std::vector<Gdiplus::Bitmap*> bank;
+    std::vector<EdObj> objs;
+    int exposure = 0, gamma = 100, contrast = 0, rot = 0;
+    bool mirror = false;
+    RECT crop = { 0, 0, 0, 0 };
+    int seq = 0, startNum = 1, counterGroup = 0, nextGrp = 1;
+    std::wstring name, source;
+    void free()
+    {
+        delete src; src = nullptr;
+        for (size_t i = 0; i < bank.size(); ++i) delete bank[i];
+        bank.clear();
+    }
+};
+
+// 0 — усе гаразд; 1 — не наш файл; 2 — новіша версія; 3 — файл пошкоджено.
+int EdDocRead(const wchar_t* path, EdDoc& d)
+{
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return 3;
+    LARGE_INTEGER sz = {};
+    if (!GetFileSizeEx(f, &sz) || sz.QuadPart < 12 || sz.QuadPart > 512LL * 1024 * 1024) {
+        CloseHandle(f);
+        return 1;
+    }
+    std::vector<BYTE> raw((size_t)sz.QuadPart);
+    DWORD got = 0;
+    const BOOL ok = ReadFile(f, raw.data(), (DWORD)raw.size(), &got, nullptr);
+    CloseHandle(f);
+    if (!ok || got != raw.size()) return 3;
+    if (memcmp(raw.data(), kEdDocMagic, sizeof(kEdDocMagic))) return 1;
+
+    EdRd r{ raw.data(), raw.size(), sizeof(kEdDocMagic), false };
+    WORD major = 0, minor = 0;
+    r.raw(&major, 2);
+    r.raw(&minor, 2);
+    if (major > kEdDocVerMajor) return 2;   // чесно кажемо, що зроблено новішою
+
+    while (!r.bad && r.at + 8 <= r.n) {
+        char t[4];
+        r.raw(t, 4);
+        const DWORD len = r.u32v();
+        if (r.bad || r.at + len > r.n) { r.bad = true; break; }
+        const size_t next = r.at + len;
+        if (!memcmp(t, "META", 4)) {
+            r.u64v();
+            d.name = r.str();
+            d.source = r.str();
+        } else if (!memcmp(t, "SRC ", 4)) {
+            d.src = EdPngDecode(raw.data() + r.at, len);
+        } else if (!memcmp(t, "BANK", 4)) {
+            const DWORD n = r.u32v();
+            if (n > 4096) { r.bad = true; break; }
+            for (DWORD i = 0; i < n && !r.bad; ++i) {
+                const DWORD blen = r.u32v();
+                if (r.bad || r.at + blen > next) { r.bad = true; break; }
+                d.bank.push_back(blen ? EdPngDecode(raw.data() + r.at, blen) : nullptr);
+                r.at += blen;
+            }
+        } else if (!memcmp(t, "RCPE", 4)) {
+            d.exposure = r.i32v(); d.gamma = r.i32v(); d.contrast = r.i32v();
+            d.rot = r.i32v(); d.mirror = r.u8v() != 0;
+        } else if (!memcmp(t, "CROP", 4)) {
+            d.crop.left = r.i32v(); d.crop.top = r.i32v();
+            d.crop.right = r.i32v(); d.crop.bottom = r.i32v();
+        } else if (!memcmp(t, "NUMS", 4)) {
+            d.seq = r.i32v(); d.startNum = r.i32v();
+            d.counterGroup = r.i32v(); d.nextGrp = r.i32v();
+        } else if (!memcmp(t, "OBJS", 4)) {
+            const DWORD n = r.u32v();
+            if (n > 100000) { r.bad = true; break; }
+            for (DWORD i = 0; i < n && !r.bad; ++i) {
+                char ot[4];
+                r.raw(ot, 4);
+                const DWORD olen = r.u32v();
+                if (r.bad || memcmp(ot, "OBJ ", 4) || r.at + olen > next) { r.bad = true; break; }
+                EdObj o = EdObj{};
+                o.alpha = 100;                 // типове на випадок старого файлу
+                const size_t oend = r.at + olen;
+                EdReadObj(r, oend, o);
+                r.at = oend;
+                d.objs.push_back(o);
+            }
+        }
+        r.at = next;                           // невідомий блок пропускаємо
+    }
+    if (r.bad || !d.src) { d.free(); return 3; }
+    return 0;
+}
+
+// Прочитане стає документом. Порядок важливий: спершу віддаємо старе, потім
+// беремо нове у власність, і лише тоді перебудовуємо картинку — інакше
+// EdRebuildImage працював би з наполовину заміненим станом.
+void EdDocApply(EdDoc& d, const wchar_t* path)
+{
+    for (size_t i = 0; i < g_edSrcBank.size(); ++i) delete g_edSrcBank[i];
+    g_edSrcBank.clear();
+    EdImageBankClear();
+    delete g_edCmp; g_edCmp = nullptr;
+    g_edCompare = false;
+
+    g_edSrcBank.push_back(d.src);
+    g_edSrcId = 0;
+    g_edSrc = d.src;
+    d.src = nullptr;                    // власність перейшла
+
+    g_edImgBank = d.bank;
+    d.bank.clear();
+
+    g_edExposure = d.exposure; g_edGamma = d.gamma; g_edContrast = d.contrast;
+    g_edRot = d.rot; g_edMirror = d.mirror;
+    EdRebuildImage();
+
+    g_edObjs = d.objs;
+    g_edCrop = d.crop;
+    g_edCropping = false;
+    g_edSeq = d.seq;
+    g_edStartNum = d.startNum;
+    g_edCounterGroup = d.counterGroup;
+    g_edNextGrp = d.nextGrp > 0 ? d.nextGrp : 1;
+
+    g_edUndo.clear();
+    g_edRedo.clear();
+    EdSelClear();
+    g_edTool = EdTool::Select;
+    g_edZoom = 1.0f;
+    g_edPanX = g_edPanY = 0;
+    g_edSaved = true;                   // щойно з файлу — змін ще немає
+    g_edToast = Str::Empty;
+    lstrcpynW(g_edSource, d.source.c_str(), MAX_PATH);
+    lstrcpynW(g_edDocPath, path ? path : L"", MAX_PATH);
+    lstrcpynW(g_edDocName, d.name.c_str(), 128);
+
+    if (g_edWnd) {
+        EdFitView();
+        EdLayout(g_edWnd);
+        InvalidateRect(g_edWnd, nullptr, TRUE);
+    }
+}
+
+// ---- бібліотека ---------------------------------------------------------
+//
+// %LOCALAPPDATA%, а не поруч із програмою: у Program Files без прав не пишуть,
+// і теку там не переживе перевстановлення.
+const wchar_t* EdLibDir()
+{
+    static wchar_t dir[MAX_PATH] = {};
+    if (dir[0]) return dir;
+    wchar_t* base = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &base)) || !base) return nullptr;
+    wsprintfW(dir, L"%s\\Little Helpers\\Library", base);
+    CoTaskMemFree(base);
+    // Створюємо обидва рівні: SHCreateDirectoryExW робить це одним викликом.
+    const int rc = SHCreateDirectoryExW(nullptr, dir, nullptr);
+    if (rc != ERROR_SUCCESS && rc != ERROR_ALREADY_EXISTS && rc != ERROR_FILE_EXISTS) {
+        dir[0] = 0;
+        return nullptr;
+    }
+    return dir;
+}
+
+// Імʼя запису — дата й час: воно ж стає типовою назвою в бібліотеці, і воно ж
+// сортує теку в хронологічному порядку без жодного індексу.
+void EdLibStamp(wchar_t* out, size_t cch)
+{
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    wsprintfW(out, L"%04d-%02d-%02d %02d-%02d-%02d",
+              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    (void)cch;
+}
+
+// ⚠ Впізнаємо за МАГІЧНИМИ БАЙТАМИ, а не за розширенням: перейменований файл
+// лишається тим, чим є, а чужий .lhshot не стає нашим.
+bool EdIsDocFile(const wchar_t* path)
+{
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    char head[sizeof(kEdDocMagic)] = {};
+    DWORD got = 0;
+    const BOOL ok = ReadFile(f, head, sizeof(head), &got, nullptr);
+    CloseHandle(f);
+    return ok && got == sizeof(head) && !memcmp(head, kEdDocMagic, sizeof(head));
+}
+
+// Відкрити документ: прочитати й застосувати. Повертає той самий код, що й
+// EdDocRead, тож той, хто викликав, сам вирішує, що сказати користувачеві.
+int EdDocOpen(const wchar_t* path)
+{
+    EdDoc d;
+    const int rc = EdDocRead(path, d);
+    if (rc == 0) EdDocApply(d, path);
+    d.free();
+    if (rc == 0 && g_edWnd) InvalidateRect(g_edWnd, nullptr, TRUE);
+    return rc;
+}
+
+// Зберегти в той самий файл, якщо він уже є, або у новий у бібліотеці.
+bool EdDocSaveTo(const wchar_t* path)
+{
+    if (!EdDocWrite(path, g_edDocName)) return false;
+    lstrcpynW(g_edDocPath, path, MAX_PATH);
+    g_edSaved = true;
+    return true;
+}
+
+// ⚠ Повторне натискання ПЕРЕЗАПИСУЄ той самий запис, а не плодить копії: шлях
+// документа памʼятається від першого збереження й живе до наступного знімка.
+bool EdStoreNow()
+{
+    if (!g_edSrc) return false;
+    if (!g_edDocPath[0]) {
+        const wchar_t* dir = EdLibDir();
+        if (!dir) return false;
+        wchar_t stamp[32];
+        EdLibStamp(stamp, 32);
+        if (!g_edDocName[0]) lstrcpynW(g_edDocName, stamp, 128);
+        wchar_t path[MAX_PATH];
+        wsprintfW(path, L"%s\\%s.lhshot", dir, stamp);
+        // Два знімки в одну секунду — рідкість, але не неможливість.
+        for (int i = 2; i < 100 && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES; ++i)
+            wsprintfW(path, L"%s\\%s (%d).lhshot", dir, stamp, i);
+        lstrcpynW(g_edDocPath, path, MAX_PATH);
+    }
+    return EdDocSaveTo(g_edDocPath);
+}
+
 bool EdSaveAs()
 {
     IFileSaveDialog* dlg = nullptr;
@@ -15243,8 +15859,15 @@ bool EdConfirmClose()
     // Порожній список позначок ще не означає «нічого не зроблено»: поворот
     // і тон — теж робота, і втрачати їх мовчки не можна.
     if (g_edSaved || (g_edObjs.empty() && EdToneDefault() && EdGeomDefault())) return true;
-    return MessageBoxW(g_edWnd, S(Str::EdAskDiscard), kAppName,
-                       MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
+    // ⚠ Три відповіді, а не дві (рішення власника 21.09): тепер є куди
+    // зберегти, тож «викинути роботу» перестало бути єдиним виходом.
+    const int r = MessageBoxW(g_edWnd, S(Str::EdAskSave), kAppName,
+                              MB_YESNOCANCEL | MB_ICONQUESTION);
+    if (r == IDCANCEL) return false;
+    if (r == IDNO) return true;                 // свідомо не зберігаємо
+    if (EdStoreNow()) return true;
+    MessageBoxW(g_edWnd, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
+    return false;                               // не змогли зберегти — не закриваємо
 }
 
 // ---- CAPS-21: гарячі клавіші -------------------------------------------
