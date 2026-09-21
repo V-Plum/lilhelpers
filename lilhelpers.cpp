@@ -16051,20 +16051,20 @@ bool EdDocWrite(const wchar_t* path, const std::wstring& name)
             const double k = kx < ky ? kx : ky;   // EdMin працює з int і зрізав би масштаб у нуль
             const int tw = k < 1.0 ? (int)(fw * k + 0.5) : fw;
             const int th = k < 1.0 ? (int)(fh * k + 0.5) : fh;
-            Gdiplus::Bitmap* small = new Gdiplus::Bitmap(tw > 0 ? tw : 1, th > 0 ? th : 1, PixelFormat32bppPARGB);
-            if (small && small->GetLastStatus() == Gdiplus::Ok) {
-                Gdiplus::Graphics gg(small);
+            Gdiplus::Bitmap* thumbBmp = new Gdiplus::Bitmap(tw > 0 ? tw : 1, th > 0 ? th : 1, PixelFormat32bppPARGB);
+            if (thumbBmp && thumbBmp->GetLastStatus() == Gdiplus::Ok) {
+                Gdiplus::Graphics gg(thumbBmp);
                 gg.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
                 gg.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
                 gg.DrawImage(flat, Gdiplus::Rect(0, 0, tw, th), 0, 0, fw, fh, Gdiplus::UnitPixel);
                 std::vector<BYTE> tp;
-                if (EdPngEncode(small, tp)) {
+                if (EdPngEncode(thumbBmp, tp)) {
                     const size_t ta = w.open("THMB");
                     w.raw(tp.data(), tp.size());
                     w.close(ta);
                 }
             }
-            delete small;
+            delete thumbBmp;
             delete flat;
         }
     }
