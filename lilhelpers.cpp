@@ -70,6 +70,7 @@
 #define ____FIReference_1_boolean_INTERFACE_DEFINED__
 #include <windows.foundation.h>
 #include <windows.storage.streams.h>
+#include <windows.storage.h>
 #include <windows.applicationmodel.datatransfer.h>
 #include <shobjidl.h>            // CAPS-36: IDataTransferManagerInterop
 #include <d2d1_3.h>
@@ -12496,6 +12497,7 @@ namespace EdShareNs {
 
 using namespace ABI::Windows::ApplicationModel::DataTransfer;
 using namespace ABI::Windows::Foundation;
+using namespace ABI::Windows::Storage;
 using namespace ABI::Windows::Storage::Streams;
 
 std::wstring g_tempFile;     // останній тимчасовий PNG — прибираємо за собою
@@ -12507,15 +12509,207 @@ void CleanTemp()
     g_tempFile.clear();
 }
 
+// ⚠ Заголовки MinGW оголошують IStorageFileStatics лише ВПЕРЕД — тіла в них
+// немає. Описуємо рівно перший метод: у таблиці він стоїть одразу після
+// IInspectable, тож зсув правильний, а решти ми не викликаємо.
+// ⚠ Ідентифікатор інтерфейсу здобуто НА ЖИВІЙ СИСТЕМІ (IActivationFactory →
+// GetIids), а не з памʼяті: перша ж спроба «згадати» його дала E_NOINTERFACE.
+const GUID kIID_StorageFileStatics =
+    { 0x5984c710, 0xdaf2, 0x43c8, { 0x8b, 0xb4, 0xa4, 0xd3, 0xea, 0xcf, 0xd0, 0x3f } };
+
+struct IStorageFileStaticsMin : public IInspectable
+{
+    virtual HRESULT STDMETHODCALLTYPE GetFileFromPathAsync(
+        HSTRING path, __FIAsyncOperation_1_Windows__CStorage__CStorageFile** op) = 0;
+};
+
+typedef ABI::Windows::Foundation::Collections::IIterable<IStorageItem*> ItemIterableBase;
+typedef ABI::Windows::Foundation::Collections::IIterator<IStorageItem*> ItemIteratorBase;
+
+// Список із ОДНОГО файлу. Готового вектора в ABI-шарі WinRT немає — у C++/WinRT
+// його дає single_threaded_vector, якого тут нема, — тож пишемо власний
+// перелічувач. Він короткий саме тому, що елемент завжди один.
+struct ItemIterator : ItemIteratorBase
+{
+    LONG rc = 1;
+    IStorageItem* item = nullptr;
+    bool done = false;
+    ~ItemIterator() { if (item) item->Release(); }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override
+    {
+        if (!out) return E_POINTER;
+        if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, __uuidof(IInspectable)) ||
+            IsEqualIID(riid, __uuidof(ItemIteratorBase))) {
+            *out = static_cast<ItemIteratorBase*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&rc); }
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        const LONG n = InterlockedDecrement(&rc);
+        if (n == 0) delete this;
+        return (ULONG)n;
+    }
+    HRESULT STDMETHODCALLTYPE GetIids(ULONG* n, IID** p) override { *n = 0; *p = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING* h) override { *h = nullptr; return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel* t) override { *t = BaseTrust; return S_OK; }
+
+    HRESULT STDMETHODCALLTYPE get_Current(IStorageItem** value) override
+    {
+        if (!value) return E_POINTER;
+        if (done || !item) { *value = nullptr; return E_BOUNDS; }
+        *value = item;
+        item->AddRef();
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_HasCurrent(boolean* value) override
+    {
+        if (!value) return E_POINTER;
+        *value = (!done && item) ? 1 : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE MoveNext(boolean* value) override
+    {
+        done = true;                         // елемент один: після нього кінець
+        if (value) *value = 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetMany(UINT32 cap, IStorageItem** items, UINT32* got) override
+    {
+        if (!got) return E_POINTER;
+        *got = 0;
+        if (done || !item || cap == 0) return S_OK;
+        items[0] = item;
+        item->AddRef();
+        *got = 1;
+        done = true;
+        return S_OK;
+    }
+};
+
+struct ItemList : ItemIterableBase
+{
+    LONG rc = 1;
+    IStorageItem* item = nullptr;
+    ~ItemList() { if (item) item->Release(); }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override
+    {
+        if (!out) return E_POINTER;
+        if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, __uuidof(IInspectable)) ||
+            IsEqualIID(riid, __uuidof(ItemIterableBase))) {
+            *out = static_cast<ItemIterableBase*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&rc); }
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        const LONG n = InterlockedDecrement(&rc);
+        if (n == 0) delete this;
+        return (ULONG)n;
+    }
+    HRESULT STDMETHODCALLTYPE GetIids(ULONG* n, IID** p) override { *n = 0; *p = nullptr; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetRuntimeClassName(HSTRING* h) override { *h = nullptr; return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetTrustLevel(TrustLevel* t) override { *t = BaseTrust; return S_OK; }
+
+    HRESULT STDMETHODCALLTYPE First(ItemIteratorBase** value) override
+    {
+        if (!value) return E_POINTER;
+        ItemIterator* it = new ItemIterator();
+        it->item = item;
+        if (item) item->AddRef();
+        *value = it;
+        return S_OK;
+    }
+};
+
+// StorageFile за шляхом. Операція асинхронна, але чекаємо ми її ЗАЗДАЛЕГІДЬ —
+// до показу меню, а не в обробнику запиту: там доведення (deferral) коштувало б
+// ще одного COM-класу заради того самого файлу.
+IStorageFile* OpenStorageFile(const std::wstring& path)
+{
+    IStorageFileStaticsMin* sf = nullptr;
+    HSTRING_HEADER ch; HSTRING cls = nullptr;
+    const wchar_t* n = RuntimeClass_Windows_Storage_StorageFile;
+    if (FAILED(WindowsCreateStringReference(n, (UINT32)wcslen(n), &ch, &cls))) return nullptr;
+    if (FAILED(RoGetActivationFactory(cls, kIID_StorageFileStatics, (void**)&sf)) || !sf)
+        return nullptr;
+
+    HSTRING_HEADER ph; HSTRING ps = nullptr;
+    __FIAsyncOperation_1_Windows__CStorage__CStorageFile* op = nullptr;
+    IStorageFile* file = nullptr;
+    if (SUCCEEDED(WindowsCreateStringReference(path.c_str(), (UINT32)path.size(), &ph, &ps)) &&
+        SUCCEEDED(sf->GetFileFromPathAsync(ps, &op)) && op) {
+        IAsyncInfo* info = nullptr;
+        if (SUCCEEDED(op->QueryInterface(__uuidof(IAsyncInfo), (void**)&info)) && info) {
+            AsyncStatus st = AsyncStatus::Started;
+            // Опитуємо, а не вішаємо обробник завершення: операція живе на
+            // пулі потоків і до нашого циклу повідомлень діла не має. Стеля в
+            // три секунди — щоб редактор не завис, якщо файлова система стала.
+            for (int i = 0; i < 600; ++i) {
+                if (FAILED(info->get_Status(&st)) || st != AsyncStatus::Started) break;
+                Sleep(5);
+            }
+            if (st == AsyncStatus::Completed) op->GetResults(&file);
+            info->Release();
+        }
+        op->Release();
+    }
+    sf->Release();
+    return file;
+}
+
+// Посилання на потік для SetBitmap. Перший шлях — із самого StorageFile;
+// запасний — синхронний потік ShCore просто за шляхом.
+IRandomAccessStreamReference* StreamRef(IStorageFile* file, const std::wstring& path)
+{
+    IRandomAccessStreamReferenceStatics* st = nullptr;
+    HSTRING_HEADER sh; HSTRING scls = nullptr;
+    const wchar_t* n = RuntimeClass_Windows_Storage_Streams_RandomAccessStreamReference;
+    if (FAILED(WindowsCreateStringReference(n, (UINT32)wcslen(n), &sh, &scls))) return nullptr;
+    if (FAILED(RoGetActivationFactory(scls, __uuidof(IRandomAccessStreamReferenceStatics),
+                                      (void**)&st)) || !st) return nullptr;
+    IRandomAccessStreamReference* ref = nullptr;
+    if (file) st->CreateFromFile(file, &ref);
+    if (!ref) {
+        IRandomAccessStream* ras = nullptr;
+        if (SUCCEEDED(CreateRandomAccessStreamOnFile(path.c_str(), STGM_READ,
+                                                     __uuidof(IRandomAccessStream), (void**)&ras)) && ras) {
+            st->CreateFromStream(ras, &ref);
+            ras->Release();
+        }
+    }
+    st->Release();
+    return ref;
+}
+
 // ⚠ Псевдонім потрібен не для краси: __uuidof у MinGW — МАКРОС, і кома між
 // параметрами шаблону всередині нього розбирається як кома аргументів макроса.
 typedef ITypedEventHandler<DataTransferManager*, DataRequestedEventArgs*> ShareHandlerBase;
 
-// Обробник запиту даних. Живе рівно стільки, скільки система його тримає.
+// Обробник запиту даних. Живе рівно стільки, скільки система його тримає, і
+// НІЧОГО не добуває сам: усе готове ще до показу меню, тож Invoke синхронний.
 struct Handler : public ShareHandlerBase
 {
     LONG rc = 1;
-    std::wstring file, title;
+    std::wstring title;
+    IStorageFile* file = nullptr;
+    IRandomAccessStreamReference* ref = nullptr;
+
+    ~Handler()
+    {
+        if (file) file->Release();
+        if (ref) ref->Release();
+    }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override
     {
@@ -12551,40 +12745,19 @@ struct Handler : public ShareHandlerBase
                     props->put_Title(ts);
                 props->Release();
             }
-            // Файл → URI → посилання на потік. Усе синхронне: асинхронний
-            // StorageFile вимагав би відкладення (deferral) і власного
-            // обробника завершення заради того самого результату.
-            std::wstring uriText = L"file:///";
-            for (size_t i = 0; i < file.size(); ++i)
-                uriText += (file[i] == L'\\') ? L'/' : file[i];
-            IUriRuntimeClassFactory* uriF = nullptr;
-            HSTRING_HEADER ch; HSTRING cls = nullptr;
-            if (SUCCEEDED(WindowsCreateStringReference(RuntimeClass_Windows_Foundation_Uri,
-                    (UINT32)wcslen(RuntimeClass_Windows_Foundation_Uri), &ch, &cls)) &&
-                SUCCEEDED(RoGetActivationFactory(cls, __uuidof(IUriRuntimeClassFactory), (void**)&uriF)) && uriF) {
-                HSTRING_HEADER uh; HSTRING us = nullptr;
-                IUriRuntimeClass* uri = nullptr;
-                if (SUCCEEDED(WindowsCreateStringReference(uriText.c_str(), (UINT32)uriText.size(), &uh, &us)) &&
-                    SUCCEEDED(uriF->CreateUri(us, &uri)) && uri) {
-                    IRandomAccessStreamReferenceStatics* st = nullptr;
-                    HSTRING_HEADER sh; HSTRING scls = nullptr;
-                    if (SUCCEEDED(WindowsCreateStringReference(
-                            RuntimeClass_Windows_Storage_Streams_RandomAccessStreamReference,
-                            (UINT32)wcslen(RuntimeClass_Windows_Storage_Streams_RandomAccessStreamReference),
-                            &sh, &scls)) &&
-                        SUCCEEDED(RoGetActivationFactory(scls, __uuidof(IRandomAccessStreamReferenceStatics),
-                                                         (void**)&st)) && st) {
-                        IRandomAccessStreamReference* ref = nullptr;
-                        if (SUCCEEDED(st->CreateFromUri(uri, &ref)) && ref) {
-                            pkg->SetBitmap(ref);
-                            ref->Release();
-                        }
-                        st->Release();
-                    }
-                    uri->Release();
+            // ⚠ Кладемо ОБИДВА формати. Одні цілі (месенджери, пошта) беруть
+            // зображення, інші (редактори, Провідник) — файл; той, хто вміє
+            // лише щось одне, мовчки отримував порожнечу.
+            if (file) {
+                IStorageItem* item = nullptr;
+                if (SUCCEEDED(file->QueryInterface(__uuidof(IStorageItem), (void**)&item)) && item) {
+                    ItemList* list = new ItemList();
+                    list->item = item;          // посилання переходить до списку
+                    pkg->SetStorageItems(list, true);
+                    list->Release();
                 }
-                uriF->Release();
             }
+            if (ref) pkg->SetBitmap(ref);
             pkg->Release();
         }
         req->Release();
@@ -12600,6 +12773,20 @@ IDataTransferManagerInterop* Interop()
     if (FAILED(WindowsCreateStringReference(name, (UINT32)wcslen(name), &hh, &cls))) return nullptr;
     if (FAILED(RoGetActivationFactory(cls, IID_IDataTransferManagerInterop, (void**)&it))) return nullptr;
     return it;
+}
+
+// ⚠ Менеджер у вікна ОДИН, і кожне поширення додавало б іще один обробник.
+// Тримаємо реєстрацію рівно одну: попередню знімаємо перед новою.
+IDataTransferManager* g_dtm = nullptr;
+EventRegistrationToken g_tok = {};
+
+void Unhook()
+{
+    if (!g_dtm) return;
+    if (g_tok.value) g_dtm->remove_DataRequested(g_tok);
+    g_dtm->Release();
+    g_dtm = nullptr;
+    g_tok.value = 0;
 }
 
 }  // namespace EdShareNs
@@ -14962,6 +15149,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         delete g_edCmp; g_edCmp = nullptr;
         g_edCompare = false;
         EdImageBankClear();
+        EdShareNs::Unhook();
         EdShareNs::CleanTemp();
         g_edObjs.clear();
         g_edUndo.clear();
@@ -15349,22 +15537,47 @@ void EdShareNow(HWND hwnd)
     }
     EdShareNs::g_tempFile = path;
 
+    // ⚠ Файл і потік добуваємо ЗАРАЗ, поки можна чекати: обробник запиту
+    // мусить бути синхронним, інакше довелося б доведення (deferral).
+    ABI::Windows::Storage::IStorageFile* sfile = EdShareNs::OpenStorageFile(path);
+    ABI::Windows::Storage::Streams::IRandomAccessStreamReference* sref =
+        EdShareNs::StreamRef(sfile, path);
+    if (!sfile && !sref) {
+        if (sfile) sfile->Release();
+        MessageBoxW(hwnd, S(Str::EdErrShare), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+
     IDataTransferManagerInterop* it = EdShareNs::Interop();
-    if (!it) { MessageBoxW(hwnd, S(Str::EdErrShare), kAppName, MB_OK | MB_ICONWARNING); return; }
+    if (!it) {
+        if (sfile) sfile->Release();
+        if (sref) sref->Release();
+        MessageBoxW(hwnd, S(Str::EdErrShare), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    EdShareNs::Unhook();
     ABI::Windows::ApplicationModel::DataTransfer::IDataTransferManager* dtm = nullptr;
     HRESULT hr = it->GetForWindow(hwnd, __uuidof(ABI::Windows::ApplicationModel::DataTransfer::IDataTransferManager),
                                   (void**)&dtm);
     if (SUCCEEDED(hr) && dtm) {
         EdShareNs::Handler* h = new EdShareNs::Handler();
-        h->file  = path;
         h->title = S(Str::EdTitle);
-        EventRegistrationToken tok = {};
-        hr = dtm->add_DataRequested(h, &tok);
+        h->file  = sfile;                   // посилання переходять до обробника
+        h->ref   = sref;
+        sfile = nullptr;
+        sref = nullptr;
+        hr = dtm->add_DataRequested(h, &EdShareNs::g_tok);
         h->Release();                       // тримає тепер система
-        if (SUCCEEDED(hr)) hr = it->ShowShareUIForWindow(hwnd);
-        dtm->Release();
+        if (SUCCEEDED(hr)) {
+            EdShareNs::g_dtm = dtm;         // знімемо реєстрацію наступного разу
+            hr = it->ShowShareUIForWindow(hwnd);
+        } else {
+            dtm->Release();
+        }
     }
     it->Release();
+    if (sfile) sfile->Release();
+    if (sref) sref->Release();
     if (FAILED(hr)) MessageBoxW(hwnd, S(Str::EdErrShare), kAppName, MB_OK | MB_ICONWARNING);
 }
 
