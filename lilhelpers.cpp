@@ -173,6 +173,13 @@ constexpr int  IDC_PEEK_ENABLE   = 180;
 constexpr int  IDC_CAP_HK1       = 190;   // CAPS-21: три поля перехоплення
 constexpr int  IDC_CAP_HKRESET   = 193;
 constexpr int  IDC_CAP_KEEPTOOL  = 194;   // CAPS-23
+constexpr int  IDC_LIB_BYCOUNT   = 196;   // CAPS-39: ретенція бібліотеки
+constexpr int  IDC_LIB_BYSIZE    = 197;
+constexpr int  IDC_LIB_COUNT     = 198;
+constexpr int  IDC_LIB_MB        = 199;
+constexpr int  IDC_LIB_SHOW      = 200;
+constexpr int  IDC_LIB_CLEAR     = 201;
+constexpr int  IDC_LIB_NOW       = 202;
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -473,6 +480,53 @@ X(EdTipSaveMore,      L"Експорт у PNG/JPG або файл поза бі�
                       L"Export to PNG/JPG or a file outside the library")                              \
 X(EdSaveDocTitle,     L"Зберегти знімок із позначками", L"Save snapshot with marks")                   \
 X(EdFmtDoc,           L"Знімок Little Helpers",         L"Little Helpers snapshot")                    \
+X(EdLibTitle,         L"Бібліотека",                    L"Library")                                    \
+X(EdLibBack,          L"Назад до знімка",               L"Back to the snapshot")                       \
+X(EdLibFmtChip,       L"%d із %d · %d МБ",              L"%d of %d · %d MB")                           \
+X(EdLibFmtChipMb,     L"%d МБ із %d · %d знімків",      L"%d of %d MB · %d snapshots")                 \
+X(EdLibFull,          L"ліміт досягнуто: наступне збереження витіснить найстаріший",                    \
+                      L"limit reached: the next save evicts the oldest")                               \
+X(EdLibEmptyTitle,    L"Тут будуть ваші знімки",        L"Your snapshots will live here")              \
+X(EdLibEmptyBody,     L"Натисніть «Зберегти» (Ctrl+S) у редакторі — знімок ляже сюди разом із "         \
+                      L"позначками, і до нього можна буде повернутися.",                                \
+                      L"Press Save (Ctrl+S) in the editor — the snapshot lands here together with "     \
+                      L"its marks, and you can come back to it.")                                      \
+X(EdLibOpenBtn,       L"Відкрити",                      L"Open")                                       \
+X(EdLibShowBtn,       L"Показати в Провіднику",         L"Show in Explorer")                           \
+X(EdLibDelBtn,        L"Видалити",                      L"Delete")                                     \
+X(EdLibRenameTip,     L"Перейменувати (F2)",            L"Rename (F2)")                                \
+X(EdLibKeys,          L"Enter відкриває, F2 перейменовує, Delete — у кошик, Shift+Delete — назавжди.",    \
+                      L"Enter opens, F2 renames, Delete moves to the Recycle Bin, Shift+Delete erases.") \
+X(EdLibAskDel,        L"Видалити «%s»?",                L"Delete \u201c%s\u201d?")                    \
+X(EdLibAskBin,        L"Файл піде в кошик Windows — звідти його ще можна повернути.",                   \
+                      L"The file goes to the Windows Recycle Bin; it can still be restored from there.") \
+X(EdLibAskPerm,       L"Файл буде видалено НАЗАВЖДИ, без кошика.",                                      \
+                      L"The file will be erased PERMANENTLY, bypassing the Recycle Bin.")               \
+X(EdLibCancel,        L"Скасувати",                     L"Cancel")                                     \
+X(EdLibFactSize,      L"Розмір",                        L"Size")                                       \
+X(EdLibFactMarks,     L"Позначки",                      L"Marks")                                      \
+X(EdLibFactFile,      L"Файл",                          L"File")                                       \
+X(EdLibFactWhen,      L"Збережено",                     L"Saved")                                      \
+X(EdLibMarks0,        L"без позначок",                  L"no marks")                                   \
+X(EdLibMarks1,        L"%d позначка",                   L"%d mark")                                    \
+X(EdLibMarks2,        L"%d позначки",                   L"%d marks")                                   \
+X(EdLibMarks5,        L"%d позначок",                   L"%d marks")                                   \
+X(EdLibNowOpen,       L"у редакторі",                   L"in the editor")                              \
+X(EdLibStatus,        L"Бібліотека · %d знімків",       L"Library · %d snapshots")                     \
+X(EdLibErrDel,        L"Не вдалося видалити файл.",     L"Could not delete the file.")                 \
+X(EdLibErrRename,     L"Не вдалося перейменувати знімок.", L"Could not rename the snapshot.")          \
+X(CapSecLib,          L"Бібліотека знімків",            L"Snapshot library")                           \
+X(CapLibByCount,      L"Останні",                       L"Keep the last")                              \
+X(CapLibCountUnit,    L"знімків",                       L"snapshots")                                  \
+X(CapLibBySize,       L"Не більше",                     L"No more than")                               \
+X(CapLibSizeUnit,     L"МБ",                            L"MB")                                         \
+X(CapLibHint,         L"Найстаріші йдуть у кошик, коли зберігається новий.",                            \
+                      L"The oldest go to the Recycle Bin when a new one is saved.")                    \
+X(CapLibNow,          L"Зараз: %d знімків, %d МБ",       L"Now: %d snapshots, %d MB")                   \
+X(CapLibShow,         L"Показати теку",                 L"Show folder")                                \
+X(CapLibClear,        L"Очистити…",                     L"Clear…")                                     \
+X(CapLibAskClear,     L"Перемістити всі %d знімків бібліотеки в кошик?",                                \
+                      L"Move all %d library snapshots to the Recycle Bin?")                           \
 X(EdTipStore,         L"Зберегти в бібліотеку разом із позначками",                                     \
                       L"Save to the library together with the marks")                                  \
 X(EdStored,           L"У бібліотеці",                  L"In the library")                             \
@@ -7740,7 +7794,9 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Aspect, CropReset, CropOk, CropNo,
                    RotL, RotR, FlipH, FlipV, Exposure, Gamma, Contrast,
                    ToneReset, Compare, GroupEdit, GroupDel, Pick, PickItem,
-                   SelAlign, SelGroup, SizeImg, SizeCan, Store, SaveMenu };
+                   SelAlign, SelGroup, SizeImg, SizeCan, Store, SaveMenu,
+                   LibArea, LibBack, LibCard, LibRename, LibOpen, LibShow, LibDel,
+                   LibDelYes, LibDelNo };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7777,6 +7833,40 @@ wchar_t  g_edSource[MAX_PATH] = {};
 // означає «ще ніде»: Ctrl+S тоді заводить новий запис, а не перезаписує.
 wchar_t  g_edDocPath[MAX_PATH] = {};
 wchar_t  g_edDocName[128] = {};
+
+// CAPS-39: бібліотека — панель поверх полотна. Один запис на файл; мініатюра
+// береться з блоку THMB самого файлу (пишеться при збереженні), тож бібліотека
+// не читає повних знімків і не плодить окремих файлів мініатюр.
+struct EdLibItem {
+    std::wstring path, name, file;
+    ULONGLONG created = 0;     // FILETIME
+    ULONGLONG bytes = 0;
+    int w = 0, h = 0, marks = 0;
+    Gdiplus::Bitmap* thumb = nullptr;
+};
+std::vector<EdLibItem> g_edLib;
+bool   g_edLibOpen = false;
+int    g_edLibSel = -1;
+int    g_edLibScroll = 0;          // зсув сітки в пікселях екрана
+int    g_edLibRows = 0;            // скільки рядів займає сітка (для стелі прокрутки)
+bool   g_edLibConfirm = false;     // запит «видалити?» на місці кнопок
+bool   g_edLibConfirmPerm = false; // назавжди (Shift), а не в кошик
+HWND   g_edLibEdit = nullptr;      // поле перейменування в картці
+int    g_edLibEditIdx = -1;
+ULONGLONG g_edLibBytes = 0;        // сумарний обсяг теки
+RECT   g_edLibRcArea = {}, g_edLibRcPreview = {}, g_edLibRcName = {}, g_edLibRcFacts = {},
+       g_edLibRcGrid = {}, g_edLibRcHint = {};
+int    g_edLibThumbH = 0;
+
+const wchar_t* kRegLibRetMode  = L"LibRetMode";    // 0 — кількість, 1 — обсяг у МБ
+const wchar_t* kRegLibRetCount = L"LibRetCount";
+const wchar_t* kRegLibRetMB    = L"LibRetMB";
+int EdLibRetMode()  { return RegLoadInt(kRegLibRetMode, 0, 0, 1); }
+int EdLibRetLimit()
+{
+    return EdLibRetMode() == 0 ? RegLoadInt(kRegLibRetCount, 100, 1, 100000)
+                               : RegLoadInt(kRegLibRetMB, 500, 1, 1000000);
+}
 bool     g_edHdr = false, g_edToneMapped = false;   // CAPS-21: звідки прийшов кадр
 float    g_edSdrWhite = -1.0f;                      // ніт; -1 = система не сказала
 
@@ -7821,6 +7911,23 @@ void EdSaveDocAs(HWND hwnd);
 void EdSaveMenu(HWND hwnd, const RECT& btn);
 void EdTick(EdHit what);
 void EdLibStamp(wchar_t* out, size_t cch);
+void EdLibToggle(HWND hwnd);
+void EdLibClose(HWND hwnd);
+void EdLibOpenSel(HWND hwnd);
+void EdLibShowSel();
+void EdLibAskDelete(HWND hwnd, bool permanent);
+void EdLibDeleteSel(HWND hwnd);
+void EdLibRenameBegin(HWND hwnd);
+void EdLibRenameEnd(HWND hwnd, bool apply);
+void EdLibSelect(HWND hwnd, int idx);
+int  EdLibRetMode();
+int  EdLibRetLimit();
+void EdLibRetention();
+bool EdLibRemoveFile(const std::wstring& path, bool permanent);
+void EdLibFree();
+void LibCount(int& n, ULONGLONG& bytes);
+void LibRefreshNow();
+void LibClearAll();
 extern const wchar_t* kRegEdLast;   // визначено біля решти ключів реєстру редактора
 const wchar_t* EdLibDir();            // тека бібліотеки, створюється на місці
 void EdToast(Str s);
@@ -9298,6 +9405,9 @@ void EdLayout(HWND hwnd)
         x += EdTextWidth(dc, L"8888 × 8888", g_edFont) + EdPx(12) + 1 + EdPx(12);
         x += EdPx(190) + EdPx(12) + 1 + EdPx(12);   // місце під опис виділення
 
+        // Поки відкрита бібліотека, масштаб і виходи не мають до чого стосуватись
+        // — їхніх ділянок немає, і малювання їх теж пропускає.
+        if (!g_edLibOpen) {
         RECT zs = EdPill(x, cy, EdPx(104), EdPx(20)); EdAdd(zs, EdHit::Zoom, 0);
         x = zs.right + EdPx(8) + EdPx(46) + EdPx(8);
         const int hw = EdTextWidth(dc, S(Str::EdZoom100), g_edFont) + EdPx(18);
@@ -9318,6 +9428,7 @@ void EdLayout(HWND hwnd)
         rx -= sw;
         RECT rcStore = { rx, cy - bh / 2, rx + sw, cy + bh / 2 };
         EdAdd(rcStore, EdHit::Store, 0);
+        }
         ReleaseDC(hwnd, dc);
     }
 
@@ -9343,6 +9454,77 @@ void EdLayout(HWND hwnd)
             for (int i = 0; i < n; ++i) {
                 RECT r = { btn->left, top + i * ih, btn->left + iw, top + (i + 1) * ih };
                 EdAdd(r, EdHit::PickItem, i);
+            }
+        }
+    }
+
+    // CAPS-39: бібліотека — поверх смуги, полотна й панелі; додається ОСТАННЬОЮ,
+    // щоб EdFind (він іде з кінця) бачив її ділянки раніше за все під нею.
+    if (g_edLibOpen) {
+        RECT area = { g_edRcRail.right, g_edRcStrip.top, rc.right, g_edRcStatus.top };
+        g_edLibRcArea = area;
+        EdAdd(area, EdHit::LibArea, 0);
+        const int hdr = EdPx(56), pad = EdPx(20), colW = EdPx(400), gap = EdPx(14);
+        RECT back = EdPill(area.left + pad, area.top + hdr / 2, EdPx(32), EdPx(32));
+        EdAdd(back, EdHit::LibBack, 0);
+
+        const bool sel = (g_edLibSel >= 0 && g_edLibSel < (int)g_edLib.size());
+        const int cx0 = area.right - colW;
+        if (sel) {
+            int y = area.top + hdr + EdPx(18);
+            g_edLibRcPreview = { cx0 + pad, y, area.right - pad, y + EdPx(200) };
+            y = g_edLibRcPreview.bottom + gap;
+            RECT rn = { area.right - pad - EdPx(28), y, area.right - pad, y + EdPx(28) };
+            EdAdd(rn, EdHit::LibRename, 0);
+            g_edLibRcName = { cx0 + pad, y, rn.left - EdPx(8), y + EdPx(28) };
+            y += EdPx(28) + EdPx(4) + EdPx(18) + gap;         // назва, «збережено», проміжок
+            g_edLibRcFacts = { cx0 + pad, y, area.right - pad, y + EdPx(96) };
+
+            int by = area.bottom - pad;
+            g_edLibRcHint = { cx0 + pad, by - EdPx(34), area.right - pad, by };
+            by -= EdPx(34) + EdPx(8);
+            if (g_edLibConfirm) {
+                RECT no  = { (cx0 + pad + area.right - pad) / 2 + EdPx(4), by - EdPx(32), area.right - pad, by };
+                RECT yes = { cx0 + pad, by - EdPx(32), (cx0 + pad + area.right - pad) / 2 - EdPx(4), by };
+                EdAdd(yes, EdHit::LibDelYes, 0);
+                EdAdd(no,  EdHit::LibDelNo, 0);
+            } else {
+                RECT del = { area.right - pad - EdPx(96), by - EdPx(32), area.right - pad, by };
+                RECT sh  = { cx0 + pad, by - EdPx(32), del.left - EdPx(8), by };
+                EdAdd(sh,  EdHit::LibShow, 0);
+                EdAdd(del, EdHit::LibDel, 0);
+                by -= EdPx(32) + EdPx(8);
+                RECT op = { cx0 + pad, by - EdPx(36), area.right - pad, by };
+                EdAdd(op, EdHit::LibOpen, 0);
+            }
+        }
+
+        // сітка по чотири; прокрутка коліщатком
+        RECT grid = { area.left + pad, area.top + hdr + pad, cx0 - pad, area.bottom - pad };
+        g_edLibRcGrid = grid;
+        const int cardW = (grid.right - grid.left - 3 * gap) / 4;
+        const int thumbH = (int)((cardW - 2 * EdPx(8)) * 0.6 + 0.5);
+        g_edLibThumbH = thumbH;
+        const int cardH = EdPx(8) + thumbH + EdPx(8) + EdPx(36) + EdPx(8);
+        const int n = (int)g_edLib.size();
+        const int rows = (n + 3) / 4;
+        g_edLibRows = rows;
+        const int total = rows > 0 ? rows * cardH + (rows - 1) * gap : 0;
+        const int maxScroll = total - (grid.bottom - grid.top);
+        if (g_edLibScroll > (maxScroll > 0 ? maxScroll : 0)) g_edLibScroll = maxScroll > 0 ? maxScroll : 0;
+        if (g_edLibScroll < 0) g_edLibScroll = 0;
+        for (int i = 0; i < n; ++i) {
+            const int r = i / 4, c = i % 4;
+            const int x = grid.left + c * (cardW + gap);
+            const int y = grid.top + r * (cardH + gap) - g_edLibScroll;
+            if (y + cardH < grid.top || y > grid.bottom) continue;
+            RECT card = { x, y, x + cardW, y + cardH };
+            EdAdd(card, EdHit::LibCard, i);
+            if (i == g_edLibSel) {
+                // місце поля перейменування — там, де стоїть назва
+                RECT nm = { x + EdPx(8), y + EdPx(8) + thumbH + EdPx(6), x + cardW - EdPx(8),
+                            y + EdPx(8) + thumbH + EdPx(6) + EdPx(22) };
+                EdAdd(nm, EdHit::LibRename, 1);
             }
         }
     }
@@ -9668,6 +9850,7 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     HBRUSH b = CreateSolidBrush(t.surface);
     FillRect(dc, &g_edRcStrip, b);
     DeleteObject(b);
+    if (g_edLibOpen) return;          // бібліотека накриває смугу цілком
     RECT line = { g_edRcStrip.left, g_edRcStrip.bottom - 1, g_edRcStrip.right, g_edRcStrip.bottom };
     b = CreateSolidBrush(t.border);
     FillRect(dc, &line, b);
@@ -11380,6 +11563,234 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     g.Restore(st);
 }
 
+// ---- CAPS-39: бібліотека ---------------------------------------------------
+
+std::wstring EdLibMarksText(int n)
+{
+    wchar_t b[64];
+    if (n <= 0) return S(Str::EdLibMarks0);
+    const int m10 = n % 10, m100 = n % 100;
+    const Str f = (m10 == 1 && m100 != 11) ? Str::EdLibMarks1
+                : (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) ? Str::EdLibMarks2 : Str::EdLibMarks5;
+    wsprintfW(b, S(f), n);
+    return b;
+}
+
+void EdLibWhen(ULONGLONG ft, wchar_t* out, size_t cch, bool full)
+{
+    FILETIME f; f.dwLowDateTime = (DWORD)ft; f.dwHighDateTime = (DWORD)(ft >> 32);
+    FILETIME l; FileTimeToLocalFileTime(&f, &l);
+    SYSTEMTIME st; FileTimeToSystemTime(&l, &st);
+    if (full) wsprintfW(out, L"%02d.%02d.%04d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);
+    else      wsprintfW(out, L"%02d.%02d %02d:%02d", st.wDay, st.wMonth, st.wHour, st.wMinute);
+    (void)cch;
+}
+
+// Мініатюра вписується в поле, з полями по центру — на світлій підкладці,
+// щоб прозорий знімок не «зливався» з карткою.
+void EdLibThumb(Gdiplus::Graphics& g, Gdiplus::Bitmap* bmp, const RECT& box, const EdTheme& t)
+{
+    Gdiplus::Color fill = EdC(g_edDark ? RGB(24, 24, 28) : RGB(255, 255, 255)), bd = EdC(t.border);
+    EdFillRound(g, box, (float)EdPx(4), &fill, &bd);
+    if (!bmp) return;
+    const int bw = (int)bmp->GetWidth(), bh = (int)bmp->GetHeight();
+    const int aw = box.right - box.left - 2, ah = box.bottom - box.top - 2;
+    if (bw < 1 || bh < 1 || aw < 2 || ah < 2) return;
+    const double kx = (double)aw / bw, ky = (double)ah / bh;
+    const double k = kx < ky ? kx : ky;
+    const int dw = (int)(bw * k), dh = (int)(bh * k);
+    const int dx = box.left + 1 + (aw - dw) / 2, dy = box.top + 1 + (ah - dh) / 2;
+    g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    g.DrawImage(bmp, Gdiplus::Rect(dx, dy, dw, dh), 0, 0, bw, bh, Gdiplus::UnitPixel);
+}
+
+void EdPaintLib(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
+{
+    if (!g_edLibOpen) return;
+    const RECT& area = g_edLibRcArea;
+    HBRUSH b = CreateSolidBrush(t.surface);
+    FillRect(dc, &area, b);
+    DeleteObject(b);
+    const int hdr = EdPx(56), pad = EdPx(20);
+    wchar_t buf[256];
+
+    // шапка
+    RECT hl = { area.left, area.top + hdr - 1, area.right, area.top + hdr };
+    b = CreateSolidBrush(t.border); FillRect(dc, &hl, b); DeleteObject(b);
+    if (const RECT* bk = EdRegionRect(EdHit::LibBack, 0)) {
+        EdPaintButton(g, *bk, t, false, g_edHotWhat == EdHit::LibBack, false);
+        EdIcon(g, IcoChevL, EdIconBox(*bk), EdC(t.text), 1.8f);
+        RECT tt = { bk->right + EdPx(14), area.top, bk->right + EdPx(14) + EdPx(140), area.top + hdr };
+        EdDrawText(dc, tt, S(Str::EdLibTitle), g_edFontBold, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        // чіп: скільки з ліміту
+        const int n = (int)g_edLib.size(), mb = (int)(g_edLibBytes / (1024 * 1024));
+        const int limit = EdLibRetLimit();
+        if (EdLibRetMode() == 0) wsprintfW(buf, S(Str::EdLibFmtChip), n, limit, mb);
+        else                     wsprintfW(buf, S(Str::EdLibFmtChipMb), mb, limit, n);
+        const int cw = EdTextWidth(dc, buf, g_edFontSmall) + EdPx(18);
+        RECT chip = EdPill(tt.left + EdTextWidth(dc, S(Str::EdLibTitle), g_edFontBold) + EdPx(14),
+                           area.top + hdr / 2, cw, EdPx(22));
+        Gdiplus::Color cf = EdC(t.accentBg);
+        EdFillRound(g, chip, (float)EdPx(11), &cf, nullptr);
+        EdDrawText(dc, chip, buf, g_edFontSmall, t.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        const bool full = (EdLibRetMode() == 0) ? n >= limit : mb >= limit;
+        if (full) {
+            RECT wr = { chip.right + EdPx(12), area.top, area.right - pad, area.top + hdr };
+            EdDrawText(dc, wr, S(Str::EdLibFull), g_edFontSmall, g_edDark ? RGB(240, 180, 41) : RGB(150, 100, 0),
+                       DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+    }
+
+    // порожня бібліотека
+    if (g_edLib.empty()) {
+        RECT c = { area.left + pad, area.top + hdr, area.right - pad, area.bottom - pad };
+        const int cy = (c.top + c.bottom) / 2;
+        RECT t1 = { c.left, cy - EdPx(30), c.right, cy - EdPx(6) };
+        EdDrawText(dc, t1, S(Str::EdLibEmptyTitle), g_edFontBold, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        RECT t2 = { (c.left + c.right) / 2 - EdPx(260), cy, (c.left + c.right) / 2 + EdPx(260), cy + EdPx(60) };
+        EdDrawText(dc, t2, S(Str::EdLibEmptyBody), g_edFont, t.text2, DT_CENTER | DT_WORDBREAK);
+        return;
+    }
+
+    // сітка карток — з відсіканням по полю сітки
+    const RECT& grid = g_edLibRcGrid;
+    g.SetClip(Gdiplus::Rect(grid.left, grid.top, grid.right - grid.left, grid.bottom - grid.top));
+    HRGN clip = CreateRectRgnIndirect(&grid);
+    SelectClipRgn(dc, clip);
+    for (size_t k = 0; k < g_edRegions.size(); ++k) {
+        if (g_edRegions[k].what != EdHit::LibCard) continue;
+        const int i = g_edRegions[k].idx;
+        if (i < 0 || i >= (int)g_edLib.size()) continue;
+        const EdLibItem& it = g_edLib[i];
+        const RECT& r = g_edRegions[k].r;
+        const bool selected = (i == g_edLibSel);
+        const bool hot = (g_edHotWhat == EdHit::LibCard && g_edHotIdx == i);
+        Gdiplus::Color fill = EdC(selected ? t.accentBg : (hot ? t.hot : t.surface));
+        Gdiplus::Color bd = EdC(selected ? t.accent : (hot ? t.accent : t.border), selected ? 255 : (hot ? 140 : 255));
+        EdFillRound(g, r, (float)EdPx(8), &fill, &bd);
+        if (selected) {
+            Gdiplus::Pen p2(EdC(t.accent), 2.0f);
+            g.DrawRectangle(&p2, (float)r.left + 1.0f, (float)r.top + 1.0f,
+                            (float)(r.right - r.left) - 2.0f, (float)(r.bottom - r.top) - 2.0f);
+        }
+        RECT tb = { r.left + EdPx(8), r.top + EdPx(8), r.right - EdPx(8), r.top + EdPx(8) + g_edLibThumbH };
+        EdLibThumb(g, it.thumb, tb, t);
+        const bool current = g_edDocPath[0] && !lstrcmpiW(it.path.c_str(), g_edDocPath);
+        if (current) {
+            const int cw = EdTextWidth(dc, S(Str::EdLibNowOpen), g_edFontSmall) + EdPx(14);
+            RECT badge = { tb.right - EdPx(6) - cw, tb.top + EdPx(6), tb.right - EdPx(6), tb.top + EdPx(6) + EdPx(18) };
+            Gdiplus::Color bf = EdC(g_edDark ? RGB(28, 70, 40) : RGB(230, 243, 230));
+            EdFillRound(g, badge, (float)EdPx(9), &bf, nullptr);
+            EdDrawText(dc, badge, S(Str::EdLibNowOpen), g_edFontSmall, g_edDark ? RGB(160, 230, 170) : RGB(26, 92, 26),
+                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        RECT nm = { r.left + EdPx(8), tb.bottom + EdPx(6), r.right - EdPx(8), tb.bottom + EdPx(6) + EdPx(18) };
+        if (!(g_edLibEdit && g_edLibEditIdx == i))
+            EdDrawText(dc, nm, it.name.c_str(), g_edFontBold, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        wchar_t when[32];
+        EdLibWhen(it.created, when, 32, false);
+        wsprintfW(buf, L"%s · %d × %d · %s", when, it.w, it.h, EdLibMarksText(it.marks).c_str());
+        RECT fx = { nm.left, nm.bottom, nm.right, nm.bottom + EdPx(16) };
+        EdDrawText(dc, fx, buf, g_edFontSmall, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+    SelectClipRgn(dc, nullptr);
+    DeleteObject(clip);
+    g.ResetClip();
+
+    // права колонка — вибраний знімок
+    const int cx0 = area.right - EdPx(400);
+    RECT col = { cx0, area.top + hdr, area.right, area.bottom };
+    b = CreateSolidBrush(t.chrome); FillRect(dc, &col, b); DeleteObject(b);
+    RECT vl = { cx0, area.top + hdr, cx0 + 1, area.bottom };
+    b = CreateSolidBrush(t.border); FillRect(dc, &vl, b); DeleteObject(b);
+    if (g_edLibSel < 0 || g_edLibSel >= (int)g_edLib.size()) return;
+    const EdLibItem& it = g_edLib[g_edLibSel];
+    EdLibThumb(g, it.thumb, g_edLibRcPreview, t);
+    EdDrawText(dc, g_edLibRcName, it.name.c_str(), g_edFontBold, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (const RECT* rn = EdRegionRect(EdHit::LibRename, 0)) {
+        EdPaintButton(g, *rn, t, false, g_edHotWhat == EdHit::LibRename, false);
+        EdIcon(g, IcoPen, EdIconBox(*rn), EdC(t.text), 1.6f);
+    }
+    wchar_t when[32];
+    EdLibWhen(it.created, when, 32, true);
+    wsprintfW(buf, L"%s: %s", S(Str::EdLibFactWhen), when);
+    RECT sv = { g_edLibRcName.left, g_edLibRcName.bottom + EdPx(4), area.right - pad, g_edLibRcName.bottom + EdPx(22) };
+    EdDrawText(dc, sv, buf, g_edFontSmall, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    // факти
+    {
+        Gdiplus::Color ff = EdC(t.surface), fb = EdC(t.border);
+        EdFillRound(g, g_edLibRcFacts, (float)EdPx(6), &ff, &fb);
+        const int lx = g_edLibRcFacts.left + EdPx(12), vx = lx + EdPx(88), rx = g_edLibRcFacts.right - EdPx(12);
+        int y = g_edLibRcFacts.top + EdPx(10);
+        const int lh = EdPx(24);
+        auto row = [&](Str label, const wchar_t* value) {
+            RECT lr = { lx, y, vx - EdPx(8), y + lh }, vr = { vx, y, rx, y + lh };
+            EdDrawText(dc, lr, S(label), g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            EdDrawText(dc, vr, value, g_edFont, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += lh;
+        };
+        wsprintfW(buf, L"%d × %d", it.w, it.h);
+        row(Str::EdLibFactSize, buf);
+        row(Str::EdLibFactMarks, EdLibMarksText(it.marks).c_str());
+        if (it.bytes >= 1024 * 1024) {
+            const int kb10 = (int)(it.bytes * 10 / (1024 * 1024));
+            wsprintfW(buf, L"%s · %d,%d МБ", it.file.c_str(), kb10 / 10, kb10 % 10);
+        } else {
+            wsprintfW(buf, L"%s · %d КБ", it.file.c_str(), (int)((it.bytes + 1023) / 1024));
+        }
+        row(Str::EdLibFactFile, buf);
+    }
+
+    // дії або запит на видалення
+    if (!g_edLibConfirm)   // під запитом на видалення підказка лише плуталась би під ногами
+        EdDrawText(dc, g_edLibRcHint, S(Str::EdLibKeys), g_edFontSmall, t.text2, DT_LEFT | DT_WORDBREAK);
+    if (g_edLibConfirm) {
+        const RECT* yes = EdRegionRect(EdHit::LibDelYes, 0);
+        const RECT* no  = EdRegionRect(EdHit::LibDelNo, 0);
+        if (yes && no) {
+            RECT box = { yes->left - EdPx(12), yes->top - EdPx(66), no->right + EdPx(12), yes->bottom + EdPx(12) };
+            Gdiplus::Color bf = EdC(g_edDark ? RGB(47, 34, 36) : RGB(253, 240, 240)), bb = EdC(g_edDark ? RGB(122, 46, 46) : RGB(224, 160, 160));
+            EdFillRound(g, box, (float)EdPx(6), &bf, &bb);
+            wsprintfW(buf, S(Str::EdLibAskDel), it.name.c_str());
+            RECT q = { box.left + EdPx(12), box.top + EdPx(8), box.right - EdPx(12), box.top + EdPx(30) };
+            EdDrawText(dc, q, buf, g_edFontBold, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            RECT q2 = { q.left, q.bottom, q.right, q.bottom + EdPx(28) };
+            EdDrawText(dc, q2, S(g_edLibConfirmPerm ? Str::EdLibAskPerm : Str::EdLibAskBin), g_edFontSmall, t.text2,
+                       DT_LEFT | DT_WORDBREAK);
+            const COLORREF red = g_edDark ? RGB(184, 50, 50) : RGB(184, 50, 50);
+            Gdiplus::Color yf = EdC(red, g_edHotWhat == EdHit::LibDelYes ? 225 : 255), yb = EdC(red);
+            EdFillRound(g, *yes, (float)EdPx(6), &yf, &yb);
+            EdDrawText(dc, *yes, S(Str::EdLibDelBtn), g_edFontBold, RGB(255, 255, 255), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            EdPaintButton(g, *no, t, false, g_edHotWhat == EdHit::LibDelNo, false);
+            EdDrawText(dc, *no, S(Str::EdLibCancel), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        return;
+    }
+    if (const RECT* op = EdRegionRect(EdHit::LibOpen, 0)) {
+        const bool hot = g_edHotWhat == EdHit::LibOpen;
+        Gdiplus::Color f = EdC(t.accent, hot ? 225 : 255), bd = EdC(t.accent);
+        EdFillRound(g, *op, (float)EdPx(6), &f, &bd);
+        const COLORREF fg = g_edDark ? RGB(0, 52, 79) : RGB(255, 255, 255);
+        const int tw = EdTextWidth(dc, S(Str::EdLibOpenBtn), g_edFontBold);
+        const int ico = EdPx(18);
+        const int x0 = (op->left + op->right) / 2 - (ico + EdPx(8) + tw) / 2;
+        RECT ib = { x0, (op->top + op->bottom) / 2 - ico / 2, x0 + ico, (op->top + op->bottom) / 2 + ico / 2 };
+        EdIcon(g, IcoOpen, ib, EdC(fg), 1.6f);
+        RECT tr = { ib.right + EdPx(8), op->top, op->right, op->bottom };
+        EdDrawText(dc, tr, S(Str::EdLibOpenBtn), g_edFontBold, fg, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+    if (const RECT* sh = EdRegionRect(EdHit::LibShow, 0)) {
+        EdPaintButton(g, *sh, t, false, g_edHotWhat == EdHit::LibShow, false);
+        EdDrawText(dc, *sh, S(Str::EdLibShowBtn), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    if (const RECT* dl = EdRegionRect(EdHit::LibDel, 0)) {
+        EdPaintButton(g, *dl, t, false, g_edHotWhat == EdHit::LibDel, false);
+        EdDrawText(dc, *dl, S(Str::EdLibDelBtn), g_edFont, g_edDark ? RGB(240, 120, 120) : RGB(161, 26, 26),
+                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
 void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     HBRUSH b = CreateSolidBrush(g_edDark ? t.chrome : RGB(250, 250, 250));
@@ -11579,6 +11990,12 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     wchar_t buf[128];
     int x = EdPx(8);
     if (const RECT* om = EdRegionRect(EdHit::OpenMenu, 0)) x = om->right + EdPx(12) + 1 + EdPx(12);
+    if (g_edLibOpen) {
+        wsprintfW(buf, S(Str::EdLibStatus), (int)g_edLib.size());
+        RECT rl = { x, g_edRcStatus.top, x + EdPx(400), g_edRcStatus.bottom };
+        EdDrawText(dc, rl, buf, g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        return;
+    }
     wsprintfW(buf, L"%d × %d", EdViewW(), EdViewH());
     RECT r1 = { x, g_edRcStatus.top, x + EdTextWidth(dc, L"8888 × 8888", g_edFont), g_edRcStatus.bottom };
     EdDrawText(dc, r1, buf, g_edFont, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -11634,16 +12051,6 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     // Праворуч: «Зберегти» зі списком і квадратна «Копіювати». Підсвічена —
     // та, якою користувалися востаннє: вона ж спрацює на Enter.
     splitButton(EdHit::Store, EdHit::SaveMenu, IcoSave, Str::EdStore);
-    if (g_edLastAction == 1) {
-        if (const RECT* sb = EdRegionRect(EdHit::Store, 0)) {
-            const RECT* sm = EdRegionRect(EdHit::SaveMenu, 0);
-            RECT whole = *sb;
-            if (sm) whole.right = sm->right;
-            Gdiplus::Pen accent(EdC(t.accent), 1.5f);
-            g.DrawRectangle(&accent, (float)whole.left + 0.75f, (float)whole.top + 0.75f,
-                            (float)(whole.right - whole.left) - 1.5f, (float)(whole.bottom - whole.top) - 1.5f);
-        }
-    }
     if (const RECT* r = EdRegionRect(EdHit::Copy, 0)) {
         const bool hot = (g_edHotWhat == EdHit::Copy);
         const bool primary = (g_edLastAction == 0);
@@ -11675,6 +12082,7 @@ void EdPaint(HWND hwnd, HDC dc)
     EdPaintRail(dc, g, t);
     EdPaintPanel(dc, g, t);
     EdPaintStrip(dc, g, t);
+    EdPaintLib(dc, g, t);      // бібліотека накриває смугу, полотно й панель
     EdPaintStatus(dc, g, t);
     EdPaintPick(dc, g, t);     // розкритий селект — поверх усього
 }
@@ -12926,6 +13334,8 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::Panel:   return g_edPanelOpen ? Str::EdTipPanelHide : Str::EdTipPanelShow;
     case EdHit::Copy:    return Str::EdCopy;
     case EdHit::Store:   return Str::EdTipStore;
+    case EdHit::LibBack: return Str::EdLibBack;
+    case EdHit::LibRename: return idx == 0 ? Str::EdLibRenameTip : Str::Empty;
     case EdHit::Min:     return Str::EdTipMin;
     case EdHit::Max:     return IsZoomed(g_edWnd) ? Str::EdTipRestore : Str::EdTipMax;
     case EdHit::Close:   return Str::EdTipClose;
@@ -13038,6 +13448,7 @@ void EdTipShow(HWND hwnd)
 // і зникає разом із ним, лишаючи по собі готовий об'єкт.
 
 constexpr int kEdEditId = 401;
+constexpr int kEdLibEditId = 402;   // CAPS-39: поле перейменування в бібліотеці
 
 EdObj   g_edEditObj;
 HFONT   g_edEditFont = nullptr;
@@ -14157,6 +14568,25 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SetFocus(hwnd);
         const EdRegion* r = EdFind(pt);
         if (!r) return 0;
+        // Бібліотека відкрита: живуть лише її ділянки, кнопки заголовка й «Відкрити».
+        if (g_edLibOpen) {
+            switch (r->what) {
+            case EdHit::LibBack:   EdLibClose(hwnd); return 0;
+            case EdHit::LibCard:   EdLibSelect(hwnd, r->idx); return 0;
+            case EdHit::LibOpen:   EdLibOpenSel(hwnd); return 0;
+            case EdHit::LibShow:   EdLibShowSel(); return 0;
+            case EdHit::LibDel:    EdLibAskDelete(hwnd, (wp & MK_SHIFT) != 0); return 0;
+            case EdHit::LibDelYes: EdLibDeleteSel(hwnd); return 0;
+            case EdHit::LibDelNo:  g_edLibConfirm = false; EdLayout(hwnd); InvalidateRect(hwnd, nullptr, FALSE); return 0;
+            case EdHit::LibRename: EdLibRenameBegin(hwnd); return 0;
+            case EdHit::LibArea:   if (g_edLibEdit) EdLibRenameEnd(hwnd, true); return 0;
+            case EdHit::Open: case EdHit::OpenMenu: case EdHit::Min: case EdHit::Max:
+            case EdHit::Close: case EdHit::Help:
+                break;                           // ці працюють як завжди
+            default:
+                return 0;
+            }
+        }
         switch (r->what) {
         case EdHit::Tool:
             if (g_edCropping && (EdTool)r->idx != EdTool::Crop) EdCropFinish(false);
@@ -14460,7 +14890,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // Доки кадр не підтверджено, виходи мовчать: незрозуміло, що саме вони
         // мали б віддати — кадр чи весь знімок.
         case EdHit::Copy:  if (!g_edCropping) EdDoCopy();  return 0;
-        case EdHit::Open:  if (!g_edCropping) EdOpenLibrary(hwnd); return 0;
+        case EdHit::Open:  if (!g_edCropping) EdLibToggle(hwnd); return 0;
         case EdHit::OpenMenu: {
             if (g_edCropping) return 0;
             const RECT* ob = EdRegionRect(EdHit::Open, 0);
@@ -14723,6 +15153,11 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_LBUTTONDBLCLK: {
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        if (g_edLibOpen) {
+            const EdRegion* lr = EdFind(pt);
+            if (lr && lr->what == EdHit::LibCard) { EdLibSelect(hwnd, lr->idx); EdLibOpenSel(hwnd); }
+            return 0;
+        }
         if (!PtInRect(&g_edRcCanvas, pt)) {
             // Подвійний клік по кольору чи розміру — на ВСЮ групу лічильника.
             // Перший клік із пари вже застосувався до одного кружечка, тож цей
@@ -14758,6 +15193,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_COMMAND:
         if (HIWORD(wp) == EN_CHANGE && LOWORD(wp) == kEdEditId) { EdTextFitBox(); return 0; }
+        if (HIWORD(wp) == EN_KILLFOCUS && LOWORD(wp) == kEdLibEditId) { EdLibRenameEnd(hwnd, true); return 0; }
         break;
 
     // ⚠ Коліщатко ПРОКРУЧУЄ, а не зумить (зауваження власника 21.09). Зум лишився
@@ -14766,6 +15202,14 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_MOUSEWHEEL: {
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         ScreenToClient(hwnd, &pt);
+        if (g_edLibOpen) {
+            if (PtInRect(&g_edLibRcArea, pt)) {
+                g_edLibScroll -= GET_WHEEL_DELTA_WPARAM(wp) * EdPx(72) / WHEEL_DELTA;
+                EdLayout(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
         if (!PtInRect(&g_edRcCanvas, pt)) return 0;
         const int delta = GET_WHEEL_DELTA_WPARAM(wp);
         if (GetKeyState(VK_MENU) < 0) { EdZoomAt(pt, delta > 0); return 0; }
@@ -14793,6 +15237,27 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_KEYDOWN: {
         const bool ctrl = GetKeyState(VK_CONTROL) < 0;
+        if (g_edLibOpen) {
+            const bool shift = GetKeyState(VK_SHIFT) < 0 || (lp & 0x0200);
+            switch (wp) {
+            case VK_ESCAPE:
+                if (g_edLibConfirm) { g_edLibConfirm = false; EdLayout(hwnd); InvalidateRect(hwnd, nullptr, FALSE); }
+                else EdLibClose(hwnd);
+                return 0;
+            case VK_RETURN:
+                if (g_edLibConfirm) EdLibDeleteSel(hwnd); else EdLibOpenSel(hwnd);
+                return 0;
+            case VK_F2:     EdLibRenameBegin(hwnd); return 0;
+            case VK_DELETE: EdLibAskDelete(hwnd, shift); return 0;
+            case VK_LEFT:  EdLibSelect(hwnd, g_edLibSel > 0 ? g_edLibSel - 1 : 0); return 0;
+            case VK_RIGHT: EdLibSelect(hwnd, g_edLibSel + 1 < (int)g_edLib.size() ? g_edLibSel + 1 : g_edLibSel); return 0;
+            case VK_UP:    if (g_edLibSel >= 4) EdLibSelect(hwnd, g_edLibSel - 4); return 0;
+            case VK_DOWN:  if (g_edLibSel + 4 < (int)g_edLib.size()) EdLibSelect(hwnd, g_edLibSel + 4); return 0;
+            case VK_HOME:  EdLibSelect(hwnd, 0); return 0;
+            case VK_END:   EdLibSelect(hwnd, (int)g_edLib.size() - 1); return 0;
+            default: return 0;
+            }
+        }
         switch (wp) {
         case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN: {
             // Стрілки належать ПОЗНАЧЦІ, а не полотну: полотно рухають
@@ -14937,6 +15402,8 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         delete g_edCmp; g_edCmp = nullptr;
         g_edCompare = false;
         EdImageBankClear();
+        g_edLibOpen = false;
+        EdLibFree();
         g_edObjs.clear();
         g_edUndo.clear();
         g_edRedo.clear();
@@ -14983,6 +15450,7 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edRot = 0; g_edMirror = false; g_edCompare = false;
     delete g_edCmp; g_edCmp = nullptr;
     EdImageBankClear();          // новий знімок — нові вкладені зображення
+    if (g_edLibOpen) { g_edLibOpen = false; EdLibFree(); }
     EdRebuildImage();
     g_edHdr        = hdr;
     g_edToneMapped = toneMapped;
@@ -15095,6 +15563,59 @@ HWND CapForegroundTarget()
 
 const wchar_t* kRegEdLast     = L"EditorLastAction";     // 0 буфер, 1 файл
 const wchar_t* kRegEdKeepTool = L"EditorKeepTool";       // 1 = інструмент лишається
+
+// CAPS-39: рядок «Зараз: N знімків, M МБ» і чистка з налаштувань.
+HWND g_libNow = nullptr;
+
+void LibCount(int& n, ULONGLONG& bytes)
+{
+    n = 0; bytes = 0;
+    const wchar_t* dir = EdLibDir();
+    if (!dir) return;
+    wchar_t mask[MAX_PATH];
+    wsprintfW(mask, L"%s\\*.lhshot", dir);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(mask, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        ++n;
+        bytes += ((ULONGLONG)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
+
+void LibRefreshNow()
+{
+    if (!g_libNow) return;
+    int n = 0; ULONGLONG bytes = 0;
+    LibCount(n, bytes);
+    wchar_t v[96];
+    wsprintfW(v, S(Str::CapLibNow), n, (int)(bytes / (1024 * 1024)));
+    SetWindowTextW(g_libNow, v);
+}
+
+// Усе в кошик, крім того, що зараз відкрито: його шлях лишається чинним.
+void LibClearAll()
+{
+    const wchar_t* dir = EdLibDir();
+    if (!dir) return;
+    wchar_t mask[MAX_PATH];
+    wsprintfW(mask, L"%s\\*.lhshot", dir);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(mask, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    std::vector<std::wstring> paths;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        paths.push_back(std::wstring(dir) + L"\\" + fd.cFileName);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    for (size_t i = 0; i < paths.size(); ++i) {
+        if (g_edDocPath[0] && !lstrcmpiW(paths[i].c_str(), g_edDocPath)) continue;
+        EdLibRemoveFile(paths[i], false);
+    }
+}
 const wchar_t* kRegEdSaveDir  = L"EditorSaveDir";
 
 bool EdEncoderClsid(const wchar_t* mime, CLSID* out)
@@ -15326,7 +15847,7 @@ bool EdWriteFile(const wchar_t* path)
 
 const char kEdDocMagic[8] = { 'L', 'H', 'S', 'H', 'O', 'T', 0x1A, '\n' };
 constexpr WORD kEdDocVerMajor = 1;   // ламає сумісність
-constexpr WORD kEdDocVerMinor = 0;   // лише додає поля
+constexpr WORD kEdDocVerMinor = 1;   // лише додає поля: 1.1 — INFO і THMB для бібліотеки
 
 struct EdKindTag { EdKind kind; const char* tag; };
 const EdKindTag kEdKindTags[] = {
@@ -15518,6 +16039,34 @@ bool EdDocWrite(const wchar_t* path, const std::wstring& name)
         ExeVersionString(ver, 32);
         w.str(ver);
         w.close(at);
+    }
+    {   // Для бібліотеки — те, що вона показує, без читання самого знімка:
+        // розмір кадру, скільки позначок, і мініатюра ЗВЕДЕНОГО кадру.
+        const size_t at = w.open("INFO");
+        w.i32v(EdViewW()); w.i32v(EdViewH()); w.i32v((int)g_edObjs.size());
+        w.close(at);
+        if (Gdiplus::Bitmap* flat = EdRender()) {
+            const int fw = (int)flat->GetWidth(), fh = (int)flat->GetHeight();
+            const double kx = 320.0 / (fw > 0 ? fw : 1), ky = 240.0 / (fh > 0 ? fh : 1);
+            const double k = kx < ky ? kx : ky;   // EdMin працює з int і зрізав би масштаб у нуль
+            const int tw = k < 1.0 ? (int)(fw * k + 0.5) : fw;
+            const int th = k < 1.0 ? (int)(fh * k + 0.5) : fh;
+            Gdiplus::Bitmap* small = new Gdiplus::Bitmap(tw > 0 ? tw : 1, th > 0 ? th : 1, PixelFormat32bppPARGB);
+            if (small && small->GetLastStatus() == Gdiplus::Ok) {
+                Gdiplus::Graphics gg(small);
+                gg.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+                gg.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+                gg.DrawImage(flat, Gdiplus::Rect(0, 0, tw, th), 0, 0, fw, fh, Gdiplus::UnitPixel);
+                std::vector<BYTE> tp;
+                if (EdPngEncode(small, tp)) {
+                    const size_t ta = w.open("THMB");
+                    w.raw(tp.data(), tp.size());
+                    w.close(ta);
+                }
+            }
+            delete small;
+            delete flat;
+        }
     }
     {   // ОРИГІНАЛ, а не показане: рецепт лишається живим і після відкриття
         std::vector<BYTE> png;
@@ -15839,6 +16388,318 @@ void EdOpenLibrary(HWND hwnd)
     else if (rc != 0) MessageBoxW(hwnd, S(Str::EdErrDocBad), kAppName, MB_OK | MB_ICONWARNING);
 }
 
+// ---- бібліотека: читання шапки файлу ---------------------------------
+//
+// ⚠ Читаємо ЛИШЕ потрібні блоки, переступаючи решту за довжиною: сто файлів по
+// кілька мегабайтів — це сотні мегабайтів, і тягнути їх усі заради назви й
+// мініатюри означало б відкривати бібліотеку по кілька секунд.
+bool EdDocPeek(const wchar_t* path, EdLibItem& it)
+{
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    bool ok = false;
+    BYTE head[12] = {};
+    DWORD got = 0;
+    if (ReadFile(f, head, 12, &got, nullptr) && got == 12 && !memcmp(head, kEdDocMagic, 8)) {
+        ok = true;
+        for (int guard = 0; guard < 64; ++guard) {
+            BYTE bh[8];
+            if (!ReadFile(f, bh, 8, &got, nullptr) || got != 8) break;
+            DWORD len = 0;
+            memcpy(&len, bh + 4, 4);
+            const bool want = !memcmp(bh, "META", 4) || !memcmp(bh, "INFO", 4) || !memcmp(bh, "THMB", 4);
+            if (!want || len > (8u << 20)) {
+                LARGE_INTEGER mv; mv.QuadPart = len;
+                if (!SetFilePointerEx(f, mv, nullptr, FILE_CURRENT)) break;
+                if (!memcmp(bh, "SRC ", 4) || !memcmp(bh, "OBJS", 4)) {
+                    // усе потрібне стоїть ПЕРЕД знімком — далі нема чого читати
+                    if (it.w || it.thumb) break;
+                }
+                continue;
+            }
+            std::vector<BYTE> buf(len);
+            if (len && (!ReadFile(f, buf.data(), len, &got, nullptr) || got != len)) break;
+            EdRd r{ buf.data(), buf.size(), 0, false };
+            if (!memcmp(bh, "META", 4)) {
+                it.created = r.u64v();
+                it.name = r.str();
+            } else if (!memcmp(bh, "INFO", 4)) {
+                it.w = r.i32v(); it.h = r.i32v(); it.marks = r.i32v();
+            } else if (!memcmp(bh, "THMB", 4)) {
+                it.thumb = EdPngDecode(buf.data(), buf.size());
+            }
+        }
+    }
+    CloseHandle(f);
+    return ok;
+}
+
+void EdLibFree()
+{
+    for (size_t i = 0; i < g_edLib.size(); ++i) delete g_edLib[i].thumb;
+    g_edLib.clear();
+    g_edLibBytes = 0;
+}
+
+// Перелік теки: спочатку нові. Без групування по днях і без пошуку (рішення
+// власника 21.09) — дата й час і так стоять у назві й у рядку фактів.
+void EdLibScan()
+{
+    EdLibFree();
+    const wchar_t* dir = EdLibDir();
+    if (!dir) return;
+    wchar_t mask[MAX_PATH];
+    wsprintfW(mask, L"%s\\*.lhshot", dir);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(mask, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        EdLibItem it;
+        it.file = fd.cFileName;
+        it.path = std::wstring(dir) + L"\\" + fd.cFileName;
+        it.bytes = ((ULONGLONG)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+        it.created = ((ULONGLONG)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime;
+        if (!EdDocPeek(it.path.c_str(), it)) { delete it.thumb; continue; }
+        if (it.name.empty()) it.name = it.file.substr(0, it.file.size() - 7);
+        // ⚠ Старі файли (3.25–3.26) без THMB: мініатюру робимо з самого знімка
+        // ОДИН раз тут — повільно, але лише для них і лише поки їх не пересохранили.
+        if (!it.thumb) {
+            EdDoc d;
+            if (EdDocRead(it.path.c_str(), d) == 0 && d.src) {
+                const int fw = (int)d.src->GetWidth(), fh = (int)d.src->GetHeight();
+                const double kx = 320.0 / (fw > 0 ? fw : 1), ky = 240.0 / (fh > 0 ? fh : 1);
+                const double k = kx < ky ? kx : ky;
+                const int tw = k < 1.0 ? (int)(fw * k + 0.5) : fw, th = k < 1.0 ? (int)(fh * k + 0.5) : fh;
+                Gdiplus::Bitmap* sm = new Gdiplus::Bitmap(tw > 0 ? tw : 1, th > 0 ? th : 1, PixelFormat32bppPARGB);
+                if (sm && sm->GetLastStatus() == Gdiplus::Ok) {
+                    Gdiplus::Graphics gg(sm);
+                    gg.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+                    gg.DrawImage(d.src, Gdiplus::Rect(0, 0, tw, th), 0, 0, fw, fh, Gdiplus::UnitPixel);
+                    it.thumb = sm;
+                } else delete sm;
+                if (!it.w) { it.w = fw; it.h = fh; it.marks = (int)d.objs.size(); }
+            }
+            d.free();
+        }
+        g_edLibBytes += it.bytes;
+        g_edLib.push_back(it);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    // спочатку нові
+    for (size_t i = 1; i < g_edLib.size(); ++i)
+        for (size_t j = i; j > 0 && g_edLib[j].created > g_edLib[j - 1].created; --j)
+            std::swap(g_edLib[j], g_edLib[j - 1]);
+}
+
+void EdLibSelect(HWND hwnd, int idx)
+{
+    if (g_edLibEdit) EdLibRenameEnd(hwnd, true);
+    g_edLibConfirm = false;
+    g_edLibSel = (idx >= 0 && idx < (int)g_edLib.size()) ? idx : -1;
+    EdLayout(hwnd);
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+void EdLibToggle(HWND hwnd)
+{
+    if (g_edLibOpen) { EdLibClose(hwnd); return; }
+    if (g_edEdit) EdTextCommit();
+    EdLibScan();
+    g_edLibOpen = true;
+    g_edLibScroll = 0;
+    g_edLibConfirm = false;
+    g_edLibSel = -1;
+    // Той, що зараз на полотні, — вибраний одразу: до нього найчастіше й вертаються.
+    for (size_t i = 0; i < g_edLib.size(); ++i)
+        if (g_edDocPath[0] && !lstrcmpiW(g_edLib[i].path.c_str(), g_edDocPath)) { g_edLibSel = (int)i; break; }
+    if (g_edLibSel < 0 && !g_edLib.empty()) g_edLibSel = 0;
+    EdLayout(hwnd);
+    InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+void EdLibClose(HWND hwnd)
+{
+    if (g_edLibEdit) EdLibRenameEnd(hwnd, false);
+    g_edLibOpen = false;
+    g_edLibConfirm = false;
+    EdLibFree();
+    EdLayout(hwnd);
+    InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+void EdLibOpenSel(HWND hwnd)
+{
+    if (g_edLibSel < 0 || g_edLibSel >= (int)g_edLib.size()) return;
+    const std::wstring path = g_edLib[g_edLibSel].path;
+    // Той, що вже відкритий, — просто повертаємось до нього, нічого не перечитуючи.
+    if (g_edDocPath[0] && !lstrcmpiW(path.c_str(), g_edDocPath)) { EdLibClose(hwnd); return; }
+    if (!EdConfirmReplace()) return;
+    const int rc = EdDocOpen(path.c_str());
+    if (rc == 2)      { MessageBoxW(hwnd, S(Str::EdErrDocNew), kAppName, MB_OK | MB_ICONWARNING); return; }
+    else if (rc != 0) { MessageBoxW(hwnd, S(Str::EdErrDocBad), kAppName, MB_OK | MB_ICONWARNING); return; }
+    EdLibClose(hwnd);
+}
+
+void EdLibShowSel()
+{
+    if (g_edLibSel < 0 || g_edLibSel >= (int)g_edLib.size()) return;
+    wchar_t args[MAX_PATH + 16];
+    wsprintfW(args, L"/select,\"%s\"", g_edLib[g_edLibSel].path.c_str());
+    ShellExecuteW(nullptr, L"open", L"explorer.exe", args, nullptr, SW_SHOWNORMAL);
+}
+
+// У кошик — SHFileOperation з FOF_ALLOWUNDO; назавжди — DeleteFile.
+bool EdLibRemoveFile(const std::wstring& path, bool permanent)
+{
+    if (permanent) return DeleteFileW(path.c_str()) != 0;
+    std::vector<wchar_t> from(path.begin(), path.end());
+    from.push_back(0); from.push_back(0);      // подвійний нуль — так вимагає API
+    SHFILEOPSTRUCTW op = {};
+    op.wFunc = FO_DELETE;
+    op.pFrom = from.data();
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+    return SHFileOperationW(&op) == 0 && !op.fAnyOperationsAborted;
+}
+
+void EdLibAskDelete(HWND hwnd, bool permanent)
+{
+    if (g_edLibSel < 0 || g_edLibSel >= (int)g_edLib.size()) return;
+    if (g_edLibEdit) EdLibRenameEnd(hwnd, true);
+    g_edLibConfirm = true;
+    g_edLibConfirmPerm = permanent;
+    EdLayout(hwnd);
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+void EdLibDeleteSel(HWND hwnd)
+{
+    g_edLibConfirm = false;
+    if (g_edLibSel < 0 || g_edLibSel >= (int)g_edLib.size()) return;
+    const std::wstring path = g_edLib[g_edLibSel].path;
+    if (!EdLibRemoveFile(path, g_edLibConfirmPerm)) {
+        MessageBoxW(hwnd, S(Str::EdLibErrDel), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    // Видалили той, що відкритий: наступне Ctrl+S заведе новий запис.
+    if (g_edDocPath[0] && !lstrcmpiW(path.c_str(), g_edDocPath)) g_edDocPath[0] = 0;
+    const int keep = g_edLibSel;
+    EdLibScan();
+    g_edLibSel = g_edLib.empty() ? -1 : (keep < (int)g_edLib.size() ? keep : (int)g_edLib.size() - 1);
+    EdLayout(hwnd);
+    InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+// Перейменування міняє ЛИШЕ блок META: файл переписується блок за блоком у
+// сусідній .part і підміняється — так само безпечно, як і збереження.
+bool EdDocRename(const wchar_t* path, const std::wstring& name)
+{
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER sz = {};
+    if (!GetFileSizeEx(f, &sz) || sz.QuadPart < 12 || sz.QuadPart > 512LL * 1024 * 1024) { CloseHandle(f); return false; }
+    std::vector<BYTE> raw((size_t)sz.QuadPart);
+    DWORD got = 0;
+    const BOOL ok = ReadFile(f, raw.data(), (DWORD)raw.size(), &got, nullptr);
+    CloseHandle(f);
+    if (!ok || got != raw.size() || memcmp(raw.data(), kEdDocMagic, 8)) return false;
+
+    EdWr w;
+    w.raw(raw.data(), 12);
+    EdRd r{ raw.data(), raw.size(), 12, false };
+    bool done = false;
+    while (!r.bad && r.at + 8 <= r.n) {
+        char t[4]; r.raw(t, 4);
+        const DWORD len = r.u32v();
+        if (r.bad || r.at + len > r.n) return false;
+        if (!memcmp(t, "META", 4) && !done) {
+            EdRd m{ raw.data() + r.at, len, 0, false };
+            const ULONGLONG created = m.u64v();
+            m.str();                             // стара назва
+            const std::wstring source = m.str();
+            const std::wstring ver = m.str();
+            const size_t at = w.open("META");
+            w.u64v(created); w.str(name); w.str(source); w.str(ver);
+            w.close(at);
+            done = true;
+        } else {
+            w.tag(t); w.u32v(len); w.raw(raw.data() + r.at, len);
+        }
+        r.at += len;
+    }
+    if (!done) return false;
+    std::wstring tmp = std::wstring(path) + L".part";
+    HANDLE o = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (o == INVALID_HANDLE_VALUE) return false;
+    DWORD put = 0;
+    const BOOL wok = WriteFile(o, w.b.data(), (DWORD)w.b.size(), &put, nullptr) && put == w.b.size();
+    CloseHandle(o);
+    if (!wok) { DeleteFileW(tmp.c_str()); return false; }
+    if (!MoveFileExW(tmp.c_str(), path, MOVEFILE_REPLACE_EXISTING)) { DeleteFileW(tmp.c_str()); return false; }
+    return true;
+}
+
+// Enter і Esc у полі перейменування: без підкласу вони лишилися б у EDIT.
+LRESULT CALLBACK EdLibEditProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR)
+{
+    if (msg == WM_KEYDOWN && (wp == VK_RETURN || wp == VK_ESCAPE)) {
+        EdLibRenameEnd(GetParent(h), wp == VK_RETURN);
+        return 0;
+    }
+    if (msg == WM_CHAR && (wp == VK_RETURN || wp == VK_ESCAPE)) return 0;
+    return DefSubclassProc(h, msg, wp, lp);
+}
+
+void EdLibRenameBegin(HWND hwnd)
+{
+    if (g_edLibEdit || g_edLibSel < 0 || g_edLibSel >= (int)g_edLib.size()) return;
+    const RECT* rc = EdRegionRect(EdHit::LibRename, 1);   // idx 1 — місце поля в картці
+    if (!rc) return;
+    g_edLibConfirm = false;
+    g_edLibEditIdx = g_edLibSel;
+    g_edLibEdit = CreateWindowExW(0, L"EDIT", g_edLib[g_edLibSel].name.c_str(),
+                                  WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                                  rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top,
+                                  hwnd, (HMENU)(INT_PTR)kEdLibEditId,
+                                  (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), nullptr);
+    if (!g_edLibEdit) return;
+    SendMessageW(g_edLibEdit, WM_SETFONT, (WPARAM)g_edFontBold, TRUE);
+    SendMessageW(g_edLibEdit, EM_SETLIMITTEXT, 120, 0);
+    if (g_edDark) SetWindowTheme(g_edLibEdit, L"DarkMode_Explorer", nullptr);
+    SetWindowSubclass(g_edLibEdit, EdLibEditProc, 1, 0);
+    SetFocus(g_edLibEdit);
+    SendMessageW(g_edLibEdit, EM_SETSEL, 0, -1);
+}
+
+void EdLibRenameEnd(HWND hwnd, bool apply)
+{
+    if (!g_edLibEdit) return;
+    wchar_t buf[128] = {};
+    GetWindowTextW(g_edLibEdit, buf, 128);
+    HWND e = g_edLibEdit;
+    g_edLibEdit = nullptr;               // спершу нуль: DestroyWindow шле EN_KILLFOCUS
+    DestroyWindow(e);
+    SetFocus(hwnd);
+    const int idx = g_edLibEditIdx;
+    g_edLibEditIdx = -1;
+    // Порожню назву не пишемо: запис без назви губиться в списку.
+    std::wstring name = buf;
+    while (!name.empty() && name.back() == L' ') name.pop_back();
+    if (apply && !name.empty() && idx >= 0 && idx < (int)g_edLib.size() && name != g_edLib[idx].name) {
+        if (EdDocRename(g_edLib[idx].path.c_str(), name)) {
+            g_edLib[idx].name = name;
+            if (g_edDocPath[0] && !lstrcmpiW(g_edLib[idx].path.c_str(), g_edDocPath))
+                lstrcpynW(g_edDocName, name.c_str(), 128);
+        } else {
+            MessageBoxW(hwnd, S(Str::EdLibErrRename), kAppName, MB_OK | MB_ICONWARNING);
+        }
+    }
+    EdLayout(hwnd);
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
 // «Зберегти як…» — власний формат у будь-яку теку. Документ далі живе ТАМ:
 // наступне Ctrl+S перезаписує саме цей файл, а не заводить запис у бібліотеці.
 void EdSaveDocAs(HWND hwnd)
@@ -15911,6 +16772,46 @@ bool EdDocSaveTo(const wchar_t* path)
     return true;
 }
 
+// Ретенція: після нового запису прибираємо найстаріші, поки не влізли в ліміт
+// (кількість або обсяг — рішення власника; типово 100 останніх). Прибране іде в
+// кошик, поточний документ не чіпаємо ніколи.
+void EdLibRetention()
+{
+    const wchar_t* dir = EdLibDir();
+    if (!dir) return;
+    struct F { std::wstring path; ULONGLONG when, bytes; };
+    std::vector<F> all;
+    ULONGLONG total = 0;
+    wchar_t mask[MAX_PATH];
+    wsprintfW(mask, L"%s\\*.lhshot", dir);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(mask, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        F f;
+        f.path = std::wstring(dir) + L"\\" + fd.cFileName;
+        f.when = ((ULONGLONG)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime;
+        f.bytes = ((ULONGLONG)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+        total += f.bytes;
+        all.push_back(f);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    for (size_t i = 1; i < all.size(); ++i)            // найстаріші наперед
+        for (size_t j = i; j > 0 && all[j].when < all[j - 1].when; --j) std::swap(all[j], all[j - 1]);
+    const int mode = EdLibRetMode();
+    const ULONGLONG limit = (ULONGLONG)EdLibRetLimit();
+    size_t k = 0;
+    while (k < all.size()) {
+        const bool over = (mode == 0) ? (all.size() - k) > limit : (total / (1024 * 1024)) > limit;
+        if (!over) break;
+        if (g_edDocPath[0] && !lstrcmpiW(all[k].path.c_str(), g_edDocPath)) { ++k; continue; }
+        if (!EdLibRemoveFile(all[k].path, false)) break;
+        total -= all[k].bytes;
+        ++k;
+    }
+}
+
 // ⚠ Повторне натискання ПЕРЕЗАПИСУЄ той самий запис, а не плодить копії: шлях
 // документа памʼятається від першого збереження й живе до наступного знімка.
 bool EdStoreNow()
@@ -15928,6 +16829,9 @@ bool EdStoreNow()
         for (int i = 2; i < 100 && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES; ++i)
             wsprintfW(path, L"%s\\%s (%d).lhshot", dir, stamp, i);
         lstrcpynW(g_edDocPath, path, MAX_PATH);
+        const bool ok = EdDocSaveTo(g_edDocPath);
+        if (ok) EdLibRetention();
+        return ok;
     }
     return EdDocSaveTo(g_edDocPath);
 }
@@ -16663,6 +17567,42 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_edKeepTool = SendMessageW(GetDlgItem(hwnd, IDC_CAP_KEEPTOOL), BM_GETCHECK, 0, 0) == BST_CHECKED;
             RegSaveInt(kRegEdKeepTool, g_edKeepTool ? 1 : 0);
             break;
+        case IDC_LIB_BYCOUNT:
+        case IDC_LIB_BYSIZE: {
+            const int mode = (LOWORD(wp) == IDC_LIB_BYSIZE) ? 1 : 0;
+            RegSaveInt(kRegLibRetMode, mode);
+            EnableWindow(GetDlgItem(hwnd, IDC_LIB_COUNT), mode == 0);
+            EnableWindow(GetDlgItem(hwnd, IDC_LIB_MB), mode == 1);
+            break;
+        }
+        case IDC_LIB_COUNT:
+        case IDC_LIB_MB:
+            // Число беремо на втраті фокуса, а не на кожній цифрі: інакше «1» по
+            // дорозі до «100» встигло б стати лімітом і викинути бібліотеку.
+            if (HIWORD(wp) == EN_KILLFOCUS) {
+                wchar_t v[16] = {};
+                GetWindowTextW(GetDlgItem(hwnd, LOWORD(wp)), v, 16);
+                int n = _wtoi(v);
+                if (n < 1) n = 1;
+                RegSaveInt(LOWORD(wp) == IDC_LIB_COUNT ? kRegLibRetCount : kRegLibRetMB, n);
+                wsprintfW(v, L"%d", n);
+                SetWindowTextW(GetDlgItem(hwnd, LOWORD(wp)), v);
+            }
+            break;
+        case IDC_LIB_SHOW:
+            if (const wchar_t* d = EdLibDir()) ShellExecuteW(nullptr, L"open", L"explorer.exe", d, nullptr, SW_SHOWNORMAL);
+            break;
+        case IDC_LIB_CLEAR: {
+            int n = 0; ULONGLONG bytes = 0;
+            LibCount(n, bytes);
+            if (n <= 0) break;
+            wchar_t q[160];
+            wsprintfW(q, S(Str::CapLibAskClear), n);
+            if (MessageBoxW(hwnd, q, kAppName, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) break;
+            LibClearAll();
+            LibRefreshNow();
+            break;
+        }
         case IDC_CAP_HKRESET:
             g_hk[0] = kHkDefClip;
             g_hk[1] = kHkDefRegion;
@@ -16850,7 +17790,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // 20 px від краю полотна, крок 8 px між елементами, підказка одразу під
     // своїм контролом, між групами 6–8 px повітря плюс заголовок групи.
     // ⚠ Сторінки НЕ прокручуються, тож висота вікна — це межа вмісту.
-    constexpr int W = 500, H = 634;   // 2.6.0: вкладка «Перегляд» переросла попередню висоту
+    // 2.6.0: «Перегляд» переросла попередню; 3.27.0: «Знімки» — секція бібліотеки.
+    constexpr int W = 500, H = 760;
     constexpr int TAB_X = 20, TAB_Y = 74, FOOT_H = 42;    // таб-контрол під шапкою, підвал під табом
     constexpr int PX = TAB_X + 20, PW = 420, PY = 116;    // сторінка: лівий край, ширина, перший рядок
     const int w = sc(W), h = sc(H);
@@ -17116,6 +18057,32 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     y += 38;
     sec(addK, Str::CapSecOutput);
     check(addK, Str::CapKeepTool, IDC_CAP_KEEPTOOL, g_edKeepTool, 2);
+    y -= 6;
+    sec(addK, Str::CapSecLib);
+    {
+        // Або кількість, або обсяг — дві умови зразу людина не тримає в голові.
+        const int mode = EdLibRetMode();
+        radio(addK, Str::CapLibByCount, PX, 150, IDC_LIB_BYCOUNT, true);
+        HWND ec = addK(mk(L"EDIT", L"", ES_NUMBER | ES_CENTER | WS_BORDER | WS_TABSTOP, PX + 160, y - 1, 64, 24, IDC_LIB_COUNT));
+        addK(mkS(L"STATIC", Str::CapLibCountUnit, 0, PX + 232, y + 3, 120, 20, 0));
+        y += 26;
+        radio(addK, Str::CapLibBySize, PX, 150, IDC_LIB_BYSIZE, false);
+        HWND em = addK(mk(L"EDIT", L"", ES_NUMBER | ES_CENTER | WS_BORDER | WS_TABSTOP, PX + 160, y - 1, 64, 24, IDC_LIB_MB));
+        addK(mkS(L"STATIC", Str::CapLibSizeUnit, 0, PX + 232, y + 3, 120, 20, 0));
+        y += 28;
+        wchar_t v[16];
+        wsprintfW(v, L"%d", RegLoadInt(kRegLibRetCount, 100, 1, 100000)); SetWindowTextW(ec, v);
+        wsprintfW(v, L"%d", RegLoadInt(kRegLibRetMB, 500, 1, 1000000));   SetWindowTextW(em, v);
+        SendMessageW(GetDlgItem(hwnd, mode == 0 ? IDC_LIB_BYCOUNT : IDC_LIB_BYSIZE), BM_SETCHECK, BST_CHECKED, 0);
+        EnableWindow(ec, mode == 0);
+        EnableWindow(em, mode == 1);
+        hint(addK, Str::CapLibHint, 1);
+        g_libNow = addK(mkS(L"STATIC", Str::Empty, 0, PX, y + 6, 200, 20, IDC_LIB_NOW));
+        button(addK, Str::CapLibShow, PX + 206, 106, IDC_LIB_SHOW);
+        button(addK, Str::CapLibClear, PX + 318, 102, IDC_LIB_CLEAR);
+        LibRefreshNow();
+        y += 34;
+    }
 
     // ---- вкладка «Налаштування» (CAPS-9) ----
     y = PY;

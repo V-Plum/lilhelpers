@@ -8,8 +8,8 @@
 // signals antivirus ML heuristics weigh when flagging unsigned binaries.
 // Keep this file ASCII-only: rc.exe reads it as ANSI unless told otherwise.
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     3,26,0,0
-PRODUCTVERSION  3,26,0,0
+FILEVERSION     3,27,0,0
+PRODUCTVERSION  3,27,0,0
 FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -22,12 +22,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "Plum"
             VALUE "FileDescription",  "Little Helpers - small Windows conveniences"
-            VALUE "FileVersion",      "3.26.0.0"
+            VALUE "FileVersion",      "3.27.0.0"
             VALUE "InternalName",     "lilhelpers"
             VALUE "LegalCopyright",   "(c) 2026 Vadym Slyva (Plum)"
             VALUE "OriginalFilename", "lilhelpers.exe"
             VALUE "ProductName",      "Little Helpers"
-            VALUE "ProductVersion",   "3.26.0.0"
+            VALUE "ProductVersion",   "3.27.0.0"
         END
     END
     BLOCK "VarFileInfo"
