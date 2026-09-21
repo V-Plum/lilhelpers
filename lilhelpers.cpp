@@ -7791,6 +7791,7 @@ void EdFitView();                     // поворот міняє сторон�
 bool EdSelBounds(RECT* out);          // спільні габарити вибраного
 bool EdManySel();                     // вибрано двоє й більше
 std::vector<int> EdSelAll();          // головний вибраний плюс решта
+void EdKeepAspect(int handle, int ow, int oh, int& l, int& t, int& r, int& b);
 void EdLayout(HWND hwnd);
 // CAPS-22: стан виходів. Остання використана дія підсвічується як дія для Enter.
 int      g_edLastAction  = 0;      // 0 буфер, 1 файл
@@ -10099,10 +10100,15 @@ float EdStrokeRadius(const EdObj& o, double s)
 std::vector<EdTile> g_edTiles;
 const size_t kEdTileMax = 24;
 
+void EdBelowClear();                  // композити «що нижче» живуть тим самим життям
+
 void EdTilesClear()
 {
     for (size_t i = 0; i < g_edTiles.size(); ++i) delete g_edTiles[i].bmp;
     g_edTiles.clear();
+    // Композити зроблено з тих самих пікселів: лишити їх означало б віддати
+    // ефектам стару картинку під новим знімком.
+    EdBelowClear();
 }
 
 // ---- CAPS-28: тон і геометрія -------------------------------------------
@@ -10516,21 +10522,105 @@ void EdPixelate(BYTE* px, int w, int h, int stride, int block)
     }
 }
 
-std::wstring EdFxKey(const EdObj& o, double s)
+unsigned long long EdMix(unsigned long long h, long long v)
 {
-    wchar_t head[160];
-    wsprintfW(head, L"fx|%d|%d|%d|%d|%d|%d|%d|%d|%d|%08X",
+    h ^= (unsigned long long)v;
+    return h * 1099511628211ULL;
+}
+
+// ⚠ Хеш ОБОВʼЯЗКОВО покриває все, що впливає на пікселі позначки. Забуте поле
+// не ламає нічого одразу — воно лишає стару плитку ефекту там, де під нею вже
+// інша картинка, і помітно це стає через пів години роботи.
+unsigned long long EdObjHash(const EdObj& o)
+{
+    unsigned long long h = 1469598103934665603ULL;
+    const int f[] = { (int)o.kind, o.x, o.y, o.w, o.h, (int)o.color, o.thick, o.alpha,
+                      o.filled ? 1 : 0, o.size, o.bold ? 1 : 0, o.italic ? 1 : 0,
+                      o.align, o.outline, o.boxw, o.mode, o.strength, o.seq, o.group,
+                      o.start, o.stamp, o.dash, o.headFront, o.headBack, o.headSize,
+                      o.img, o.rot, o.grp };
+    for (size_t i = 0; i < sizeof(f) / sizeof(f[0]); ++i) h = EdMix(h, f[i]);
+    for (size_t i = 0; i < o.text.size(); ++i) h = EdMix(h, (long long)o.text[i]);
+    for (size_t i = 0; i < o.pts.size(); ++i) {
+        h = EdMix(h, o.pts[i].x);
+        h = EdMix(h, o.pts[i].y);
+    }
+    return h;
+}
+
+unsigned long long EdBelowHash(int upto)
+{
+    unsigned long long h = 14695981039346656ULL;
+    if (upto > (int)g_edObjs.size()) upto = (int)g_edObjs.size();
+    for (int i = 0; i < upto; ++i) h = EdMix(h, (long long)EdObjHash(g_edObjs[i]));
+    return h;
+}
+
+// Композит «усе, що нижче»: знімок плюс позначки з меншим номером, у РОЗМІРІ
+// знімка. Саме з нього ефект бере пікселі — інакше приховування не бачить ні
+// вкинутого зображення, ні полотна, перетвореного на обʼєкт (зауваження
+// власника), ні сусідньої позначки.
+struct EdBelowEntry { int upto; unsigned long long h; Gdiplus::Bitmap* bmp; };
+std::vector<EdBelowEntry> g_edBelow;
+int g_edBelowDepth = 0;                 // глибина вкладених побудов
+
+void EdBelowClear()
+{
+    for (size_t i = 0; i < g_edBelow.size(); ++i) delete g_edBelow[i].bmp;
+    g_edBelow.clear();
+}
+
+void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, double oy, int idx);
+
+Gdiplus::Bitmap* EdBelowImage(int upto)
+{
+    if (!g_edImg) return nullptr;
+    if (upto > (int)g_edObjs.size()) upto = (int)g_edObjs.size();
+    if (upto <= 0) return g_edImg;                 // під першою позначкою — сам знімок
+    const unsigned long long h = EdBelowHash(upto);
+    for (size_t i = 0; i < g_edBelow.size(); ++i)
+        if (g_edBelow[i].upto == upto && g_edBelow[i].h == h) return g_edBelow[i].bmp;
+
+    Gdiplus::Bitmap* bmp = new Gdiplus::Bitmap(g_edImgW, g_edImgH, PixelFormat32bppPARGB);
+    if (!bmp || bmp->GetLastStatus() != Gdiplus::Ok) { delete bmp; return g_edImg; }
+    {
+        Gdiplus::Graphics gg(bmp);
+        gg.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+        gg.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
+        gg.DrawImage(g_edImg, Gdiplus::Rect(0, 0, g_edImgW, g_edImgH),
+                     0, 0, g_edImgW, g_edImgH, Gdiplus::UnitPixel);
+        gg.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        // ⚠ Рекурсія скінченна: ефект усередині просить композит із МЕНШИМ
+        // upto, тож ланцюжок строго спадає до нуля.
+        ++g_edBelowDepth;
+        for (int i = 0; i < upto; ++i) EdDrawObject(gg, g_edObjs[i], 1.0, 0.0, 0.0, i);
+        --g_edBelowDepth;
+    }
+    // Чистимо лише на верхньому рівні: нижче хтось іще тримає вказівник на
+    // свій композит, і видалити його зараз означало б малювати по звільненому.
+    if (g_edBelowDepth == 0 && g_edBelow.size() >= 4) EdBelowClear();
+    EdBelowEntry e = { upto, h, bmp };
+    g_edBelow.push_back(e);
+    return bmp;
+}
+
+std::wstring EdFxKey(const EdObj& o, double s, unsigned long long below)
+{
+    wchar_t head[200];
+    wsprintfW(head, L"fx|%d|%d|%d|%d|%d|%d|%d|%d|%d|%08X|%08X%08X",
               (int)o.kind, (int)(s * 1000 + 0.5), o.x, o.y, o.w, o.h,
-              o.mode, o.strength, o.alpha, (unsigned)o.color);
+              o.mode, o.strength, o.alpha, (unsigned)o.color,
+              (unsigned)(below >> 32), (unsigned)(below & 0xFFFFFFFFu));
     return std::wstring(head);
 }
 
 // Плитка ефекту в РОЗМІРІ ЗНІМКА, потім за потреби зменшена до екранного
 // масштабу. Рахувати одразу в масштабі екрана не можна: у файл пішов би слабший
 // ефект, ніж той, що бачив користувач.
-const EdTile* EdEffectTile(const EdObj& o, double s)
+const EdTile* EdEffectTile(const EdObj& o, double s, int idx)
 {
-    const std::wstring key = EdFxKey(o, s);
+    const unsigned long long below = EdBelowHash(idx);
+    const std::wstring key = EdFxKey(o, s, below);
     for (size_t i = 0; i < g_edTiles.size(); ++i)
         if (g_edTiles[i].key == key) return &g_edTiles[i];
     if (!g_edImg || o.w < 1 || o.h < 1) return nullptr;
@@ -10543,12 +10633,14 @@ const EdTile* EdEffectTile(const EdObj& o, double s)
     if (ry + rh > g_edImgH) rh = g_edImgH - ry;
     if (rw < 1 || rh < 1) return nullptr;
 
+    Gdiplus::Bitmap* src = EdBelowImage(idx);
+    if (!src) src = g_edImg;
     Gdiplus::Bitmap* full = new Gdiplus::Bitmap(rw, rh, PixelFormat32bppPARGB);
     if (!full || full->GetLastStatus() != Gdiplus::Ok) { delete full; return nullptr; }
     {
         Gdiplus::Graphics g(full);
         g.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
-        g.DrawImage(g_edImg, Gdiplus::Rect(0, 0, rw, rh), rx, ry, rw, rh, Gdiplus::UnitPixel);
+        g.DrawImage(src, Gdiplus::Rect(0, 0, rw, rh), rx, ry, rw, rh, Gdiplus::UnitPixel);
     }
 
     Gdiplus::BitmapData bd = {};
@@ -10899,7 +10991,9 @@ void EdDrawHead(Gdiplus::Graphics& g, const Gdiplus::Color& col, float tipX, flo
     g.FillPolygon(&brush, tri, 3);
 }
 
-void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, double oy)
+// idx — номер позначки в списку. Він потрібен рівно одному місцю (ефектам), але
+// проходить наскрізь: інакше ефект не знав би, що саме під ним.
+void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, double oy, int idx)
 {
     float pw = (float)(o.thick * s);
     if (pw < 1.0f) pw = 1.0f;              // тонше пікселя — це вже невидимо
@@ -11044,7 +11138,7 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
     }
     case EdKind::Hide:
     case EdKind::Mark: {
-        const EdTile* tile = EdEffectTile(o, s);
+        const EdTile* tile = EdEffectTile(o, s, idx);
         if (!tile || !tile->bmp) break;
         const int tw = (int)tile->bmp->GetWidth(), th = (int)tile->bmp->GetHeight();
         g.DrawImage(tile->bmp, Gdiplus::Rect((int)(x + 0.5f), (int)(y + 0.5f), tw, th),
@@ -11149,12 +11243,14 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         // Напис, який саме зараз правлять, показує поле введення — інакше під
         // ним просвічував би його ж старий текст.
         if (g_edEdit && (int)i == g_edEditIdx) continue;
-        EdDrawObject(g, g_edObjs[i], s, ox, oy);
+        EdDrawObject(g, g_edObjs[i], s, ox, oy, (int)i);
     }
 
     // Те, що зараз тягнуть мишею, ще не в списку — малюємо окремо.
     if (g_edDrag == EdDrag::New)
-        EdDrawObject(g, g_edNew, s, ox, oy);
+        // Те, що ще тягнуть, лежить НАД усім: ефект під курсором має вже
+        // накривати все намальоване, інакше маркер «прозріває» після кнопки.
+        EdDrawObject(g, g_edNew, s, ox, oy, (int)g_edObjs.size());
 
     // Решта вибраних — тонкою рамкою без ручок: ручки має лише головний,
     // інакше незрозуміло, що саме потягнеться.
@@ -11669,7 +11765,7 @@ void EdScaleOne(EdObj& o, const EdObj& src, double ax, double ay, double kx, dou
 
 // Спільна зміна розміру: нерухомим лишається ПРОТИЛЕЖНИЙ бік рамки, як і в
 // однієї позначки. Ручки середин сторін тягнуть лише свою вісь.
-void EdManyResize(int handle, POINT img)
+void EdManyResize(int handle, POINT img, bool keep)
 {
     if (g_edManyOrig.empty()) return;
     RECT b = g_edManyBox;
@@ -11681,6 +11777,12 @@ void EdManyResize(int handle, POINT img)
     if (right) b.right = img.x;
     if (top)   b.top = img.y;
     if (bot)   b.bottom = img.y;
+    if (keep) {
+        int l = b.left, t = b.top, r = b.right, bo = b.bottom;
+        EdKeepAspect(handle, g_edManyBox.right - g_edManyBox.left,
+                     g_edManyBox.bottom - g_edManyBox.top, l, t, r, bo);
+        b.left = l; b.top = t; b.right = r; b.bottom = bo;
+    }
     // Рамка не має вивертатися навиворіт: мінімум чотири точки на бік.
     if (b.right - b.left < 4) { if (left) b.left = b.right - 4; else b.right = b.left + 4; }
     if (b.bottom - b.top < 4) { if (top) b.top = b.bottom - 4; else b.bottom = b.top + 4; }
@@ -12070,7 +12172,48 @@ void EdConstrain(EdObj& o)
     o.h = o.h < 0 ? -side : side;
 }
 
-void EdResizeSel(int handle, POINT img)
+// Shift у зміні розміру: нову рамку підганяємо під співвідношення сторін
+// ОРИГІНАЛУ. Нерухомим лишається той самий бік, що й без Shift; вісь, за яку
+// не тягнули, росте від свого центра — інакше фігура при кожному русі
+// стрибала б униз-праворуч.
+void EdKeepAspect(int handle, int ow, int oh, int& l, int& t, int& r, int& b)
+{
+    if (ow < 1 || oh < 1) return;
+    const bool left  = (handle == 0 || handle == 6 || handle == 7);
+    const bool right = (handle >= 2 && handle <= 4);
+    const bool top   = (handle <= 2);
+    const bool bot   = (handle >= 4 && handle <= 6);
+    const double ar = (double)ow / (double)oh;
+    double nw = (double)(r - l), nh = (double)(b - t);
+    const double relW = fabs(nw) / ow, relH = fabs(nh) / oh;
+    if ((left || right) && (top || bot)) {
+        // Кут: провідною стає та вісь, яка змінилась сильніше.
+        if (relW >= relH) nh = (nh < 0 ? -1.0 : 1.0) * fabs(nw) / ar;
+        else              nw = (nw < 0 ? -1.0 : 1.0) * fabs(nh) * ar;
+    } else if (left || right) {
+        nh = (nh < 0 ? -1.0 : 1.0) * fabs(nw) / ar;
+    } else if (top || bot) {
+        nw = (nw < 0 ? -1.0 : 1.0) * fabs(nh) * ar;
+    } else {
+        return;
+    }
+    if (left)       l = r - (int)(nw + (nw < 0 ? -0.5 : 0.5));
+    else if (right) r = l + (int)(nw + (nw < 0 ? -0.5 : 0.5));
+    else {                                  // ширину не тягли — ростимо від центра
+        const double cx = (l + r) / 2.0;
+        l = (int)(cx - nw / 2.0 + 0.5);
+        r = (int)(cx + nw / 2.0 + 0.5);
+    }
+    if (top)      t = b - (int)(nh + (nh < 0 ? -0.5 : 0.5));
+    else if (bot) b = t + (int)(nh + (nh < 0 ? -0.5 : 0.5));
+    else {
+        const double cy = (t + b) / 2.0;
+        t = (int)(cy - nh / 2.0 + 0.5);
+        b = (int)(cy + nh / 2.0 + 0.5);
+    }
+}
+
+void EdResizeSel(int handle, POINT img, bool keep)
 {
     EdObj o = g_edDragOrig;
 
@@ -12118,6 +12261,19 @@ void EdResizeSel(int handle, POINT img)
         EdObj n = o;
         if (handle == 0) { n.x = img.x; n.y = img.y; n.w = o.x + o.w - img.x; n.h = o.y + o.h - img.y; }
         else             { n.w = img.x - o.x; n.h = img.y - o.y; }
+        // ⚠ «Пропорції» відрізка — це його КУТ: тримаємо ті самі вісім осей
+        // через 45°, що й при малюванні. Нерухомим лишається протилежний кінець,
+        // тож для ручки 0 вирівнюємо вектор і переставляємо початок назад.
+        if (keep) {
+            if (handle == 0) {
+                const int ex = n.x + n.w, ey = n.y + n.h;
+                EdConstrain(n);
+                n.x = ex - n.w;
+                n.y = ey - n.h;
+            } else {
+                EdConstrain(n);
+            }
+        }
         g_edObjs[g_edSel] = n;
         return;
     }
@@ -12136,6 +12292,7 @@ void EdResizeSel(int handle, POINT img)
         case 7: l0 = img.x; break;
         default: break;
         }
+        if (keep) EdKeepAspect(handle, o.w, o.h, l0, t0, r0, b0);
         if (r0 - l0 < 2) r0 = l0 + 2;
         if (b0 - t0 < 2) b0 = t0 + 2;
         EdObj n = o;
@@ -12162,6 +12319,7 @@ void EdResizeSel(int handle, POINT img)
     case 7: l = img.x; break;
     default: break;
     }
+    if (keep) EdKeepAspect(handle, o.w, o.h, l, tp, r, bt);
     EdObj n = o;
     n.x = l; n.y = tp; n.w = r - l; n.h = bt - tp;
     EdNormalize(n);
@@ -12467,7 +12625,10 @@ bool EdShareAvailable()
 // вимикаємо власника й крутимо власний цикл повідомлень.
 
 HWND g_edSzWnd = nullptr;
-HWND g_edSzW = nullptr, g_edSzH = nullptr, g_edSzPct = nullptr;
+HWND g_edSzW = nullptr, g_edSzH = nullptr;
+// Відсоток свій у кожної осі (вимога власника): при вимкнених пропорціях
+// «70 % завширшки й 100 % заввишки» інакше не набрати взагалі.
+HWND g_edSzPctW = nullptr, g_edSzPctH = nullptr;
 HWND g_edSzKeep = nullptr, g_edSzText = nullptr, g_edSzSharp = nullptr;
 bool g_edSzCanvas = false;      // полотно чи зображення
 // Вимкнув один раз — лишається вимкненим (зауваження власника). Стан живе,
@@ -12494,30 +12655,44 @@ void EdSzWrite(HWND e, int v)
     SetWindowTextW(e, buf);
 }
 
+// Чотири поля тримають ДВА числа: ширину й висоту. Відсотки — лише інший спосіб
+// їх набрати, тож перерахунок іде в один бік — «що змінили → пікселі → решта
+// полів», а не кожне поле в кожне.
 void EdSzSync(HWND from)
 {
     if (g_edSzGuard) return;
     g_edSzGuard = true;
     const bool keep = (SendMessageW(g_edSzKeep, BM_GETCHECK, 0, 0) == BST_CHECKED);
-    if (from == g_edSzPct) {
-        int p = EdSzRead(g_edSzPct);
+    int w = EdSzRead(g_edSzW), h = EdSzRead(g_edSzH);
+
+    if (from == g_edSzPctW && g_edSzOrigW > 0) {
+        int p = EdSzRead(g_edSzPctW);
         if (p < 1) p = 1;
         if (p > 1000) p = 1000;
-        EdSzWrite(g_edSzW, (int)((double)g_edSzOrigW * p / 100.0 + 0.5));
-        EdSzWrite(g_edSzH, (int)((double)g_edSzOrigH * p / 100.0 + 0.5));
-    } else if (keep && g_edSzOrigW > 0 && g_edSzOrigH > 0) {
-        if (from == g_edSzW) {
-            const int w = EdSzRead(g_edSzW);
-            if (w > 0) EdSzWrite(g_edSzH, (int)((double)w * g_edSzOrigH / g_edSzOrigW + 0.5));
-        } else if (from == g_edSzH) {
-            const int h = EdSzRead(g_edSzH);
-            if (h > 0) EdSzWrite(g_edSzW, (int)((double)h * g_edSzOrigW / g_edSzOrigH + 0.5));
-        }
+        w = (int)((double)g_edSzOrigW * p / 100.0 + 0.5);
+        if (keep && g_edSzOrigH > 0) h = (int)((double)g_edSzOrigH * p / 100.0 + 0.5);
+    } else if (from == g_edSzPctH && g_edSzOrigH > 0) {
+        int p = EdSzRead(g_edSzPctH);
+        if (p < 1) p = 1;
+        if (p > 1000) p = 1000;
+        h = (int)((double)g_edSzOrigH * p / 100.0 + 0.5);
+        if (keep && g_edSzOrigW > 0) w = (int)((double)g_edSzOrigW * p / 100.0 + 0.5);
+    } else if (from == g_edSzW) {
+        if (keep && w > 0 && g_edSzOrigW > 0 && g_edSzOrigH > 0)
+            h = (int)((double)w * g_edSzOrigH / g_edSzOrigW + 0.5);
+    } else if (from == g_edSzH) {
+        if (keep && h > 0 && g_edSzOrigW > 0 && g_edSzOrigH > 0)
+            w = (int)((double)h * g_edSzOrigW / g_edSzOrigH + 0.5);
     }
-    if (from != g_edSzPct && g_edSzOrigW > 0) {
-        const int w = EdSzRead(g_edSzW);
-        EdSzWrite(g_edSzPct, (int)((double)w * 100.0 / g_edSzOrigW + 0.5));
-    }
+
+    // Назад у поля пишемо лише ті, яких користувач зараз не набирає: інакше
+    // курсор стрибав би на початок після кожної цифри.
+    if (from != g_edSzW) EdSzWrite(g_edSzW, w);
+    if (from != g_edSzH) EdSzWrite(g_edSzH, h);
+    if (from != g_edSzPctW && g_edSzOrigW > 0)
+        EdSzWrite(g_edSzPctW, (int)((double)w * 100.0 / g_edSzOrigW + 0.5));
+    if (from != g_edSzPctH && g_edSzOrigH > 0)
+        EdSzWrite(g_edSzPctH, (int)((double)h * 100.0 / g_edSzOrigH + 0.5));
     g_edSzGuard = false;
 }
 
@@ -12632,7 +12807,9 @@ bool EdSizeDialog(HWND owner, bool canvas)
     }
 
     const int pad = EdPx(14), lh = EdPx(24), gap = EdPx(10);
-    const int w = EdPx(canvas ? 360 : 380), h = EdPx(canvas ? 240 : 285);
+    // ⚠ Висота залежить від того, на скільки рядків розлізеться примітка: у
+    // діалозі зображення вона довша й накривала кнопки.
+    const int w = EdPx(canvas ? 360 : 380), h = EdPx(canvas ? 276 : 348);
     RECT orc;
     GetWindowRect(owner, &orc);
     const int px = orc.left + ((orc.right - orc.left) - w) / 2;
@@ -12660,10 +12837,14 @@ bool EdSizeDialog(HWND owner, bool canvas)
                        pad + EdPx(246), y, EdPx(80), lh, 11);
     y += lh + gap;
     EdSzMake(g_edSzWnd, L"STATIC", S(Str::EdSizePct), 0, pad, y + EdPx(3), EdPx(70), lh, 0);
-    g_edSzPct = EdSzMake(g_edSzWnd, L"EDIT", L"", WS_BORDER | ES_NUMBER,
-                         pad + EdPx(78), y, EdPx(80), lh, 12);
+    g_edSzPctW = EdSzMake(g_edSzWnd, L"EDIT", L"", WS_BORDER | ES_NUMBER,
+                          pad + EdPx(78), y, EdPx(80), lh, 12);
+    EdSzMake(g_edSzWnd, L"STATIC", S(Str::EdSizePct), 0, pad + EdPx(176), y + EdPx(3), EdPx(70), lh, 0);
+    g_edSzPctH = EdSzMake(g_edSzWnd, L"EDIT", L"", WS_BORDER | ES_NUMBER,
+                          pad + EdPx(246), y, EdPx(80), lh, 16);
+    y += lh + gap;
     g_edSzKeep = EdSzMake(g_edSzWnd, L"BUTTON", S(Str::EdSizeKeep), BS_AUTOCHECKBOX,
-                          pad + EdPx(176), y + EdPx(2), EdPx(160), lh, 13);
+                          pad, y + EdPx(2), EdPx(220), lh, 13);
     SendMessageW(g_edSzKeep, BM_SETCHECK, g_edSzKeepAspect ? BST_CHECKED : BST_UNCHECKED, 0);
     y += lh + gap;
 
@@ -12679,7 +12860,7 @@ bool EdSizeDialog(HWND owner, bool canvas)
         g_edSzSharp = nullptr;
     }
     EdSzMake(g_edSzWnd, L"STATIC", S(canvas ? Str::EdSizeNoteCan : Str::EdSizeNoteImg), 0,
-             pad, y, w - pad * 2, lh * 2, 0);
+             pad, y, w - pad * 2, lh * (canvas ? 2 : 3), 0);
 
     // ⚠ Кнопки ставимо від КЛІЄНТСЬКОЇ висоти, а не від висоти вікна: підпис
     // і рамку система забирає собі, і на різних темах по-різному.
@@ -12695,7 +12876,8 @@ bool EdSizeDialog(HWND owner, bool canvas)
     g_edSzGuard = true;
     EdSzWrite(g_edSzW, g_edSzOrigW);
     EdSzWrite(g_edSzH, g_edSzOrigH);
-    EdSzWrite(g_edSzPct, 100);
+    EdSzWrite(g_edSzPctW, 100);
+    EdSzWrite(g_edSzPctH, 100);
     g_edSzGuard = false;
 
     EnableWindow(owner, FALSE);
@@ -12745,6 +12927,10 @@ Str EdTipFor(EdHit what, int idx)
         switch (idx) {
         case 0: return Str::EdToolSelect;
         case 1: return Str::EdToolRect;
+        // ⚠ Рядок еліпса випав разом зі стрілкою в CAPS-48, і еліпс поїхав у
+        // default, тобто в «Кадр». Тримати тут наскрізну нумерацію — пастка:
+        // кожне прибирання інструмента мовчки перейменовує сусіда.
+        case 2: return Str::EdToolEllipse;
         case 3: return Str::EdToolLine;
         case 4: return Str::EdToolPen;
         case 5: return Str::EdToolText;
@@ -13877,7 +14063,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
         if (g_edDrag == EdDrag::ManyResize) {
-            EdManyResize(g_edHandle, EdToImage(pt));
+            EdManyResize(g_edHandle, EdToImage(pt), (wp & MK_SHIFT) != 0);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -13923,7 +14109,9 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 rp.x = (LONG)(px + 0.5);
                 rp.y = (LONG)(py + 0.5);
             }
-            EdResizeSel(g_edHandle, EdToImage(rp));
+            // ⚠ Shift беремо з wParam повідомлення, а не з GetKeyState — див.
+            // сусідню гілку повороту.
+            EdResizeSel(g_edHandle, EdToImage(rp), (wp & MK_SHIFT) != 0);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -14960,7 +15148,7 @@ Gdiplus::Bitmap* EdRender()
                 EdViewX(), EdViewY(), vw, vh, Gdiplus::UnitPixel);
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     for (size_t i = 0; i < g_edObjs.size(); ++i)
-        EdDrawObject(g, g_edObjs[i], 1.0, -EdViewX(), -EdViewY());
+        EdDrawObject(g, g_edObjs[i], 1.0, -EdViewX(), -EdViewY(), (int)i);
     return out;
 }
 
