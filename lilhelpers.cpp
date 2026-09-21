@@ -518,6 +518,16 @@ X(EdShare,            L"Поділитися",                    L"Share")     
 X(EdTipShare,         L"Системне меню поширення Windows", L"The Windows share menu")                   \
 X(EdErrShare,         L"Системне меню поширення не відкрилось.",                                       \
                                                         L"The system share menu did not open.")        \
+X(EdErrShareQuiet,    L"Windows відкрила меню поширення, але даних у програми так і не спитала — "      \
+                      L"приймач отримав би порожнечу.\n\nНайімовірніша причина: програма працює з "     \
+                      L"правами адміністратора (це потрібно для перехоплення CapsLock), а меню "        \
+                      L"поширення й самі приймачі — ні, і дістати до нас вони не можуть.\n\n"           \
+                      L"Поки що надійні шляхи ті самі: «Копіювати» (Ctrl+C) або «Експорт».",            \
+                      L"Windows opened the share menu but never asked this program for the data, "      \
+                      L"so the target would have received nothing.\n\nThe likely cause: this program "  \
+                      L"runs elevated (needed for the CapsLock hook) while the share menu and the "     \
+                      L"targets do not, and they cannot reach into it.\n\n"                            \
+                      L"For now use Copy (Ctrl+C) or Export.")                                         \
 X(EdBtnSizeCan,       L"Розмір полотна…",               L"Canvas size…")                               \
 X(EdTipSizeImg,       L"Змінити розмір самого зображення", L"Resize the image itself")                 \
 X(EdTipSizeCan,       L"Змінити розмір полотна",        L"Resize the canvas")                          \
@@ -12501,6 +12511,9 @@ using namespace ABI::Windows::Storage;
 using namespace ABI::Windows::Storage::Streams;
 
 std::wstring g_tempFile;     // останній тимчасовий PNG — прибираємо за собою
+// Скільки разів система СПРАВДІ спитала в нас дані. Нуль після показу меню —
+// це діагноз, а не дрібниця: пакет був би порожній, хоч би що ми в нього клали.
+int g_asked = 0;
 
 void CleanTemp()
 {
@@ -12514,6 +12527,15 @@ void CleanTemp()
 // IInspectable, тож зсув правильний, а решти ми не викликаємо.
 // ⚠ Ідентифікатор інтерфейсу здобуто НА ЖИВІЙ СИСТЕМІ (IActivationFactory →
 // GetIids), а не з памʼяті: перша ж спроба «згадати» його дала E_NOINTERFACE.
+// ⚠ Усі три наші обʼєкти віддаються БРОКЕРУ, тобто в інший процес. Системні
+// колекції WinRT (те, що в C++/WinRT робить single_threaded_vector) агільні —
+// наші мусять бути теж, інакше кожен виклик із чужої квартири йде через
+// маршалінг параметризованого інтерфейсу й має всі шанси не дійти.
+// Ідентифікатор беремо константою: __uuidof(IAgileObject) у MinGW дає
+// невизначений символ на етапі компонування.
+const GUID kIID_IAgileObject =
+    { 0x94ea2b94, 0xe9cc, 0x49e0, { 0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90 } };
+
 const GUID kIID_StorageFileStatics =
     { 0x5984c710, 0xdaf2, 0x43c8, { 0x8b, 0xb4, 0xa4, 0xd3, 0xea, 0xcf, 0xd0, 0x3f } };
 
@@ -12540,6 +12562,7 @@ struct ItemIterator : ItemIteratorBase
     {
         if (!out) return E_POINTER;
         if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, __uuidof(IInspectable)) ||
+            IsEqualIID(riid, kIID_IAgileObject) ||
             IsEqualIID(riid, __uuidof(ItemIteratorBase))) {
             *out = static_cast<ItemIteratorBase*>(this);
             AddRef();
@@ -12602,6 +12625,7 @@ struct ItemList : ItemIterableBase
     {
         if (!out) return E_POINTER;
         if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, __uuidof(IInspectable)) ||
+            IsEqualIID(riid, kIID_IAgileObject) ||
             IsEqualIID(riid, __uuidof(ItemIterableBase))) {
             *out = static_cast<ItemIterableBase*>(this);
             AddRef();
@@ -12714,7 +12738,7 @@ struct Handler : public ShareHandlerBase
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override
     {
         if (!out) return E_POINTER;
-        if (IsEqualIID(riid, IID_IUnknown) ||
+        if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, kIID_IAgileObject) ||
             IsEqualIID(riid, __uuidof(ShareHandlerBase))) {
             *out = static_cast<IUnknown*>(this);
             AddRef();
@@ -12733,6 +12757,7 @@ struct Handler : public ShareHandlerBase
 
     HRESULT STDMETHODCALLTYPE Invoke(IDataTransferManager*, IDataRequestedEventArgs* args) override
     {
+        ++g_asked;
         if (!args) return S_OK;
         IDataRequest* req = nullptr;
         if (FAILED(args->get_Request(&req)) || !req) return S_OK;
@@ -13102,6 +13127,8 @@ HWND g_edTip = nullptr;
 // (lParam, lpReserved) ми все одно не використовуємо.
 const UINT kEdTipInfoSize = TTTOOLINFOW_V1_SIZE;   // макет, а не constexpr: макрос рахує зсув поля
 constexpr UINT kEdTipTimer = 8;
+constexpr UINT kEdShareTimer = 9;      // контроль: чи спитали в нас дані
+int g_edShareAskedAt = 0;              // скільки запитів було до показу меню
 constexpr UINT kEdTipDelay = 450;
 
 // Підказка більше не одна константа: до інструментів і виходів дописується
@@ -15121,6 +15148,15 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_TIMER:
+        // ⚠ Поширення або спрацює, або промовчить — третього не буває, і саме
+        // мовчання коштувало двох релізів наосліп. Через чотири секунди після
+        // показу меню перевіряємо, чи система ВЗАГАЛІ спитала дані.
+        if (wp == kEdShareTimer) {
+            KillTimer(hwnd, kEdShareTimer);
+            if (EdShareNs::g_asked == g_edShareAskedAt)
+                MessageBoxW(hwnd, S(Str::EdErrShareQuiet), kAppName, MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
         if (wp == kEdTipTimer) {
             KillTimer(hwnd, kEdTipTimer);
             EdTipShow(hwnd);
@@ -15570,7 +15606,9 @@ void EdShareNow(HWND hwnd)
         h->Release();                       // тримає тепер система
         if (SUCCEEDED(hr)) {
             EdShareNs::g_dtm = dtm;         // знімемо реєстрацію наступного разу
+            g_edShareAskedAt = EdShareNs::g_asked;
             hr = it->ShowShareUIForWindow(hwnd);
+            if (SUCCEEDED(hr)) SetTimer(hwnd, kEdShareTimer, 4000, nullptr);
         } else {
             dtm->Release();
         }
