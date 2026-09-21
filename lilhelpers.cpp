@@ -465,6 +465,14 @@ X(CapHkHint,          L"Клацніть поле і натисніть комб
 X(EdCopy,             L"Копіювати",                     L"Copy")                                       \
 X(EdSaveAs,           L"Експорт",                       L"Export")                                     \
 X(EdStore,            L"Зберегти",                      L"Save")                                       \
+X(EdImport,           L"Імпорт…",                       L"Import…")                                    \
+X(EdSaveAsDoc,        L"Зберегти як…",                  L"Save as…")                                   \
+X(EdExportItem,       L"Експорт…",                      L"Export…")                                    \
+X(EdTipOpenLib,       L"Відкрити знімок із бібліотеки", L"Open a snapshot from the library")           \
+X(EdTipSaveMore,      L"Експорт у PNG/JPG або файл поза бібліотекою",                                   \
+                      L"Export to PNG/JPG or a file outside the library")                              \
+X(EdSaveDocTitle,     L"Зберегти знімок із позначками", L"Save snapshot with marks")                   \
+X(EdFmtDoc,           L"Знімок Little Helpers",         L"Little Helpers snapshot")                    \
 X(EdTipStore,         L"Зберегти в бібліотеку разом із позначками",                                     \
                       L"Save to the library together with the marks")                                  \
 X(EdStored,           L"У бібліотеці",                  L"In the library")                             \
@@ -7732,7 +7740,7 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    Aspect, CropReset, CropOk, CropNo,
                    RotL, RotR, FlipH, FlipV, Exposure, Gamma, Contrast,
                    ToneReset, Compare, GroupEdit, GroupDel, Pick, PickItem,
-                   SelAlign, SelGroup, SizeImg, SizeCan, Store };
+                   SelAlign, SelGroup, SizeImg, SizeCan, Store, SaveMenu };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7747,7 +7755,7 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoHide, IcoMark, IcoBlur, IcoPixels, IcoPlate, IcoStrength,
              IcoCounter, IcoStamp, IcoNewGroup, IcoMore, IcoCrop,
              IcoRotL, IcoRotR, IcoFlipH, IcoFlipV, IcoCompare,
-             IcoGroupEdit, IcoGroupDel,
+             IcoGroupEdit, IcoGroupDel, IcoTick,
              IcoAlL, IcoAlCx, IcoAlR, IcoAlT, IcoAlCy, IcoAlB, IcoDistX, IcoDistY,
              IcoGroup, IcoUngroup,
              IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn };
@@ -7808,6 +7816,12 @@ void EdFitView();                     // поворот міняє сторон�
 bool EdDocSaveTo(const wchar_t* path);
 int  EdDocOpen(const wchar_t* path);
 bool EdStoreNow();                    // зберегти в бібліотеку
+void EdOpenLibrary(HWND hwnd);
+void EdSaveDocAs(HWND hwnd);
+void EdSaveMenu(HWND hwnd, const RECT& btn);
+void EdTick(EdHit what);
+void EdLibStamp(wchar_t* out, size_t cch);
+extern const wchar_t* kRegEdLast;   // визначено біля решти ключів реєстру редактора
 const wchar_t* EdLibDir();            // тека бібліотеки, створюється на місці
 void EdToast(Str s);
 bool EdSelBounds(RECT* out);          // спільні габарити вибраного
@@ -7822,6 +7836,11 @@ bool     g_edSaved       = false;  // уже кудись пішло — Esc н�
 // позначку, а не правлять щойно поставлену. Вибір власника, з перемикачем.
 bool     g_edKeepTool    = true;
 DWORD    g_edToastUntil  = 0;
+// CAPS-39: підтвердження дії — жирна галочка НА САМІЙ КНОПЦІ на секунду, а
+// не напис посеред рядка стану, який після натискання в полі зору не був
+// (зауваження власника). Пам'ятаємо, яка кнопка і доки.
+EdHit    g_edTickWhat  = EdHit::None;
+DWORD    g_edTickUntil = 0;
 Str      g_edToast       = Str::Empty;
 void EdDoCopy();
 void EdDoSave();
@@ -8330,6 +8349,10 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
     case IcoWinClose:
         g.DrawLine(&pen, 4.5f, 4.5f, 15.5f, 15.5f);
         g.DrawLine(&pen, 15.5f, 4.5f, 4.5f, 15.5f);
+        break;
+    case IcoTick:
+        g.DrawLine(&pen, 3.4f, 10.6f, 8.0f, 15.0f);
+        g.DrawLine(&pen, 8.0f, 15.0f, 16.8f, 5.2f);
         break;
     case IcoSave:
         g.DrawLine(&pen, 10.0f, 2.8f, 10.0f, 11.8f);
@@ -9256,20 +9279,19 @@ void EdLayout(HWND hwnd)
     {
         HDC dc = GetDC(hwnd);
         const int cy = (g_edRcStatus.top + g_edRcStatus.bottom) / 2;
-        int x = EdPx(14);
+        // ⚠ Кнопки — тієї ж висоти й на тій самій відстані від країв, що й від
+        // низу: рамка навколо крайніх кнопок рівна з усіх боків (зауваження
+        // власника). Висота рядка 48, кнопка 32 → 8 знизу, 8 від країв.
+        const int bh = EdPx(32);
+        const int edge = (g_edRcStatus.bottom - g_edRcStatus.top - bh) / 2;
+        const int ico = EdPx(20);        // квадрат під іконку — як на «Зберегти» 3.25
+        int x = edge;
 
-        // CAPS-39: «Зберегти» стоїть ПЕРЕД «Відкрити» — дві дії над самим
-        // документом поряд, а «Копіювати» й «Експорт» лишаються праворуч як
-        // дії над результатом.
-        const int stw = EdTextWidth(dc, S(Str::EdStore), g_edFont) + EdPx(40);
-        RECT sb = EdPill(x, cy, stw, EdPx(30));
-        EdAdd(sb, EdHit::Store, 0);
-        x = sb.right + EdPx(8);
-
-        const int ow = EdTextWidth(dc, S(Str::EdOpenBtn), g_edFont) + EdPx(40);
-        RECT ob = EdPill(x, cy, ow, EdPx(30));
+        // Ліворуч — ОДНА кнопка «Відкрити» (бібліотека) зі списком джерел.
+        const int ow = ico + EdPx(8) + EdTextWidth(dc, S(Str::EdOpenBtn), g_edFont) + EdPx(22);
+        RECT ob = EdPill(x, cy, ow, bh);
         EdAdd(ob, EdHit::Open, 0);
-        RECT om = EdPill(ob.right, cy, EdPx(22), EdPx(30));
+        RECT om = EdPill(ob.right, cy, EdPx(24), bh);
         EdAdd(om, EdHit::OpenMenu, 0);
         x = om.right + EdPx(12) + 1 + EdPx(12);
 
@@ -9284,18 +9306,18 @@ void EdLayout(HWND hwnd)
         const int fw = EdTextWidth(dc, S(Str::EdFit), g_edFont) + EdPx(20);
         RECT f = EdPill(x, cy, fw, EdPx(26)); EdAdd(f, EdHit::Fit, 0);
 
-        // CAPS-22: виходи в правому куті, підписані й далеко від системного ✕.
-        const int bh = EdPx(32);
-        // Клавіша переїхала в підказку, натомість зліва стоїть іконка — як у
-        // кнопки «Відкрити», щоб три дії над файлом виглядали однією родиною.
-        const int wc = EdTextWidth(dc, S(Str::EdCopy), g_edFont) + EdPx(52);
-        const int ws = EdTextWidth(dc, S(Str::EdSaveAs), g_edFont) + EdPx(52);
-        int rx = rc.right - EdPx(14) - wc;
-        RECT rcCopy = { rx, cy - bh / 2, rx + wc, cy + bh / 2 };
+        // Праворуч — квадратна «Копіювати» лише з іконкою, перед нею «Зберегти»
+        // (бібліотека) зі списком: експорт і «зберегти як».
+        int rx = rc.right - edge - bh;
+        RECT rcCopy = { rx, cy - bh / 2, rx + bh, cy + bh / 2 };
         EdAdd(rcCopy, EdHit::Copy, 0);
-        rx -= EdPx(8) + ws;
-        RECT rcSave = { rx, cy - bh / 2, rx + ws, cy + bh / 2 };
-        EdAdd(rcSave, EdHit::Save, 0);
+        rx -= EdPx(8) + EdPx(24);
+        RECT sm = { rx, cy - bh / 2, rx + EdPx(24), cy + bh / 2 };
+        EdAdd(sm, EdHit::SaveMenu, 0);
+        const int sw = ico + EdPx(8) + EdTextWidth(dc, S(Str::EdStore), g_edFont) + EdPx(22);
+        rx -= sw;
+        RECT rcStore = { rx, cy - bh / 2, rx + sw, cy + bh / 2 };
+        EdAdd(rcStore, EdHit::Store, 0);
         ReleaseDC(hwnd, dc);
     }
 
@@ -11524,39 +11546,38 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     FillRect(dc, &line, b);
     DeleteObject(b);
 
-    if (const RECT* sb = EdRegionRect(EdHit::Store, 0)) {
-        const bool hot = (g_edHotWhat == EdHit::Store);
-        EdPaintButton(g, *sb, t, false, hot, false);
-        RECT ib = EdIconBox(*sb);
-        ib.right = ib.left + EdPx(18);
-        EdIcon(g, IcoSave, ib, EdC(t.text), 1.6f);
-        RECT tr = *sb;
-        tr.left = ib.right + EdPx(4);
-        EdDrawText(dc, tr, S(Str::EdStore), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
-
-    // «Відкрити» і стрілка списку — одна кнопка на вигляд, дві на дотик.
-    if (const RECT* ob = EdRegionRect(EdHit::Open, 0)) {
-        const RECT* om = EdRegionRect(EdHit::OpenMenu, 0);
-        RECT whole = *ob;
-        if (om) whole.right = om->right;
-        const bool hot = (g_edHotWhat == EdHit::Open || g_edHotWhat == EdHit::OpenMenu);
+    // Кнопка з іконкою, підписом і (необов'язково) стрілкою списку праворуч.
+    // Іконка — у квадраті 20 px: така на «Зберегти» читалась краще за 18 у
+    // сусідів, тож тепер вона одна на всі три (зауваження власника).
+    // Галочка замість іконки — підтвердження щойно виконаної дії.
+    auto splitButton = [&](EdHit main, EdHit menu, int icon, Str label) {
+        const RECT* mb = EdRegionRect(main, 0);
+        if (!mb) return;
+        const RECT* mm = menu == EdHit::None ? nullptr : EdRegionRect(menu, 0);
+        RECT whole = *mb;
+        if (mm) whole.right = mm->right;
+        const bool hot = (g_edHotWhat == main || (mm && g_edHotWhat == menu));
         EdPaintButton(g, whole, t, false, hot, false);
-        RECT ic = { ob->left + EdPx(8), ob->top, ob->left + EdPx(8) + EdPx(18), ob->bottom };
-        EdIcon(g, IcoOpen, EdIconBox(ic), EdC(t.text), 1.5f);
-        RECT lb = { ic.right + EdPx(6), ob->top, ob->right, ob->bottom };
-        EdDrawText(dc, lb, S(Str::EdOpenBtn), g_edFont, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        if (om) {
-            RECT sep = { om->left, om->top + EdPx(5), om->left + 1, om->bottom - EdPx(5) };
-            HBRUSH sb = CreateSolidBrush(t.border);
-            FillRect(dc, &sep, sb);
-            DeleteObject(sb);
-            EdIcon(g, IcoChevD, EdIconBox(*om), EdC(t.text2), 1.6f);
+        const bool tick = (g_edTickWhat == main) && (int)(g_edTickUntil - GetTickCount()) > 0;
+        const int ico = EdPx(20);
+        RECT ib = { mb->left + EdPx(11), (mb->top + mb->bottom) / 2 - ico / 2,
+                    mb->left + EdPx(11) + ico, (mb->top + mb->bottom) / 2 + ico / 2 };
+        if (tick) EdIcon(g, IcoTick, ib, EdC(t.accent), 2.6f);
+        else      EdIcon(g, icon, ib, EdC(t.text), 1.6f);
+        RECT lb = { ib.right + EdPx(8), mb->top, mb->right, mb->bottom };
+        EdDrawText(dc, lb, S(label), g_edFont, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        if (mm) {
+            RECT sep = { mm->left, mm->top + EdPx(7), mm->left + 1, mm->bottom - EdPx(7) };
+            HBRUSH sb2 = CreateSolidBrush(t.border);
+            FillRect(dc, &sep, sb2);
+            DeleteObject(sb2);
+            EdIcon(g, IcoChevD, EdIconBox(*mm), EdC(t.text2), 1.6f);
         }
-    }
+    };
+    splitButton(EdHit::Open, EdHit::OpenMenu, IcoOpen, Str::EdOpenBtn);
 
     wchar_t buf[128];
-    int x = EdPx(14);
+    int x = EdPx(8);
     if (const RECT* om = EdRegionRect(EdHit::OpenMenu, 0)) x = om->right + EdPx(12) + 1 + EdPx(12);
     wsprintfW(buf, L"%d × %d", EdViewW(), EdViewH());
     RECT r1 = { x, g_edRcStatus.top, x + EdTextWidth(dc, L"8888 × 8888", g_edFont), g_edRcStatus.bottom };
@@ -11569,6 +11590,8 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     DeleteObject(b);
     x = d1.right + EdPx(12);
 
+    // Тост посеред рядка лишився тільки для повідомлень, які не належать
+    // жодній кнопці; підтвердження дій — галочкою на самій кнопці.
     const bool toast = (g_edToast != Str::Empty) && (int)(g_edToastUntil - GetTickCount()) > 0;
     if (toast)
         lstrcpynW(buf, S(g_edToast), 128);
@@ -11608,28 +11631,36 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         EdDrawText(dc, *rf, S(Str::EdFit), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-    // Дві рівноправні кнопки. Підсвічена — та, якою користувалися востаннє:
-    // вона ж спрацює на Enter. Друга нікуди не дівається.
-    struct { EdHit what; Str label; int ico; bool primary; } outs[2] = {
-        { EdHit::Save, Str::EdSaveAs, IcoSave, g_edLastAction == 1 },
-        { EdHit::Copy, Str::EdCopy,   IcoCopy, g_edLastAction == 0 }
-    };
-    for (int i = 0; i < 2; ++i) {
-        const RECT* r = EdRegionRect(outs[i].what, 0);
-        if (!r) continue;
-        const bool hot = (g_edHotWhat == outs[i].what);
-        if (outs[i].primary) {
+    // Праворуч: «Зберегти» зі списком і квадратна «Копіювати». Підсвічена —
+    // та, якою користувалися востаннє: вона ж спрацює на Enter.
+    splitButton(EdHit::Store, EdHit::SaveMenu, IcoSave, Str::EdStore);
+    if (g_edLastAction == 1) {
+        if (const RECT* sb = EdRegionRect(EdHit::Store, 0)) {
+            const RECT* sm = EdRegionRect(EdHit::SaveMenu, 0);
+            RECT whole = *sb;
+            if (sm) whole.right = sm->right;
+            Gdiplus::Pen accent(EdC(t.accent), 1.5f);
+            g.DrawRectangle(&accent, (float)whole.left + 0.75f, (float)whole.top + 0.75f,
+                            (float)(whole.right - whole.left) - 1.5f, (float)(whole.bottom - whole.top) - 1.5f);
+        }
+    }
+    if (const RECT* r = EdRegionRect(EdHit::Copy, 0)) {
+        const bool hot = (g_edHotWhat == EdHit::Copy);
+        const bool primary = (g_edLastAction == 0);
+        if (primary) {
             Gdiplus::Color fill = EdC(t.accent, hot ? 225 : 255);
             Gdiplus::Color bd = EdC(t.accent);
             EdFillRound(g, *r, (float)EdPx(6), &fill, &bd);
         } else {
             EdPaintButton(g, *r, t, false, hot, false);
         }
-        const COLORREF fg = outs[i].primary ? (g_edDark ? RGB(0, 52, 79) : RGB(255, 255, 255)) : t.text;
-        RECT ic = { r->left + EdPx(10), r->top, r->left + EdPx(10) + EdPx(18), r->bottom };
-        EdIcon(g, outs[i].ico, EdIconBox(ic), EdC(fg), 1.5f);
-        RECT lr = { ic.right + EdPx(6), r->top, r->right - EdPx(10), r->bottom };
-        EdDrawText(dc, lr, S(outs[i].label), g_edFont, fg, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        const COLORREF fg = primary ? (g_edDark ? RGB(0, 52, 79) : RGB(255, 255, 255)) : t.text;
+        const bool tick = (g_edTickWhat == EdHit::Copy) && (int)(g_edTickUntil - GetTickCount()) > 0;
+        const int ico = EdPx(20);
+        const int cx = (r->left + r->right) / 2, cy = (r->top + r->bottom) / 2;
+        RECT ib = { cx - ico / 2, cy - ico / 2, cx + ico / 2, cy + ico / 2 };
+        if (tick) EdIcon(g, IcoTick, ib, EdC(fg), 2.6f);
+        else      EdIcon(g, IcoCopy, ib, EdC(fg), 1.6f);
     }
 }
 
@@ -12894,12 +12925,12 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::Fit:     return Str::EdTipFit;
     case EdHit::Panel:   return g_edPanelOpen ? Str::EdTipPanelHide : Str::EdTipPanelShow;
     case EdHit::Copy:    return Str::EdCopy;
-    case EdHit::Save:    return Str::EdSaveAs;
     case EdHit::Store:   return Str::EdTipStore;
     case EdHit::Min:     return Str::EdTipMin;
     case EdHit::Max:     return IsZoomed(g_edWnd) ? Str::EdTipRestore : Str::EdTipMax;
     case EdHit::Close:   return Str::EdTipClose;
-    case EdHit::Open:    return Str::EdOpenTitle;
+    case EdHit::Open:    return Str::EdTipOpenLib;
+    case EdHit::SaveMenu:return Str::EdTipSaveMore;
     case EdHit::OpenMenu:return Str::EdTipOpenMore;
     default:             return Str::Empty;
     }
@@ -12918,7 +12949,6 @@ void EdTipText(EdHit what, int idx, wchar_t* out, int cch)
     const wchar_t* key = nullptr;
     if (what == EdHit::Tool && idx >= 0 && idx < 11) key = kEdToolKeys[idx];
     else if (what == EdHit::Copy) key = L"Ctrl+C";
-    else if (what == EdHit::Save) key = L"Ctrl+Shift+S";
     else if (what == EdHit::Store) key = L"Ctrl+S";
     if (key) {
         lstrcpynW(out, S(st), cch);
@@ -13174,6 +13204,10 @@ void EdOpenMenu(HWND hwnd, const RECT& btn)
 {
     HMENU m = CreatePopupMenu();
     if (!m) return;
+    // Імпорт чужої картинки — тепер ТУТ, а сама кнопка відкриває бібліотеку
+    // (рішення власника 21.09): свої знімки — головний шлях, чужі — окремий.
+    AppendMenuW(m, MF_STRING, 3, S(Str::EdImport));
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, 1, S(Str::EdCapClip));
     AppendMenuW(m, MF_STRING, 2, S(Str::EdCapRegion));
 
@@ -13184,6 +13218,7 @@ void EdOpenMenu(HWND hwnd, const RECT& btn)
                                         p.x, p.y, 0, hwnd, nullptr);
     DestroyMenu(m);
     if (!cmd) return;
+    if (cmd == 3) { EdOpenFileHere(hwnd); return; }   // сам спитає про заміну
     if (!EdConfirmReplace()) return;
 
     HINSTANCE inst = (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE);
@@ -13200,6 +13235,23 @@ void EdOpenMenu(HWND hwnd, const RECT& btn)
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
     }
+}
+
+// Список біля «Зберегти»: розкривається вгору, як і в «Відкрити».
+void EdSaveMenu(HWND hwnd, const RECT& btn)
+{
+    HMENU m = CreatePopupMenu();
+    if (!m) return;
+    AppendMenuW(m, MF_STRING, 1, S(Str::EdExportItem));
+    AppendMenuW(m, MF_STRING, 2, S(Str::EdSaveAsDoc));
+    POINT p = { btn.left, btn.top };
+    ClientToScreen(hwnd, &p);
+    const int cmd = (int)TrackPopupMenu(m, TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RETURNCMD |
+                                           TPM_NONOTIFY | TPM_LEFTBUTTON,
+                                        p.x, p.y, 0, hwnd, nullptr);
+    DestroyMenu(m);
+    if (cmd == 1) EdDoSave();
+    else if (cmd == 2) EdSaveDocAs(hwnd);
 }
 
 void EdTextBegin(HWND hwnd, POINT img, int idx)
@@ -14350,10 +14402,16 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case EdHit::Store:
             if (!g_edCropping) {
-                if (EdStoreNow()) EdToast(Str::EdStored);
+                if (EdStoreNow()) { g_edLastAction = 1; RegSaveInt(kRegEdLast, 1); EdTick(EdHit::Store); }
                 else MessageBoxW(hwnd, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
             }
             return 0;
+        case EdHit::SaveMenu: {
+            if (g_edCropping) return 0;
+            const RECT* sb = EdRegionRect(EdHit::Store, 0);
+            if (sb) EdSaveMenu(hwnd, *sb);
+            return 0;
+        }
         case EdHit::SizeImg: EdSizeDialog(hwnd, false); return 0;
         case EdHit::SizeCan: EdSizeDialog(hwnd, true);  return 0;
         case EdHit::RotL:  EdRotateBy(false); return 0;
@@ -14402,14 +14460,13 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // Доки кадр не підтверджено, виходи мовчать: незрозуміло, що саме вони
         // мали б віддати — кадр чи весь знімок.
         case EdHit::Copy:  if (!g_edCropping) EdDoCopy();  return 0;
-        case EdHit::Open:  if (!g_edCropping) EdOpenFileHere(hwnd); return 0;
+        case EdHit::Open:  if (!g_edCropping) EdOpenLibrary(hwnd); return 0;
         case EdHit::OpenMenu: {
             if (g_edCropping) return 0;
             const RECT* ob = EdRegionRect(EdHit::Open, 0);
             if (ob) EdOpenMenu(hwnd, *ob);
             return 0;
         }
-        case EdHit::Save:  if (!g_edCropping) EdDoSave();  return 0;
         case EdHit::Panel:
             g_edPanelOpen = !g_edPanelOpen;
             EdLayout(hwnd);
@@ -14754,7 +14811,12 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case 'D': if (ctrl) EdDuplicateSel(); return 0;
         case VK_RETURN:
             if (g_edCropping) { EdCropFinish(true); return 0; }
-            if (g_edLastAction == 1) EdDoSave(); else EdDoCopy();
+            if (g_edLastAction == 1) {
+                if (EdStoreNow()) EdTick(EdHit::Store);
+                else MessageBoxW(hwnd, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
+            } else {
+                EdDoCopy();
+            }
             return 0;
         case 'V':
             if (ctrl) {
@@ -14801,7 +14863,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 // роботу», і експорт під нею збивав би з пантелику.
                 if (wp == 'S') {
                     if (GetKeyState(VK_SHIFT) < 0 || (lp & 0x0200)) EdDoSave();
-                    else if (EdStoreNow()) EdToast(Str::EdStored);
+                    else if (EdStoreNow()) { g_edLastAction = 1; RegSaveInt(kRegEdLast, 1); EdTick(EdHit::Store); }
                     else MessageBoxW(hwnd, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
                 }
                 return 0;
@@ -14852,10 +14914,11 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
         if (wp == 7) {
-            if ((int)(g_edToastUntil - GetTickCount()) <= 0) {
-                KillTimer(hwnd, 7);
-                g_edToast = Str::Empty;
-            }
+            const bool toastOver = (int)(g_edToastUntil - GetTickCount()) <= 0;
+            const bool tickOver  = (int)(g_edTickUntil  - GetTickCount()) <= 0;
+            if (toastOver) g_edToast = Str::Empty;
+            if (tickOver)  g_edTickWhat = EdHit::None;
+            if (toastOver && tickOver) KillTimer(hwnd, 7);
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 0;
@@ -15137,6 +15200,17 @@ void EdToast(Str s)
     g_edToastUntil = GetTickCount() + 2200;
     if (g_edWnd) {
         SetTimer(g_edWnd, 7, 400, nullptr);
+        InvalidateRect(g_edWnd, nullptr, FALSE);
+    }
+}
+
+// Галочка на кнопці: той самий таймер 7, що й у тосту, — він і гасить.
+void EdTick(EdHit what)
+{
+    g_edTickWhat = what;
+    g_edTickUntil = GetTickCount() + 1100;
+    if (g_edWnd) {
+        SetTimer(g_edWnd, 7, 200, nullptr);
         InvalidateRect(g_edWnd, nullptr, FALSE);
     }
 }
@@ -15724,6 +15798,84 @@ void EdLibStamp(wchar_t* out, size_t cch)
     (void)cch;
 }
 
+// «Відкрити» відкриває БІБЛІОТЕКУ. Поки панель із мініатюрами ще не готова,
+// це системний діалог, відкритий одразу в теці бібліотеки з маскою на власний
+// формат — робочий, хай і не остаточний, шлях до своїх знімків.
+void EdOpenLibrary(HWND hwnd)
+{
+    IFileOpenDialog* dlg = nullptr;
+    if (FAILED(CoCreateInstance(kCLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                kIID_IFileOpenDialog, (void**)&dlg)) || !dlg)
+        return;
+    COMDLG_FILTERSPEC fs[1];
+    fs[0].pszName = S(Str::EdFmtDoc);
+    fs[0].pszSpec = L"*.lhshot";
+    dlg->SetFileTypes(1, fs);
+    dlg->SetTitle(S(Str::EdTipOpenLib));
+    if (const wchar_t* dir = EdLibDir()) {
+        IShellItem* folder = nullptr;
+        if (SUCCEEDED(SHCreateItemFromParsingName(dir, nullptr, kIID_IShellItem, (void**)&folder)) && folder) {
+            dlg->SetFolder(folder);
+            folder->Release();
+        }
+    }
+    wchar_t path[MAX_PATH] = {};
+    if (SUCCEEDED(dlg->Show(hwnd))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dlg->GetResult(&item)) && item) {
+            PWSTR p = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &p)) && p) {
+                lstrcpynW(path, p, MAX_PATH);
+                CoTaskMemFree(p);
+            }
+            item->Release();
+        }
+    }
+    dlg->Release();
+    if (!path[0]) return;
+    if (!EdConfirmReplace()) return;
+    const int rc = EdDocOpen(path);
+    if (rc == 2)      MessageBoxW(hwnd, S(Str::EdErrDocNew), kAppName, MB_OK | MB_ICONWARNING);
+    else if (rc != 0) MessageBoxW(hwnd, S(Str::EdErrDocBad), kAppName, MB_OK | MB_ICONWARNING);
+}
+
+// «Зберегти як…» — власний формат у будь-яку теку. Документ далі живе ТАМ:
+// наступне Ctrl+S перезаписує саме цей файл, а не заводить запис у бібліотеці.
+void EdSaveDocAs(HWND hwnd)
+{
+    IFileSaveDialog* dlg = nullptr;
+    if (FAILED(CoCreateInstance(kCLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                kIID_IFileSaveDialog, (void**)&dlg)) || !dlg)
+        return;
+    COMDLG_FILTERSPEC fs[1];
+    fs[0].pszName = S(Str::EdFmtDoc);
+    fs[0].pszSpec = L"*.lhshot";
+    dlg->SetFileTypes(1, fs);
+    dlg->SetDefaultExtension(L"lhshot");
+    dlg->SetTitle(S(Str::EdSaveDocTitle));
+    wchar_t name[160];
+    if (g_edDocName[0]) lstrcpynW(name, g_edDocName, 160);
+    else EdLibStamp(name, 160);
+    dlg->SetFileName(name);
+    wchar_t path[MAX_PATH] = {};
+    if (SUCCEEDED(dlg->Show(hwnd))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dlg->GetResult(&item)) && item) {
+            PWSTR p = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &p)) && p) {
+                lstrcpynW(path, p, MAX_PATH);
+                CoTaskMemFree(p);
+            }
+            item->Release();
+        }
+    }
+    dlg->Release();
+    if (!path[0]) return;
+    if (!g_edDocName[0]) EdLibStamp(g_edDocName, 128);
+    if (EdDocSaveTo(path)) { g_edLastAction = 1; RegSaveInt(kRegEdLast, 1); EdTick(EdHit::Store); }
+    else MessageBoxW(hwnd, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
+}
+
 // ⚠ Впізнаємо за МАГІЧНИМИ БАЙТАМИ, а не за розширенням: перейменований файл
 // лишається тим, чим є, а чужий .lhshot не стає нашим.
 bool EdIsDocFile(const wchar_t* path)
@@ -15844,7 +15996,7 @@ void EdDoCopy()
     RegSaveInt(kRegEdLast, 0);
     // Вікно НЕ закриваємо: скопіювати — не означає закінчити. Часто далі
     // домальовують ще одну позначку й копіюють знову.
-    EdToast(Str::EdCopied);
+    EdTick(EdHit::Copy);
 }
 
 void EdDoSave()
@@ -15853,7 +16005,7 @@ void EdDoSave()
     g_edSaved = true;
     g_edLastAction = 1;
     RegSaveInt(kRegEdLast, 1);
-    EdToast(Str::EdSaved);
+    EdTick(EdHit::Store);
 }
 
 // Esc і закриття: питаємо лише тоді, коли є що втрачати.
