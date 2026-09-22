@@ -111,6 +111,7 @@ constexpr UINT WMAPP_THEMELOC     = WM_APP + 6;   // потік геолокац
 constexpr UINT WMAPP_UPDATE       = WM_APP + 7;   // потік оновлення: lp = UpdResult* (heap)
 constexpr UINT WMAPP_PEEK         = WM_APP + 8;   // CAPS-16: від хука — пробіл/Esc у списку файлів; lp = SHELLDLL_DefView
 constexpr UINT WMAPP_OPENEDITOR   = WM_APP + 10;  // CAPS-59: --editor від другого екземпляра
+constexpr UINT WMAPP_QUICKSAVE    = WM_APP + 11;  // CAPS-57: lp = CapQuickJob* — запис у бібліотеку після буфера
 constexpr UINT WMAPP_EDTEXT       = WM_APP + 9;   // CAPS-24: поле вводу напису; wp = 1 зафіксувати, 0 скасувати
 constexpr UINT HKW_INSTALL        = WM_APP + 20;  // до вікна потоку хука
 constexpr UINT HKW_UNINSTALL      = WM_APP + 21;
@@ -182,6 +183,10 @@ constexpr int  IDC_LIB_SHOW      = 200;
 constexpr int  IDC_LIB_CLEAR     = 201;
 constexpr int  IDC_LIB_NOW       = 202;
 constexpr int  IDC_CAP_HK4       = 203;   // CAPS-59: четверте поле — «Порожній редактор»
+constexpr int  IDC_ACT_M0        = 204;   // CAPS-57: матриця жест × дія, 204..212 = жест*3 + дія
+constexpr int  IDC_OV_ESC_CLOSE  = 213;   // CAPS-57: Esc в оверлеї — закрити
+constexpr int  IDC_OV_ESC_SAVE   = 214;   //          або зберегти й закрити
+constexpr int  IDC_LIB_QUICK     = 215;   // CAPS-57: у бібліотеку й знімки без редактора
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -462,16 +467,36 @@ X(TabShots,           L"Знімки",                        L"Shots")         
 X(CapSecHotkeys,      L"Гарячі клавіші",                L"Hotkeys")                                    \
 X(CapHkClipL,         L"Зображення з буфера",           L"From clipboard")                             \
 X(CapHkEditorL,       L"Порожній редактор",             L"Blank editor")                               \
+X(CapSecGesture,      L"Коли відпускаєте рамку",        L"When you release the frame")                 \
+X(CapGestNone,        L"Без клавіші",                   L"No key")                                     \
+X(CapGestShift,       L"Shift",                         L"Shift")                                      \
+X(CapGestAlt,         L"Alt",                           L"Alt")                                        \
+X(CapActColEditor,    L"Редактор",                      L"Editor")                                     \
+X(CapActColClip,      L"Буфер",                         L"Clipboard")                                  \
+X(CapActColOverlay,   L"Оверлей",                       L"Overlay")                                    \
+X(CapOvEscL,          L"Esc в оверлеї",                 L"Esc in overlay")                             \
+X(CapOvEscClose,      L"закрити",                       L"close")                                      \
+X(CapOvEscSave,       L"зберегти й закрити",            L"save and close")                             \
+X(CapLibQuick,        L"Класти в бібліотеку й знімки без редактора",                                  \
+                      L"Also keep shots taken without the editor")                                     \
+X(CapCopied,          L"Скопійовано",                   L"Copied")                                     \
+X(CapStored,          L"Збережено",                     L"Saved")                                      \
+X(EdTipOvCopy,        L"Скопіювати й закрити (Enter, Ctrl+C)",                                        \
+                      L"Copy and close (Enter, Ctrl+C)")                                               \
+X(EdTipOvWindow,      L"У вікно редактора — тон, розмір, бібліотека, експорт",                        \
+                      L"To the editor window: tone, size, library, export")                           \
+X(RgnActEditor,       L"відкрити в редакторі",          L"open in editor")                             \
+X(RgnActClip,         L"скопіювати",                    L"copy")                                       \
+X(RgnActOverlay,      L"редагувати тут",                L"edit in place")                              \
+X(RgnHintPick,        L"Клік — вікно · Space — увесь екран",                                          \
+                      L"Click: window · Space: whole screen")                                          \
+X(RgnWholeScreen,     L"Увесь екран",                   L"Whole screen")                               \
 X(CapHkPress,         L"натисніть комбінацію…",         L"press a combination…")                       \
 X(CapHkTaken,         L"зайнято іншою програмою",       L"held by another app")                        \
 X(CapHkOff,           L"вимкнено",                      L"off")                                        \
 X(CapHkDefaults,      L"Повернути типові",              L"Restore defaults")                           \
-X(CapHkHint,          L"Клацніть поле і натисніть комбінацію з Ctrl, Alt або Shift. Якщо її вже "      \
-                      L"тримає інша програма, поле лишиться як було й скаже про це. Backspace "        \
-                      L"вимикає клавішу зовсім.",                                                       \
-                      L"Click a field and press a combination with Ctrl, Alt or Shift. If another "    \
-                      L"app already holds it, the field stays as it was and says so. Backspace "       \
-                      L"turns the shortcut off.")                                                       \
+X(CapHkHint,         L"Клацніть поле й натисніть комбінацію з Ctrl, Alt або Shift. Backspace — вимкнути.", \
+                      L"Click a field and press a combination with Ctrl, Alt or Shift. Backspace turns it off.") \
 X(EdCopy,             L"Копіювати",                     L"Copy")                                       \
 X(EdSaveAs,           L"Експорт",                       L"Export")                                     \
 X(EdStore,            L"Зберегти",                      L"Save")                                       \
@@ -777,12 +802,16 @@ inline const wchar_t* S(Str id) { return (g_lang == Lang::En ? kEn : kUk)[(int)i
 // Контроли зі сталим підписом запам'ятовуються при створенні, щоб ApplyLanguage
 // переписала їх усі за один прохід (дінамічні рядки стану оновлюють себе самі).
 struct LocCtrl { HWND h; Str id; };
-LocCtrl g_locCtrls[96];
+// ⚠ CAPS-57: матриця жестів додала два десятки підписів; 96 уже було впритул.
+LocCtrl g_locCtrls[192];
 int     g_locCtrlsN = 0;
+bool    g_locOverflow = false;   // перевіряється разом із g_pageOverflow після побудови вікна
 void RememberLoc(HWND h, Str id)
 {
     if (g_locCtrlsN < (int)(sizeof(g_locCtrls) / sizeof(*g_locCtrls)))
         g_locCtrls[g_locCtrlsN++] = { h, id };
+    else
+        g_locOverflow = true;
 }
 
 constexpr int kTabCount = 6;
@@ -815,7 +844,7 @@ bool  g_layoutOn = true;
 HWND  g_layoutCheckbox = nullptr;
 HWND  g_pageSettings[32] = {};  int g_pageSettingsN = 0;
 HWND  g_pagePeek[24]     = {};  int g_pagePeekN = 0;   // CAPS-16
-HWND  g_pageShots[32]    = {};  int g_pageShotsN = 0;  // CAPS-21; CAPS-59: 25 контролів, 24 не вміщало
+HWND  g_pageShots[64]    = {};  int g_pageShotsN = 0;  // CAPS-21; CAPS-57: матриця жестів — ще двадцять
 
 // ---------- CAPS-8: тема самого вікна ----------
 //
@@ -7248,6 +7277,68 @@ Gdiplus::Bitmap* CapFromClipboard()
 // Так рамка й притемнення не потрапляють у результат, вибір виходить точний до
 // пікселя, і ніщо на екрані не встигне змінитись між вибором і знімком.
 
+// ---- CAPS-57: що робити з обведеним ---------------------------------------
+// Дві осі замість списку режимів: ЩО знімаю вирішує сама накладка (тягнеш —
+// ділянка, клік — вікно, Space — увесь монітор), КУДИ віддаю — жест у мить
+// відпускання: без клавіші, Shift або Alt. Дій стільки ж, скільки жестів, і
+// налаштування лише переставляють їх — кожна дія завжди досяжна рівно одним
+// жестом (рішення власника 22.09).
+enum class CapAct { Editor = 0, Clip = 1, Overlay = 2 };
+const wchar_t* kRegCapActs   = L"CapGestureActions";  // по 4 біти: без клавіші, Shift, Alt
+const wchar_t* kRegLibQuick  = L"LibQuickSave";
+const wchar_t* kRegOvEscSave = L"OverlayEscSave";
+int  g_capAct[3] = { 0, 1, 2 };
+bool g_libQuick  = true;      // знімки без редактора теж ідуть у бібліотеку (типово так)
+bool g_ovEscSave = false;     // останній Esc в оверлеї: false — закрити, true — зберегти й закрити
+
+void CapLoadActs()
+{
+    const int v = RegLoadInt(kRegCapActs, 0x210, 0, 0xFFF);
+    int a[3] = { v & 0xF, (v >> 4) & 0xF, (v >> 8) & 0xF };
+    bool seen[3] = { false, false, false }, ok = true;
+    for (int i = 0; i < 3 && ok; ++i) {
+        if (a[i] < 0 || a[i] > 2 || seen[a[i]]) ok = false;
+        else seen[a[i]] = true;
+    }
+    for (int i = 0; i < 3; ++i) g_capAct[i] = ok ? a[i] : i;
+    g_libQuick  = RegLoadInt(kRegLibQuick, 1, 0, 1) != 0;
+    g_ovEscSave = RegLoadInt(kRegOvEscSave, 0, 0, 1) != 0;
+}
+
+// Жест g бере дію a; жест, у якого вона була, забирає стару дію g. Так
+// перестановка лишається перестановкою, і жодна дія не губиться.
+void CapSetAct(int g, int a)
+{
+    if (g < 0 || g > 2 || a < 0 || a > 2) return;
+    for (int i = 0; i < 3; ++i)
+        if (i != g && g_capAct[i] == a) g_capAct[i] = g_capAct[g];
+    g_capAct[g] = a;
+    RegSaveInt(kRegCapActs, g_capAct[0] | (g_capAct[1] << 4) | (g_capAct[2] << 8));
+}
+
+Str CapActVerb(int a)
+{
+    return a == (int)CapAct::Clip ? Str::RgnActClip
+         : a == (int)CapAct::Overlay ? Str::RgnActOverlay : Str::RgnActEditor;
+}
+
+// Жест у мить відпускання. Shift — із повідомлення (його несе wParam миші),
+// Alt — зі стану клавіатури: у повідомленнях миші для Alt біта немає.
+int RgnGesture(WPARAM mk)
+{
+    if (GetKeyState(VK_MENU) < 0) return 2;
+    if ((mk & MK_SHIFT) || GetKeyState(VK_SHIFT) < 0) return 1;
+    return 0;
+}
+
+// Модифікатори для клавіатурних команд накладки (Space, Enter). У робочій
+// збірці — лише реальний стан клавіш; тестова підставляє біти з lParam.
+WPARAM RgnKeyMods(LPARAM lp)
+{
+    (void)lp;
+    return 0;
+}
+
 HWND  g_rgnWnd = nullptr;
 Gdiplus::Bitmap* g_rgnImg = nullptr;   // заморожений кадр; НЕ власність цього коду
 RECT  g_rgnMon = {};
@@ -7256,6 +7347,13 @@ bool  g_rgnDragging = false, g_rgnDone = false, g_rgnOk = false;
 bool  g_rgnHadFocus = false;   // фокус справді був, а не «ніколи не приходив»
 POINT g_rgnCur = {};           // курсор у клієнтських координатах — для напрямних
 HFONT g_rgnFont = nullptr;
+HFONT g_rgnFontSm = nullptr;
+// CAPS-57: верхні вікна під знімком, згори вниз за Z, у координатах накладки.
+// Беруться ДО показу накладки — інакше першим у списку була б вона сама.
+std::vector<RECT> g_rgnWins;
+int   g_rgnHover = -1;         // вікно під курсором; -1 — робочий стіл, тобто весь монітор
+WPARAM g_rgnMk = 0;            // модифікатори з останнього руху миші — для підказки
+int   g_rgnGesture = 0;        // жест, яким вибір завершено
 
 RECT RgnSelRect()
 {
@@ -7269,7 +7367,7 @@ RECT RgnSelRect()
 
 // Підпис у темній плашці біля точки. Використовується і для розміру рамки,
 // і для координат першого кута.
-void RgnLabel(HDC dc, Gdiplus::Graphics& g, int w, int h, int ax, int ay, const wchar_t* text)
+[[maybe_unused]] void RgnLabel(HDC dc, Gdiplus::Graphics& g, int w, int h, int ax, int ay, const wchar_t* text)
 {
     HGDIOBJ oldF = SelectObject(dc, g_rgnFont);
     RECT m = { 0, 0, 0, 0 };
@@ -7288,6 +7386,105 @@ void RgnLabel(HDC dc, Gdiplus::Graphics& g, int w, int h, int ax, int ay, const 
     SelectObject(dc, oldF);
 }
 
+// Плашка з двома-трьома рядками: головний (координати або розмір) і підказка
+// про Shift та Alt. Дія жесту, що зараз затиснутий, світиться — видно
+// наперед, що станеться при відпусканні (вимога власника 22.09: підказка там
+// само, де координати).
+void RgnHintLabel(HDC dc, Gdiplus::Graphics& g, int w, int h, int ax, int ay,
+                  const wchar_t* head, bool pickHint)
+{
+    wchar_t segA[96], segB[96];
+    wsprintfW(segA, L"Shift — %s", S(CapActVerb(g_capAct[1])));
+    wsprintfW(segB, L"Alt — %s", S(CapActVerb(g_capAct[2])));
+    const wchar_t* gap = L"    ";
+    const wchar_t* pick = pickHint ? S(Str::RgnHintPick) : nullptr;
+    auto measure = [&](const wchar_t* t, HFONT f) {
+        HGDIOBJ o = SelectObject(dc, f);
+        RECT m = { 0, 0, 0, 0 };
+        DrawTextW(dc, t, -1, &m, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(dc, o);
+        return SIZE{ m.right - m.left, m.bottom - m.top };
+    };
+    const SIZE sh = measure(head, g_rgnFont);
+    const SIZE sa = measure(segA, g_rgnFontSm), sg = measure(gap, g_rgnFontSm), sb = measure(segB, g_rgnFontSm);
+    const SIZE sp = pick ? measure(pick, g_rgnFontSm) : SIZE{ 0, 0 };
+    int bw = sh.cx;
+    const int modsW = sa.cx + sg.cx + sb.cx;
+    if (modsW > bw) bw = modsW;
+    if (sp.cx > bw) bw = sp.cx;
+    bw += 16;
+    const int bh = sh.cy + 4 + sa.cy + (pick ? 2 + sp.cy : 0) + 10;
+    int bx = ax, by = ay - bh - 6;
+    if (by < 0) by = ay + 6;
+    if (by + bh > h) by = h - bh;
+    if (bx + bw > w) bx = w - bw;
+    if (bx < 0) bx = 0;
+    Gdiplus::SolidBrush back(Gdiplus::Color(225, 20, 20, 24));
+    g.FillRectangle(&back, bx, by, bw, bh);
+    SetBkMode(dc, TRANSPARENT);
+    HGDIOBJ oldF = SelectObject(dc, g_rgnFont);
+    SetTextColor(dc, RGB(255, 255, 255));
+    RECT r1 = { bx + 8, by + 5, bx + bw - 8, by + 5 + sh.cy };
+    DrawTextW(dc, head, -1, &r1, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(dc, g_rgnFontSm);
+    const int gst = RgnGesture(g_rgnMk);
+    const COLORREF on = RGB(120, 190, 255), off = RGB(190, 190, 196);
+    int x = bx + 8, y = r1.bottom + 4;
+    RECT ra = { x, y, x + sa.cx, y + sa.cy };
+    SetTextColor(dc, gst == 1 ? on : off);
+    DrawTextW(dc, segA, -1, &ra, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+    x += sa.cx + sg.cx;
+    RECT rb = { x, y, x + sb.cx, y + sb.cy };
+    SetTextColor(dc, gst == 2 ? on : off);
+    DrawTextW(dc, segB, -1, &rb, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+    if (pick) {
+        y += sa.cy + 2;
+        RECT rp = { bx + 8, y, bx + bw - 8, y + sp.cy };
+        SetTextColor(dc, RGB(150, 150, 158));
+        DrawTextW(dc, pick, -1, &rp, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+    }
+    SelectObject(dc, oldF);
+}
+
+// Що візьме клік без тягання: вікно під курсором або весь монітор.
+RECT RgnHoverRect(int w, int h)
+{
+    if (g_rgnHover >= 0 && g_rgnHover < (int)g_rgnWins.size()) return g_rgnWins[g_rgnHover];
+    RECT all = { 0, 0, w, h };
+    return all;
+}
+
+void RgnUpdateHover()
+{
+    g_rgnHover = -1;
+    for (size_t i = 0; i < g_rgnWins.size(); ++i)
+        if (PtInRect(&g_rgnWins[i], g_rgnCur)) { g_rgnHover = (int)i; break; }
+}
+
+BOOL CALLBACK RgnEnumWin(HWND h, LPARAM lp)
+{
+    const RECT& mon = *(const RECT*)lp;
+    if (!IsWindowVisible(h) || IsIconic(h)) return TRUE;
+    if (GetWindowLongPtrW(h, GWL_EXSTYLE) & WS_EX_TRANSPARENT) return TRUE;
+    BOOL cloaked = FALSE;
+    DwmGetWindowAttribute(h, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+    if (cloaked) return TRUE;
+    wchar_t cls[64] = {};
+    GetClassNameW(h, cls, 64);
+    // Робочий стіл — це «весь монітор», а не вікно.
+    if (!lstrcmpW(cls, L"Progman") || !lstrcmpW(cls, L"WorkerW")) return TRUE;
+    RECT r = {};
+    // Межі, які малює DWM: GetWindowRect у Windows 11 додає невидиме поле тіні.
+    if (FAILED(DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r))))
+        GetWindowRect(h, &r);
+    RECT c;
+    if (!IntersectRect(&c, &r, &mon)) return TRUE;
+    if (c.right - c.left < 8 || c.bottom - c.top < 8) return TRUE;
+    OffsetRect(&c, -mon.left, -mon.top);
+    g_rgnWins.push_back(c);
+    return TRUE;
+}
+
 void RgnPaint(HDC dc, int w, int h)
 {
     Gdiplus::Graphics g(dc);
@@ -7296,8 +7493,24 @@ void RgnPaint(HDC dc, int w, int h)
 
     const RECT s = g_rgnDragging ? RgnSelRect() : RECT{ 0, 0, 0, 0 };
     Gdiplus::SolidBrush scrim(Gdiplus::Color(120, 8, 8, 12));
-    if (!g_rgnDragging || s.right <= s.left || s.bottom <= s.top) {
-        g.FillRectangle(&scrim, 0, 0, w, h);
+    const bool dragged = g_rgnDragging && (s.right - s.left >= 4 || s.bottom - s.top >= 4);
+    if (!dragged) {
+        // CAPS-57: поки не тягнуть, накладка показує, що візьме клік: вікно під
+        // курсором — світле, решта притемнена; над робочим столом — рамка по
+        // краю монітора (клік візьме його весь).
+        const RECT hv = RgnHoverRect(w, h);
+        const bool whole = (g_rgnHover < 0);
+        if (whole) {
+            g.FillRectangle(&scrim, 0, 0, w, h);
+        } else {
+            g.FillRectangle(&scrim, 0, 0, w, (INT)hv.top);
+            g.FillRectangle(&scrim, 0, (INT)hv.bottom, w, h - (INT)hv.bottom);
+            g.FillRectangle(&scrim, 0, (INT)hv.top, (INT)hv.left, (INT)(hv.bottom - hv.top));
+            g.FillRectangle(&scrim, (INT)hv.right, (INT)hv.top, w - (INT)hv.right, (INT)(hv.bottom - hv.top));
+        }
+        Gdiplus::Pen accent(Gdiplus::Color(230, 80, 160, 255), 2.0f);
+        g.DrawRectangle(&accent, (INT)hv.left + 1, (INT)hv.top + 1,
+                        (INT)(hv.right - hv.left) - 2, (INT)(hv.bottom - hv.top) - 2);
     } else {
         // Притемнюємо все, крім вибраного, чотирма прямокутниками: так вибрана
         // ділянка лишається саме такою, якою піде в редактор.
@@ -7312,7 +7525,7 @@ void RgnPaint(HDC dc, int w, int h)
 
         wchar_t buf[64];
         wsprintfW(buf, L"%d × %d", (int)(s.right - s.left), (int)(s.bottom - s.top));
-        RgnLabel(dc, g, w, h, (int)s.left, (int)s.top, buf);
+        RgnHintLabel(dc, g, w, h, (int)s.left, (int)s.top, buf, false);
     }
 
     // Напрямні від курсора через увесь екран: ще до першого натискання видно,
@@ -7323,10 +7536,16 @@ void RgnPaint(HDC dc, int w, int h)
         g.DrawLine(&guide, 0, (INT)g_rgnCur.y, w, (INT)g_rgnCur.y);
         g.DrawLine(&guide, (INT)g_rgnCur.x, 0, (INT)g_rgnCur.x, h);
     }
-    if (!g_rgnDragging) {
-        wchar_t c[64];
-        wsprintfW(c, L"%d, %d", (int)g_rgnCur.x, (int)g_rgnCur.y);
-        RgnLabel(dc, g, w, h, (int)g_rgnCur.x + 12, (int)g_rgnCur.y + 34, c);
+    if (!dragged) {
+        wchar_t c[96];
+        if (g_rgnHover >= 0) {
+            const RECT hv = RgnHoverRect(w, h);
+            wsprintfW(c, L"%d, %d    %d × %d", (int)g_rgnCur.x, (int)g_rgnCur.y,
+                      (int)(hv.right - hv.left), (int)(hv.bottom - hv.top));
+        } else {
+            wsprintfW(c, L"%d, %d    %s", (int)g_rgnCur.x, (int)g_rgnCur.y, S(Str::RgnWholeScreen));
+        }
+        RgnHintLabel(dc, g, w, h, (int)g_rgnCur.x + 12, (int)g_rgnCur.y + 34, c, true);
     }
 }
 
@@ -7362,7 +7581,9 @@ LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_MOUSEMOVE:
         g_rgnCur.x = GET_X_LPARAM(lp);
         g_rgnCur.y = GET_Y_LPARAM(lp);
+        g_rgnMk = wp;
         if (g_rgnDragging) g_rgnTo = g_rgnCur;
+        else RgnUpdateHover();
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     case WM_LBUTTONUP: {
@@ -7370,8 +7591,20 @@ LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_rgnTo.x = GET_X_LPARAM(lp);
         g_rgnTo.y = GET_Y_LPARAM(lp);
         ReleaseCapture();
-        const RECT s = RgnSelRect();
-        g_rgnOk = (s.right - s.left >= 4 && s.bottom - s.top >= 4);   // клік без тягання = скасування
+        RECT s = RgnSelRect();
+        if (s.right - s.left < 4 || s.bottom - s.top < 4) {
+            // CAPS-57: клік без тягання — вікно під курсором або весь монітор
+            // (раніше це було скасуванням; скасовують Esc і правою кнопкою).
+            g_rgnCur = g_rgnTo;
+            RgnUpdateHover();
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            s = RgnHoverRect(rc.right, rc.bottom);
+            g_rgnFrom = { s.left, s.top };
+            g_rgnTo = { s.right, s.bottom };
+        }
+        g_rgnGesture = RgnGesture(wp);
+        g_rgnOk = true;
         g_rgnDone = true;
         return 0;
     }
@@ -7380,7 +7613,28 @@ LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_rgnDone = true;
         return 0;
     case WM_KEYDOWN:
-        if (wp == VK_ESCAPE) { g_rgnOk = false; g_rgnDone = true; }
+    case WM_SYSKEYDOWN:
+        if (wp == VK_ESCAPE) { g_rgnOk = false; g_rgnDone = true; return 0; }
+        if ((wp == VK_SPACE || wp == VK_RETURN) && !g_rgnDragging) {
+            // CAPS-57: увесь монітор — з тим самим жестом, що й мишею.
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            g_rgnFrom = { 0, 0 };
+            g_rgnTo = { rc.right, rc.bottom };
+            g_rgnDragging = true;
+            g_rgnGesture = RgnGesture(RgnKeyMods(lp));
+            g_rgnOk = true;
+            g_rgnDone = true;
+            return 0;
+        }
+        // Shift чи Alt натиснули без руху миші — підказка має засвітитись одразу.
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+        // ⚠ SYSKEYUP від Alt не віддаємо системі: DefWindowProc увімкнув би
+        // режим меню, і наступний клік пішов би в нікуди.
+        InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     case WM_SETFOCUS:
         g_rgnHadFocus = true;
@@ -7397,7 +7651,7 @@ LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out)
+bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out, int* gesture)
 {
     static bool registered = false;
     if (!registered) {
@@ -7410,14 +7664,25 @@ bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out)
         registered = true;
     }
     if (!g_rgnFont) g_rgnFont = CreateUIFont(105, FW_SEMIBOLD);
+    if (!g_rgnFontSm) g_rgnFontSm = CreateUIFont(95, FW_NORMAL);
 
     g_rgnImg = frozen;
     g_rgnMon = monRc;
     g_rgnDragging = g_rgnDone = g_rgnOk = g_rgnHadFocus = false;
     g_rgnFrom = g_rgnTo = POINT{ 0, 0 };
+    g_rgnGesture = 0;
+    g_rgnMk = 0;
     GetCursorPos(&g_rgnCur);                     // напрямні одразу під курсором
     g_rgnCur.x -= monRc.left;
     g_rgnCur.y -= monRc.top;
+    // Вікна — ДО показу накладки: EnumWindows іде згори вниз за Z, і першим
+    // знайденим під курсором буде саме те вікно, яке видно на знімку.
+    g_rgnWins.clear();
+    {
+        RECT mon = monRc;
+        EnumWindows(RgnEnumWin, (LPARAM)&mon);
+    }
+    RgnUpdateHover();
 
     g_rgnWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"lilhelpers_region", L"",
                                WS_POPUP, monRc.left, monRc.top,
@@ -7445,39 +7710,48 @@ bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out)
     DestroyWindow(g_rgnWnd);
     g_rgnWnd = nullptr;
     g_rgnImg = nullptr;
+    g_rgnWins.clear();
     if (!okLocal) return false;
     out->left   = monRc.left + s.left;
     out->top    = monRc.top + s.top;
     out->right  = monRc.left + s.right;
     out->bottom = monRc.top + s.bottom;
+    if (gesture) *gesture = g_rgnGesture;
     return true;
 }
 
-bool CapRegion(CapShot* out)
+// Заморожений монітор під курсором — і для накладки вибору, і для оверлея.
+bool CapFreezeMonitor(CapShot* whole, RECT* monRc)
 {
     POINT pt = {};
     GetCursorPos(&pt);
     HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFO mi = { sizeof(mi) };
     if (!GetMonitorInfoW(mon, &mi)) return false;
-
-    CapShot whole = {};
-    if (!CapGrabMonitor(mon, &whole)) {
-        whole = CapShot{};
-        whole.bmp = CapBitBlt(mi.rcMonitor);
-        if (!whole.bmp) return false;
+    *whole = CapShot{};
+    if (!CapGrabMonitor(mon, whole)) {
+        *whole = CapShot{};
+        whole->bmp = CapBitBlt(mi.rcMonitor);
+        if (!whole->bmp) return false;
+        whole->w = (int)whole->bmp->GetWidth();
+        whole->h = (int)whole->bmp->GetHeight();
     }
-    RECT sel = {};
-    const bool picked = CapRegionPick(whole.bmp, mi.rcMonitor, &sel);
-    if (!picked) { delete whole.bmp; g_capCancelled = true; return false; }
+    *monRc = mi.rcMonitor;
+    return true;
+}
 
-    Gdiplus::Bitmap* part = CapCrop(whole.bmp, mi.rcMonitor, sel);
-    delete whole.bmp;
-    if (!part) return false;
-    *out = whole;
-    out->bmp = part;
-    out->w = (int)part->GetWidth();
-    out->h = (int)part->GetHeight();
+// CAPS-57: вибір віддає не вирізане, а ВСЕ потрібне для будь-якої дії:
+// заморожений монітор, рамку в екранних координатах і жест. Вирізати чи
+// редагувати поверх — вирішує вже CapTake за жестом.
+bool CapRegionEx(CapShot* whole, RECT* monRc, RECT* sel, int* gesture)
+{
+    if (!CapFreezeMonitor(whole, monRc)) return false;
+    if (!CapRegionPick(whole->bmp, *monRc, sel, gesture)) {
+        delete whole->bmp;
+        whole->bmp = nullptr;
+        g_capCancelled = true;
+        return false;
+    }
     return true;
 }
 
@@ -7810,7 +8084,7 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    ToneReset, Compare, GroupEdit, GroupDel, Pick, PickItem,
                    SelAlign, SelGroup, SizeImg, SizeCan, Store, SaveMenu,
                    LibArea, LibBack, LibCard, LibRename, LibOpen, LibShow, LibDel,
-                   LibDelYes, LibDelNo };
+                   LibDelYes, LibDelNo, OvCopy, OvWindow, OvHandle };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -7828,12 +8102,19 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoGroupEdit, IcoGroupDel, IcoTick,
              IcoAlL, IcoAlCx, IcoAlR, IcoAlT, IcoAlCy, IcoAlB, IcoDistX, IcoDistY,
              IcoGroup, IcoUngroup,
-             IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn };
+             IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn,
+             IcoWindow };
 
 enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength, Crop, CropMove,
-                    Tone, Compare, Zoom, Rotate, ManyResize, ManyRotate };
+                    Tone, Compare, Zoom, Rotate, ManyResize, ManyRotate, OvSel };
 
 HWND  g_edWnd = nullptr;
+// CAPS-33: редактор зараз — оверлей поверх замороженого монітора. Документ —
+// увесь монітор 1:1 з клієнтом вікна, кадр (g_edCrop) — рамка. Масштабу й
+// панорами немає, рядка стану й правої панелі теж.
+bool  g_edOverlay = false;
+RECT  g_ovMon = {};             // монітор у екранних координатах
+constexpr int kEdOvTools = 10;  // інструменти рейки без кадру: ним тут є сама рамка
 HFONT g_edFont = nullptr, g_edFontBold = nullptr, g_edFontSmall = nullptr;
 HICON g_edIcon = nullptr;         // значок у власному заголовку
 int   g_edDpi = 96;
@@ -8487,6 +8768,12 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
         g.DrawLine(&pen, 3.2f, 16.6f, 16.8f, 16.6f);
         g.DrawLine(&pen, 16.8f, 16.6f, 16.8f, 12.6f);
         break;
+    case IcoWindow:
+        g.DrawRectangle(&pen, 2.6f, 3.6f, 14.8f, 12.8f);
+        g.DrawLine(&pen, 2.6f, 7.2f, 17.4f, 7.2f);
+        g.DrawLine(&pen, 12.4f, 5.4f, 13.2f, 5.4f);
+        g.DrawLine(&pen, 14.6f, 5.4f, 15.4f, 5.4f);
+        break;
     case IcoCopy:
         g.DrawRectangle(&pen, 4.2f, 3.8f, 11.6f, 13.6f);
         g.DrawLine(&pen, 7.6f, 3.8f, 7.6f, 2.4f);
@@ -8754,10 +9041,12 @@ void EdClampPan(int dw, int dh)
     if (g_edPanY < -maxY) g_edPanY = -maxY;
 }
 
-double EdScale() { return EdFitScale() * g_edZoom; }
+double EdScale() { return g_edOverlay ? 1.0 : EdFitScale() * g_edZoom; }
 
 RECT EdImageRect()
 {
+    // В оверлеї знімок лежить 1:1 з клієнтом, тож видима ділянка — рівно рамка.
+    if (g_edOverlay) return g_edCrop;
     const double s = EdScale();
     int dw = (int)(EdViewW() * s + 0.5), dh = (int)(EdViewH() * s + 0.5);
     if (dw < 1) dw = 1;
@@ -9035,6 +9324,10 @@ int EdWheelStep(int delta)
 
 POINT EdCanvasCentre()
 {
+    if (g_edOverlay) {
+        POINT c = { (g_edCrop.left + g_edCrop.right) / 2, (g_edCrop.top + g_edCrop.bottom) / 2 };
+        return c;
+    }
     POINT c = { (g_edRcCanvas.left + g_edRcCanvas.right) / 2,
                 (g_edRcCanvas.top + g_edRcCanvas.bottom) / 2 };
     return c;
@@ -9079,6 +9372,76 @@ bool EdManySel();
 const RECT* EdRegionRect(EdHit what, int idx);
 int EdPickCount(int group);           // селект наконечника довший за решту
 
+// ---- CAPS-33: панелі оверлея біля рамки -------------------------------------
+// Правило власника: рейка й смуга стоять на звичних місцях відносно рамки —
+// рейка ліворуч, смуга над нею; якщо там не вміщаються, переходять на
+// протилежну грань; якщо й там ні — усередину рамки.
+int EdOvRailH()
+{
+    return EdPx(8) + EdPx(7) + kEdOvTools * (EdPx(40) + EdPx(4)) + (EdPx(12) - EdPx(4)) +
+           EdPx(40) + EdPx(4) + EdPx(40) + EdPx(8);
+}
+
+RECT EdOvRailRect(const RECT& rc)
+{
+    const int w = EdPx(kEdRail), h = EdOvRailH(), gap = EdPx(10);
+    const RECT s = g_edCrop;
+    int x;
+    if (s.left - gap - w >= 0)               x = s.left - gap - w;
+    else if (s.right + gap + w <= rc.right)  x = s.right + gap;
+    else                                     x = s.left + gap;
+    int y = s.top;
+    if (y + h > rc.bottom - gap) y = rc.bottom - gap - h;
+    if (y < gap) y = gap;
+    RECT r = { x, y, x + w, y + h };
+    return r;
+}
+
+// Вісім ручок рамки в тому ж порядку, що й у кадру: кути й середини сторін
+// за годинниковою від верхнього лівого.
+void EdOvHandles(RECT out[8])
+{
+    const RECT s = g_edCrop;
+    const int hs = EdPx(4);
+    const int cx = (s.left + s.right) / 2, cy = (s.top + s.bottom) / 2;
+    const POINT p[8] = { { s.left, s.top }, { cx, s.top }, { s.right, s.top }, { s.right, cy },
+                         { s.right, s.bottom }, { cx, s.bottom }, { s.left, s.bottom }, { s.left, cy } };
+    for (int i = 0; i < 8; ++i) out[i] = RECT{ p[i].x - hs, p[i].y - hs, p[i].x + hs, p[i].y + hs };
+}
+
+Str EdStripHint();
+
+// Смуга порахована в уявному місці (0, 0); тут її ділянки переїжджають до
+// рамки. Порожня смуга (нічого не вибрано, інструмент — вказівник) в оверлеї
+// не показується зовсім: плаваюча панель із підказкою лише затуляла б знімок.
+void EdOvPlaceStrip(size_t first, int width, const RECT& rc)
+{
+    if (EdStripHint() != Str::Empty) {
+        g_edRegions.resize(first);
+        g_edRcStrip = { 0, 0, 0, 0 };
+        g_edStripLimit = 0;
+        return;
+    }
+    const int h = g_edRcStrip.bottom - g_edRcStrip.top, gap = EdPx(10);
+    const RECT s = g_edCrop;
+    int y = s.top - gap - h;                                   // звичне місце — над рамкою
+    if (y < gap) y = s.bottom + gap;                           // протилежна грань
+    if (y + h > rc.bottom - gap) y = s.top + gap;              // усередині рамки
+    int x = s.left;
+    if (x + width > rc.right - gap) x = rc.right - gap - width;
+    if (x < gap) x = gap;
+    RECT want = { x, y, x + width, y + h }, tmp;
+    if (IntersectRect(&tmp, &want, &g_edRcRail)) {
+        // Рейку не перекриваємо: смуга стає поруч із нею.
+        x = g_edRcRail.left - gap - width;
+        if (x < gap) x = g_edRcRail.right + gap;
+    }
+    const int dx = x - g_edRcStrip.left, dy = y - g_edRcStrip.top;
+    for (size_t i = first; i < g_edRegions.size(); ++i) OffsetRect(&g_edRegions[i].r, dx, dy);
+    g_edRcStrip = { x, y, x + width, y + h };
+    g_edStripLimit += dx;
+}
+
 void EdLayout(HWND hwnd)
 {
     RECT rc;
@@ -9095,6 +9458,16 @@ void EdLayout(HWND hwnd)
     g_edRcRail   = { 0, cap + strip, rail, rc.bottom - status };
     g_edRcPanel  = { rc.right - panel, cap + strip, rc.right, rc.bottom - status };
     g_edRcCanvas = { rail, cap + strip, rc.right - panel, rc.bottom - status };
+    // CAPS-33: оверлей — полотно на весь монітор; заголовка, рядка стану й
+    // панелі немає; рейка й смуга плавають біля рамки.
+    if (g_edOverlay) {
+        g_edRcCaption = { 0, 0, 0, 0 };
+        g_edRcStatus  = { 0, rc.bottom, rc.right, rc.bottom };
+        g_edRcPanel   = { rc.right, 0, rc.right, 0 };
+        g_edRcCanvas  = rc;
+        g_edRcRail    = EdOvRailRect(rc);
+        g_edRcStrip   = { 0, 0, rc.right, strip };   // уявне місце; нижче переїде до рамки
+    }
 
     // Клацнули по кружечку — його група стає поточною: так до старої групи
     // повертаються без жодних кнопок.
@@ -9102,7 +9475,7 @@ void EdLayout(HWND hwnd)
         g_edCounterGroup = g_edObjs[g_edSel].group;
 
     // заголовок: кнопки вікна праворуч, перед ними — скасувати, повторити, довідка
-    {
+    if (!g_edOverlay) {
         const int ccy = (g_edRcCaption.top + g_edRcCaption.bottom) / 2;
         const int bw = EdPx(46);
         int rx = rc.right - bw;
@@ -9123,6 +9496,16 @@ void EdLayout(HWND hwnd)
     }
 
     EdAdd(g_edRcCanvas, EdHit::Canvas, 0);   // найнижчий пріоритет: перевіряємо останнім
+    // CAPS-33: ручки рамки — над полотном, але під рейкою й смугою.
+    if (g_edOverlay) {
+        RECT hs[8];
+        EdOvHandles(hs);
+        for (int i = 0; i < 8; ++i) {
+            RECT r = hs[i];
+            InflateRect(&r, EdPx(3), EdPx(3));
+            EdAdd(r, EdHit::OvHandle, i);
+        }
+    }
 
     // Підтвердження кадру живе на самому кадрі. Якщо під ним немає місця —
     // піднімаємо всередину: кнопки, що вилізли за полотно, не натиснути.
@@ -9149,17 +9532,29 @@ void EdLayout(HWND hwnd)
         const int b = EdPx(40), gap = EdPx(4);
         int y = g_edRcRail.top + EdPx(8);
         const int x = g_edRcRail.left + (rail - b) / 2;
-        for (int i = 0; i < 11; ++i) {
+        const int ntools = g_edOverlay ? kEdOvTools : 11;
+        for (int i = 0; i < ntools; ++i) {
             if (i == 1) y += EdPx(7);      // вказівник відділено від фігур
             RECT r = { x, y, x + b, y + b };
             EdAdd(r, EdHit::Tool, i);
             y += b + gap;
+        }
+        // CAPS-33: унизу рейки оверлея — «Копіювати» і «У вікно редактора»
+        // (рішення власника 22.09). Висота мусить збігатися з EdOvRailH.
+        if (g_edOverlay) {
+            y += EdPx(12) - gap;
+            RECT rc1 = { x, y, x + b, y + b };
+            EdAdd(rc1, EdHit::OvCopy, 0);
+            y += b + gap;
+            RECT rc2 = { x, y, x + b, y + b };
+            EdAdd(rc2, EdHit::OvWindow, 0);
         }
     }
 
     // смуга властивостей
     {
         HDC dc = GetDC(hwnd);
+        const size_t stripFirst = g_edRegions.size();   // CAPS-33: ділянки смуги їдуть до рамки
         const int cy = (g_edRcStrip.top + g_edRcStrip.bottom) / 2;
         const int gap = EdPx(14);
         int x = EdPx(14);
@@ -9382,9 +9777,13 @@ void EdLayout(HWND hwnd)
         // Скасувати, повторити й довідка переїхали в заголовок (рішення власника
         // 20.09), а дії над вибраним лишились притиснутими праворуч тут: у лівій
         // течії вони налазили на сусідів, щойно кнопок побільшало.
+        // В оверлеї смуга завширшки з вміст: дії над вибраним стають одразу за
+        // ним, а не біля правого краю монітора.
+        const int b0 = EdPx(32);
+        const int rightEdge = g_edOverlay ? x + (hasSel ? 4 * b0 + 3 * EdPx(4) : 0) + EdPx(14) : rc.right;
         {
             const int b = EdPx(32);
-            int rx = rc.right - EdPx(14) - b;
+            int rx = rightEdge - EdPx(14) - b;
             if (hasSel) {
                 const EdHit acts[4] = { EdHit::Del, EdHit::Dup, EdHit::Back, EdHit::Front };
                 for (int i = 0; i < 4; ++i) {
@@ -9393,15 +9792,16 @@ void EdLayout(HWND hwnd)
                     if (i < 3) rx -= b + EdPx(4);
                 }
             } else {
-                rx = rc.right - EdPx(14);
+                rx = rightEdge - EdPx(14);
             }
             g_edStripLimit = rx - EdPx(10);
         }
+        if (g_edOverlay) EdOvPlaceStrip(stripFirst, rightEdge, rc);
         ReleaseDC(hwnd, dc);
     }
 
     // рядок стану: масштаб
-    {
+    if (!g_edOverlay) {
         HDC dc = GetDC(hwnd);
         const int cy = (g_edRcStatus.top + g_edRcStatus.bottom) / 2;
         // ⚠ Кнопки — тієї ж висоти й на тій самій відстані від країв, що й від
@@ -9451,7 +9851,7 @@ void EdLayout(HWND hwnd)
     }
 
     // згортання правої панелі
-    {
+    if (!g_edOverlay) {
         const int b = EdPx(24);
         RECT r = { g_edRcPanel.right - EdPx(14) - b, g_edRcPanel.top + EdPx(12),
                    g_edRcPanel.right - EdPx(14), g_edRcPanel.top + EdPx(12) + b };
@@ -9549,7 +9949,7 @@ void EdLayout(HWND hwnd)
 
     // CAPS-28: геометрія знімка і тон. Живуть у правій панелі, бо стосуються
     // САМОГО ЗНІМКА, а не позначки — це і є межа між панеллю і смугою.
-    if (g_edPanelOpen) {
+    if (g_edPanelOpen && !g_edOverlay) {
         const int px = g_edRcPanel.left + EdPx(14);
         const int pr = g_edRcPanel.right - EdPx(14);
         int y = EdPanelInfoBottom() + EdPx(16);
@@ -9876,6 +10276,11 @@ Str EdStripHint()
 
 void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
+    if (g_edOverlay) {
+        if (g_edRcStrip.right <= g_edRcStrip.left) return;   // порожня смуга в оверлеї схована
+        Gdiplus::Color pf = EdC(t.surface), pb = EdC(t.border);
+        EdFillRound(g, g_edRcStrip, (float)EdPx(10), &pf, &pb);
+    } else {
     HBRUSH b = CreateSolidBrush(t.surface);
     FillRect(dc, &g_edRcStrip, b);
     DeleteObject(b);
@@ -9884,6 +10289,7 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     b = CreateSolidBrush(t.border);
     FillRect(dc, &line, b);
     DeleteObject(b);
+    }
 
     // ⚠ Назву чіпа беремо тими самими функціями, що й розкладка. Коли тут стояли
     // прямі Str::EdKindRect і EdTool::Rect (спадок етапу, де фігура була одна),
@@ -9897,15 +10303,16 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     // стежить, тож ставимо обом.
     const int limit = g_edStripLimit > 0 ? g_edStripLimit : g_edRcStrip.right;
     Gdiplus::GraphicsState clipState = g.Save();
-    g.SetClip(Gdiplus::Rect(0, g_edRcStrip.top, limit, g_edRcStrip.bottom - g_edRcStrip.top));
+    g.SetClip(Gdiplus::Rect(g_edRcStrip.left, g_edRcStrip.top, limit - g_edRcStrip.left,
+                            g_edRcStrip.bottom - g_edRcStrip.top));
     const int savedDc = SaveDC(dc);
-    IntersectClipRect(dc, 0, g_edRcStrip.top, limit, g_edRcStrip.bottom);
+    IntersectClipRect(dc, g_edRcStrip.left, g_edRcStrip.top, limit, g_edRcStrip.bottom);
 
     if (chip) {
         // Чіп не інтерактивний, тож у списку регіонів його немає — рахуємо на місці
         // рівно так само, як це робить розкладка.
         const int w = EdTextWidth(dc, chip, g_edFontBold) + EdPx(20);
-        const RECT r = EdPill(EdPx(14), cy, w, EdPx(26));
+        const RECT r = EdPill(g_edRcStrip.left + EdPx(14), cy, w, EdPx(26));
         Gdiplus::Color f = EdC(t.accentBg);
         EdFillRound(g, r, (float)EdPx(13), &f, nullptr);
         EdDrawText(dc, r, chip, g_edFontBold, t.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -9913,7 +10320,7 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 
     const Str hint = EdStripHint();
     if (hint != Str::Empty) {
-        RECT r = { EdPx(14), g_edRcStrip.top, limit - EdPx(8), g_edRcStrip.bottom };
+        RECT r = { g_edRcStrip.left + EdPx(14), g_edRcStrip.top, limit - EdPx(8), g_edRcStrip.bottom };
         EdDrawText(dc, r, S(hint), g_edFont, t.text2,
                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
@@ -10224,6 +10631,12 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 
 void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
+    if (g_edOverlay) {
+        // CAPS-33: плаваюча панель — заокруглена, з межею, щоб читалась поверх
+        // будь-якого знімка.
+        Gdiplus::Color pf = EdC(t.chrome), pb = EdC(t.border);
+        EdFillRound(g, g_edRcRail, (float)EdPx(10), &pf, &pb);
+    } else {
     HBRUSH b = CreateSolidBrush(t.chrome);
     FillRect(dc, &g_edRcRail, b);
     DeleteObject(b);
@@ -10231,6 +10644,7 @@ void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     b = CreateSolidBrush(t.border);
     FillRect(dc, &line, b);
     DeleteObject(b);
+    }
 
     const int icos[11] = { IcoSelect, IcoRect, IcoEllipse, IcoLine, IcoPen, IcoText,
                            IcoHide, IcoMark, IcoCounter, IcoStamp, IcoCrop };
@@ -10248,6 +10662,24 @@ void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         const bool hot = (g_edHotWhat == EdHit::Tool && g_edHotIdx == i);
         EdPaintButton(g, *r, t, active, hot, !active);
         EdIcon(g, icos[i], EdIconBox(*r), EdC(active ? t.accent : t.text), 1.5f);
+    }
+    if (const RECT* rc = EdRegionRect(EdHit::OvCopy, 0)) {
+        HBRUSH sb = CreateSolidBrush(t.border);
+        RECT sep = { g_edRcRail.left + EdPx(12), rc->top - EdPx(6),
+                     g_edRcRail.right - EdPx(12), rc->top - EdPx(6) + 1 };
+        FillRect(dc, &sep, sb);
+        DeleteObject(sb);
+        // «Копіювати» — головна дія оверлея, тож як і в рядку стану вікна — залита.
+        const bool hot = (g_edHotWhat == EdHit::OvCopy);
+        Gdiplus::Color fill = EdC(t.accent, hot ? 225 : 255), bd = EdC(t.accent);
+        EdFillRound(g, *rc, (float)EdPx(6), &fill, &bd);
+        const COLORREF fg = g_edDark ? RGB(0, 52, 79) : RGB(255, 255, 255);
+        EdIcon(g, IcoCopy, EdIconBox(*rc), EdC(fg), 1.6f);
+    }
+    if (const RECT* rw = EdRegionRect(EdHit::OvWindow, 0)) {
+        const bool hot = (g_edHotWhat == EdHit::OvWindow);
+        EdPaintButton(g, *rw, t, false, hot, true);
+        EdIcon(g, IcoWindow, EdIconBox(*rw), EdC(t.text), 1.5f);
     }
 }
 
@@ -11440,6 +11872,43 @@ Gdiplus::Bitmap* EdCheckerTile()
     return tile;
 }
 
+// CAPS-33: рамка оверлея — біла лінія, ручки й розмір. Розмір ставимо туди,
+// де не заважає: над рамкою, під нею або в її кутку — першим вільним місцем.
+void EdPaintOvFrame(HDC dc, Gdiplus::Graphics& g, const EdTheme& t, const RECT& ir)
+{
+    Gdiplus::Pen white(Gdiplus::Color(235, 255, 255, 255), 1.0f);
+    g.DrawRectangle(&white, (float)ir.left - 0.5f, (float)ir.top - 0.5f,
+                    (float)(ir.right - ir.left), (float)(ir.bottom - ir.top));
+    RECT hs[8];
+    EdOvHandles(hs);
+    Gdiplus::SolidBrush wb(EdC(RGB(255, 255, 255)));
+    Gdiplus::Pen hp(EdC(t.accent), 1.5f);
+    for (int i = 0; i < 8; ++i) {
+        g.FillRectangle(&wb, (INT)hs[i].left, (INT)hs[i].top,
+                        (INT)(hs[i].right - hs[i].left), (INT)(hs[i].bottom - hs[i].top));
+        g.DrawRectangle(&hp, (float)hs[i].left, (float)hs[i].top,
+                        (float)(hs[i].right - hs[i].left), (float)(hs[i].bottom - hs[i].top));
+    }
+    wchar_t buf[48];
+    wsprintfW(buf, L"%d × %d", (int)(ir.right - ir.left), (int)(ir.bottom - ir.top));
+    const int tw = EdTextWidth(dc, buf, g_edFontSmall) + EdPx(14), th = EdPx(22), gap = EdPx(6);
+    const RECT cand[3] = {
+        { ir.left, ir.top - gap - th, ir.left + tw, ir.top - gap },
+        { ir.left, ir.bottom + gap, ir.left + tw, ir.bottom + gap + th },
+        { ir.left + gap, ir.top + gap, ir.left + gap + tw, ir.top + gap + th } };
+    RECT lab = cand[2], tmp;
+    for (int i = 0; i < 3; ++i) {
+        const RECT& c = cand[i];
+        if (c.top < 0 || c.bottom > g_edRcCanvas.bottom) continue;
+        if (IntersectRect(&tmp, &c, &g_edRcStrip) || IntersectRect(&tmp, &c, &g_edRcRail)) continue;
+        lab = c;
+        break;
+    }
+    Gdiplus::Color pf(225, 20, 20, 24);
+    EdFillRound(g, lab, (float)EdPx(5), &pf, nullptr);
+    EdDrawText(dc, lab, buf, g_edFontSmall, RGB(255, 255, 255), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
 void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     HBRUSH b = CreateSolidBrush(t.canvas);
@@ -11461,9 +11930,23 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     // Поки тримають «Порівняти», полотно показує кадр без тону і БЕЗ позначок:
     // це вихідний кадр, а не «те саме, тільки блідіше». Позначки ще й розійшлися
     // б із плитками розмиття, зробленими вже з виправлених пікселів.
+    // CAPS-33: в оверлеї під рамкою — увесь заморожений монітор 1:1, поза
+    // рамкою притемнений так само, як у накладці вибору: перехід між ними не
+    // має бути помітним.
+    if (g_edOverlay) {
+        g.DrawImage(g_edImg, Gdiplus::Rect(0, 0, g_edImgW, g_edImgH), 0, 0, g_edImgW, g_edImgH,
+                    Gdiplus::UnitPixel);
+        Gdiplus::SolidBrush scrim(Gdiplus::Color(120, 8, 8, 12));
+        const int W = g_edRcCanvas.right, H = g_edRcCanvas.bottom;
+        g.FillRectangle(&scrim, 0, 0, W, (INT)ir.top);
+        g.FillRectangle(&scrim, 0, (INT)ir.bottom, W, H - (INT)ir.bottom);
+        g.FillRectangle(&scrim, 0, (INT)ir.top, (INT)ir.left, (INT)(ir.bottom - ir.top));
+        g.FillRectangle(&scrim, (INT)ir.right, (INT)ir.top, W - (INT)ir.right, (INT)(ir.bottom - ir.top));
+    }
     // ⚠ Під знімком — шахівниця, навколо — межа. Без них після збільшення
     // полотна не видно ні того, де воно закінчується, ні того, що порожнє місце
     // прозоре, а не біле (зауваження власника).
+    if (!g_edOverlay)
     if (Gdiplus::Bitmap* tile = EdCheckerTile()) {
         Gdiplus::TextureBrush tb(tile);
         tb.SetWrapMode(Gdiplus::WrapModeTile);
@@ -11491,7 +11974,7 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 
     // Межа полотна — тонка й спокійна, але завжди на місці.
-    {
+    if (!g_edOverlay) {
         Gdiplus::Pen edge(EdC(g_edDark ? RGB(120, 120, 126) : RGB(150, 150, 156)), 1.0f);
         g.DrawRectangle(&edge, (float)ir.left - 0.5f, (float)ir.top - 0.5f,
                         (float)(ir.right - ir.left), (float)(ir.bottom - ir.top));
@@ -11525,6 +12008,11 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     const double s = EdScale();
     // Зсув на початок кадру: позначки носять абсолютні координати знімка.
     const double ox = ir.left - EdViewX() * s, oy = ir.top - EdViewY() * s;
+    // CAPS-33: в оверлеї позначки видно лише в межах рамки — рівно так, як
+    // вони потраплять у результат. Ручки вибраного — поверх, без обрізання.
+    Gdiplus::GraphicsState stMarks = g.Save();
+    if (g_edOverlay)
+        g.SetClip(Gdiplus::Rect(ir.left, ir.top, ir.right - ir.left, ir.bottom - ir.top));
     for (size_t i = 0; i < g_edObjs.size(); ++i) {
         // Напис, який саме зараз правлять, показує поле введення — інакше під
         // ним просвічував би його ж старий текст.
@@ -11537,6 +12025,7 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         // Те, що ще тягнуть, лежить НАД усім: ефект під курсором має вже
         // накривати все намальоване, інакше маркер «прозріває» після кнопки.
         EdDrawObject(g, g_edNew, s, ox, oy, (int)g_edObjs.size());
+    g.Restore(stMarks);
 
     // Решта вибраних — тонкою рамкою без ручок: ручки має лише головний,
     // інакше незрозуміло, що саме потягнеться.
@@ -11621,6 +12110,7 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
                             (float)(hs[i].right - hs[i].left), (float)(hs[i].bottom - hs[i].top));
         }
     }
+    if (g_edOverlay) EdPaintOvFrame(dc, g, t, ir);
     g.Restore(st);
 }
 
@@ -12137,6 +12627,13 @@ void EdPaint(HWND hwnd, HDC dc)
     const EdTheme t = EdColors(g_edDark);
     Gdiplus::Graphics g(dc);
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    if (g_edOverlay) {                 // CAPS-33: лише полотно й плаваючі панелі
+        EdPaintCanvas(dc, g, t);
+        EdPaintRail(dc, g, t);
+        EdPaintStrip(dc, g, t);
+        EdPaintPick(dc, g, t);
+        return;
+    }
     EdPaintCanvas(dc, g, t);
     EdPaintCrop(dc, g, t);
     EdPaintCaption(dc, g, t);
@@ -12962,6 +13459,17 @@ void EdMakeFonts()
 // визначенням, тому виклики звідси передають усі шість.
 enum class CapMode { Screen, Window, Region, Clipboard };
 void CapTake(HINSTANCE hInst, HWND owner, CapMode mode, HWND target);
+struct CapShot;
+void EdOpenOverlay(HINSTANCE hInst, CapShot& whole, const RECT& monRc, const RECT& sel);
+void CapQuickCopy(Gdiplus::Bitmap* bmp, Str label);
+void EdOverlayCopy(HWND hwnd);
+void EdOverlayStore(HWND hwnd);
+void EdOverlayEsc(HWND hwnd);
+void EdOverlayToWindow(HWND hwnd);
+void CapFlash(const wchar_t* text);
+extern bool g_libQuick;
+extern bool g_ovEscSave;
+Gdiplus::Bitmap* CapCrop(Gdiplus::Bitmap* whole, const RECT& monRc, const RECT& want);
 bool EdPickFile(HWND owner, wchar_t* out, size_t cch);
 bool EdIsDocFile(const wchar_t* path);
 void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
@@ -13316,6 +13824,8 @@ constexpr UINT kEdTipDelay = 450;
 Str EdTipFor(EdHit what, int idx)
 {
     switch (what) {
+    case EdHit::OvCopy:   return Str::EdTipOvCopy;
+    case EdHit::OvWindow: return Str::EdTipOvWindow;
     case EdHit::Tool:
         switch (idx) {
         case 0: return Str::EdToolSelect;
@@ -14393,6 +14903,29 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_MOUSEMOVE: {
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        if (g_edDrag == EdDrag::OvSel) {          // CAPS-33: тягнуть ручку рамки
+            RECT n = g_edCropOrig;
+            switch (g_edHandle) {
+            case 0: n.left = pt.x; n.top = pt.y; break;
+            case 1: n.top = pt.y; break;
+            case 2: n.right = pt.x; n.top = pt.y; break;
+            case 3: n.right = pt.x; break;
+            case 4: n.right = pt.x; n.bottom = pt.y; break;
+            case 5: n.bottom = pt.y; break;
+            case 6: n.left = pt.x; n.bottom = pt.y; break;
+            default: n.left = pt.x; break;
+            }
+            if (n.right < n.left) { const LONG v = n.left; n.left = n.right; n.right = v; }
+            if (n.bottom < n.top) { const LONG v = n.top; n.top = n.bottom; n.bottom = v; }
+            if (n.left < 0) n.left = 0;
+            if (n.top < 0) n.top = 0;
+            if (n.right > g_edImgW) n.right = g_edImgW;
+            if (n.bottom > g_edImgH) n.bottom = g_edImgH;
+            if (n.right - n.left >= 4 && n.bottom - n.top >= 4) g_edCrop = n;
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         if (g_edDrag == EdDrag::Slider) { EdSetAlphaAt(pt.x); return 0; }
         if (g_edDrag == EdDrag::Strength) { EdSetStrengthAt(pt.x); return 0; }
         if (g_edDrag == EdDrag::Tone) { EdSetToneAt(g_edToneWhat, pt.x); return 0; }
@@ -14563,6 +15096,11 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // Курсор над полотном вибирає ОДНА функція — див. EdCursorFor.
         if (r && r->what == EdHit::Canvas)
             SetCursor(LoadCursorW(nullptr, EdCursorFor(pt)));
+        if (r && r->what == EdHit::OvHandle) {
+            const int k = r->idx % 4;
+            SetCursor(LoadCursorW(nullptr, k == 0 ? IDC_SIZENWSE : k == 1 ? IDC_SIZENS
+                                              : k == 2 ? IDC_SIZENESW : IDC_SIZEWE));
+        }
         return 0;
     }
 
@@ -14651,6 +15189,17 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
         }
         switch (r->what) {
+        case EdHit::OvCopy:   EdOverlayCopy(hwnd); return 0;
+        case EdHit::OvWindow: EdOverlayToWindow(hwnd); return 0;
+        case EdHit::OvHandle:
+            // Рамку підправляють і після того, як почали малювати. Кадр — частина
+            // знімка для скасування, тож Ctrl+Z повертає й рамку.
+            EdPushUndo();
+            g_edDrag = EdDrag::OvSel;
+            g_edHandle = r->idx;
+            g_edCropOrig = g_edCrop;
+            SetCapture(hwnd);
+            return 0;
         case EdHit::Tool:
             if (g_edCropping && (EdTool)r->idx != EdTool::Crop) EdCropFinish(false);
             g_edTool = (EdTool)r->idx;
@@ -15145,6 +15694,15 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_LBUTTONUP: {
+        if (g_edDrag == EdDrag::OvSel) {
+            g_edDrag = EdDrag::None;
+            ReleaseCapture();
+            // Порожній рух не лишає сліду в скасуванні.
+            if (!g_edUndo.empty() && EqualRect(&g_edUndo.back().crop, &g_edCrop)) g_edUndo.pop_back();
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         if (g_edDrag == EdDrag::New) {
             EdObj o = g_edNew;
             EdNormalize(o);
@@ -15204,6 +15762,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_MBUTTONDOWN:
+        if (g_edOverlay) return 0;        // в оверлеї знімок 1:1, рухати нічого
         g_edDragFrom.x = GET_X_LPARAM(lp);
         g_edDragFrom.y = GET_Y_LPARAM(lp);
         g_edDrag = EdDrag::Pan;
@@ -15263,6 +15822,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     // на повзунку й на Alt+коліщатко: спроба «докрутити до краю» не має міняти
     // масштаб — це найчастіший жест і найгірша несподіванка.
     case WM_MOUSEWHEEL: {
+        if (g_edOverlay) return 0;        // масштабу в оверлеї немає
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         ScreenToClient(hwnd, &pt);
         if (g_edLibOpen) {
@@ -15319,6 +15879,19 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             case VK_HOME:  EdLibSelect(hwnd, 0); return 0;
             case VK_END:   EdLibSelect(hwnd, (int)g_edLib.size() - 1); return 0;
             default: return 0;
+            }
+        }
+        // CAPS-33: в оверлеї Enter і Ctrl+C — скопіювати й закрити, Ctrl+S —
+        // зберегти й закрити, останній Esc — за налаштуванням. Кадру,
+        // «Відкрити» й експорту тут немає.
+        if (g_edOverlay) {
+            const bool ovCtrl = ctrl;
+            if (wp == VK_RETURN || (wp == 'C' && ovCtrl)) { EdOverlayCopy(hwnd); return 0; }
+            if (wp == 'S' && ovCtrl) { EdOverlayStore(hwnd); return 0; }
+            if (wp == 'C' || wp == 'O') return 0;
+            if (wp == VK_ESCAPE && g_edPickOpen < 0 && g_edSel < 0 && g_edTool == EdTool::Select) {
+                EdOverlayEsc(hwnd);
+                return 0;
             }
         }
         switch (wp) {
@@ -15443,6 +16016,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_CLOSE:
+        if (g_edOverlay) { EdOverlayEsc(hwnd); return 0; }   // Alt+F4 — як останній Esc
         if (!EdConfirmClose()) return 0;
         DestroyWindow(hwnd);
         return 0;
@@ -15485,6 +16059,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_edSel = -1;
         EdFreeFonts();
         g_edWnd = nullptr;
+        g_edOverlay = false;
         return 0;
 
     default: break;
@@ -15578,10 +16153,17 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     const int w = EdMin(want, maxW > 0 ? maxW : want);
     const int h = EdMin(wantH, maxH > 0 ? maxH : wantH);
 
-    g_edWnd = CreateWindowExW(0, L"lilhelpers_editor", caption,
-                              WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                              CW_USEDEFAULT, CW_USEDEFAULT, w, h,
-                              nullptr, nullptr, hInst, nullptr);
+    // CAPS-33: оверлей — безрамкове вікно поверх усього рівно на монітор знімка.
+    g_edWnd = g_edOverlay
+        ? CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"lilhelpers_editor", caption,
+                          WS_POPUP | WS_CLIPCHILDREN,
+                          g_ovMon.left, g_ovMon.top,
+                          g_ovMon.right - g_ovMon.left, g_ovMon.bottom - g_ovMon.top,
+                          nullptr, nullptr, hInst, nullptr)
+        : CreateWindowExW(0, L"lilhelpers_editor", caption,
+                          WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                          CW_USEDEFAULT, CW_USEDEFAULT, w, h,
+                          nullptr, nullptr, hInst, nullptr);
     if (!g_edWnd) {
         delete g_edImg; g_edImg = nullptr;
         for (size_t i = 0; i < g_edSrcBank.size(); ++i) delete g_edSrcBank[i];
@@ -15814,11 +16396,11 @@ void EdTick(EdHit what)
     }
 }
 
-bool EdCopy()
+// Одне місце, що кладе картинку в буфер: і для редактора, і для знімка повз
+// нього (CAPS-57). Бітмап лишається власністю того, хто кликав.
+bool EdClipPut(Gdiplus::Bitmap* flat, HWND owner)
 {
-    Gdiplus::Bitmap* flat = EdRender();
     if (!flat) return false;
-
     // Три формати одразу: PNG для месенджерів і браузерів, CF_DIB для Office,
     // CF_BITMAP для найстарішого, що трапляється. Жоден із них поодинці не
     // приймається скрізь.
@@ -15826,10 +16408,9 @@ bool EdCopy()
     HGLOBAL dib = EdDibGlobal(flat);
     HBITMAP ddb = nullptr;
     flat->GetHBITMAP(Gdiplus::Color(255, 255, 255, 255), &ddb);
-    delete flat;
 
     bool ok = false;
-    if (OpenClipboard(g_edWnd)) {
+    if (OpenClipboard(owner)) {
         EmptyClipboard();
         const UINT pngFmt = CapClipboardPngFormat();
         if (png && pngFmt && SetClipboardData(pngFmt, png)) { png = nullptr; ok = true; }
@@ -15841,6 +16422,103 @@ bool EdCopy()
     if (dib) GlobalFree(dib);
     if (ddb) DeleteObject(ddb);
     return ok;
+}
+
+bool EdCopy()
+{
+    Gdiplus::Bitmap* flat = EdRender();
+    if (!flat) return false;
+    const bool ok = EdClipPut(flat, g_edWnd);
+    delete flat;
+    return ok;
+}
+
+// ---- CAPS-57: коротке «Скопійовано» біля курсора ------------------------------
+// Знімок повз редактор не відкриває нічого — і без знаку людина не знає, чи
+// щось сталося. Плашка не бере фокус і не ловить мишу, живе менше секунди.
+HWND g_capFlash = nullptr;
+wchar_t g_capFlashText[64] = {};
+
+LRESULT CALLBACK CapFlashProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH b = CreateSolidBrush(RGB(28, 28, 32));
+        FillRect(dc, &rc, b);
+        DeleteObject(b);
+        HFONT f = CreateUIFont(105, FW_SEMIBOLD);
+        HGDIOBJ o = SelectObject(dc, f);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(255, 255, 255));
+        DrawTextW(dc, g_capFlashText, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(dc, o);
+        DeleteObject(f);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_TIMER:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        if (g_capFlash == hwnd) g_capFlash = nullptr;
+        return 0;
+    default: break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void CapFlash(const wchar_t* text)
+{
+    static bool reg = false;
+    if (!reg) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc   = CapFlashProc;
+        wc.hInstance     = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"lilhelpers_flash";
+        wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
+        RegisterClassW(&wc);
+        reg = true;
+    }
+    if (g_capFlash) DestroyWindow(g_capFlash);
+    lstrcpynW(g_capFlashText, text, 64);
+    POINT pt = {};
+    GetCursorPos(&pt);
+    const UINT dpi = GetDpiForSystem();
+    const int w = MulDiv(140, dpi, 96), h = MulDiv(34, dpi, 96);
+    g_capFlash = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE |
+                                 WS_EX_LAYERED | WS_EX_TRANSPARENT,
+                                 L"lilhelpers_flash", L"", WS_POPUP,
+                                 pt.x + MulDiv(16, dpi, 96), pt.y + MulDiv(16, dpi, 96), w, h,
+                                 nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!g_capFlash) return;
+    SetLayeredWindowAttributes(g_capFlash, 0, 235, LWA_ALPHA);
+    ShowWindow(g_capFlash, SW_SHOWNOACTIVATE);
+    SetTimer(g_capFlash, 1, 900, nullptr);
+}
+
+// Запис знімка без редактора в бібліотеку чекає наступного оберту циклу:
+// у буфері картинка вже лежить, і вставка не мусить чекати на PNG.
+struct CapQuickJob { Gdiplus::Bitmap* bmp; Str label; };
+bool EdLibSaveBare(Gdiplus::Bitmap* bmp, const wchar_t* source);
+
+void CapQuickCopy(Gdiplus::Bitmap* bmp, Str label)
+{
+    if (!EdClipPut(bmp, g_mainWnd)) {
+        delete bmp;
+        MessageBoxW(nullptr, S(Str::EdErrCopy), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    CapFlash(S(Str::CapCopied));
+    if (g_libQuick && g_mainWnd) {
+        CapQuickJob* j = new CapQuickJob{ bmp, label };
+        if (PostMessageW(g_mainWnd, WMAPP_QUICKSAVE, 0, (LPARAM)j)) return;
+        delete j;
+    }
+    delete bmp;
 }
 
 void EdSaveDirRemember(const wchar_t* path)
@@ -16098,6 +16776,78 @@ void EdWriteObj(EdWr& w, const EdObj& o)
     w.close(obj);
 }
 
+bool EdWrCommit(const wchar_t* path, const EdWr& w);
+
+// Мініатюра до 320×240 — одна для документа редактора й для знімка повз нього.
+bool EdThumbPng(Gdiplus::Bitmap* flat, std::vector<BYTE>& tp)
+{
+    const int fw = (int)flat->GetWidth(), fh = (int)flat->GetHeight();
+    const double kx = 320.0 / (fw > 0 ? fw : 1), ky = 240.0 / (fh > 0 ? fh : 1);
+    const double k = kx < ky ? kx : ky;   // EdMin працює з int і зрізав би масштаб у нуль
+    const int tw = k < 1.0 ? (int)(fw * k + 0.5) : fw;
+    const int th = k < 1.0 ? (int)(fh * k + 0.5) : fh;
+    bool ok = false;
+    Gdiplus::Bitmap* thumbBmp = new Gdiplus::Bitmap(tw > 0 ? tw : 1, th > 0 ? th : 1, PixelFormat32bppPARGB);
+    if (thumbBmp && thumbBmp->GetLastStatus() == Gdiplus::Ok) {
+        Gdiplus::Graphics gg(thumbBmp);
+        gg.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+        gg.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+        gg.DrawImage(flat, Gdiplus::Rect(0, 0, tw, th), 0, 0, fw, fh, Gdiplus::UnitPixel);
+        ok = EdPngEncode(thumbBmp, tp);
+    }
+    delete thumbBmp;
+    return ok;
+}
+
+// CAPS-57: знімок без редактора — той самий формат, лише без позначок і з
+// типовим рецептом. Бібліотека лишається однорідною: будь-який запис
+// відкривається в редакторі, і домалювати можна пізніше.
+bool EdDocWriteBare(const wchar_t* path, Gdiplus::Bitmap* bmp, const std::wstring& name,
+                    const wchar_t* source)
+{
+    if (!bmp) return false;
+    EdWr w;
+    w.raw(kEdDocMagic, sizeof(kEdDocMagic));
+    w.raw(&kEdDocVerMajor, 2);
+    w.raw(&kEdDocVerMinor, 2);
+    {
+        const size_t at = w.open("META");
+        FILETIME ft = {};
+        GetSystemTimeAsFileTime(&ft);
+        w.u64v(((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime);
+        w.str(name);
+        w.str(source ? source : L"");
+        wchar_t ver[32] = {};
+        ExeVersionString(ver, 32);
+        w.str(ver);
+        w.close(at);
+    }
+    {
+        const size_t at = w.open("INFO");
+        w.i32v((int)bmp->GetWidth()); w.i32v((int)bmp->GetHeight()); w.i32v(0);
+        w.close(at);
+        std::vector<BYTE> tp;
+        if (EdThumbPng(bmp, tp)) {
+            const size_t ta = w.open("THMB");
+            w.raw(tp.data(), tp.size());
+            w.close(ta);
+        }
+    }
+    {
+        std::vector<BYTE> png;
+        if (!EdPngEncode(bmp, png)) return false;
+        const size_t at = w.open("SRC ");
+        w.raw(png.data(), png.size());
+        w.close(at);
+    }
+    { const size_t at = w.open("BANK"); w.u32v(0); w.close(at); }
+    { const size_t at = w.open("RCPE"); w.i32v(0); w.i32v(100); w.i32v(0); w.i32v(0); w.u8v(0); w.close(at); }
+    { const size_t at = w.open("CROP"); w.i32v(0); w.i32v(0); w.i32v(0); w.i32v(0); w.close(at); }
+    { const size_t at = w.open("NUMS"); w.i32v(0); w.i32v(1); w.i32v(0); w.i32v(1); w.close(at); }
+    { const size_t at = w.open("OBJS"); w.u32v(0); w.close(at); }
+    return EdWrCommit(path, w);
+}
+
 bool EdDocWrite(const wchar_t* path, const std::wstring& name)
 {
     if (!g_edSrc) return false;
@@ -16124,25 +16874,12 @@ bool EdDocWrite(const wchar_t* path, const std::wstring& name)
         w.i32v(EdViewW()); w.i32v(EdViewH()); w.i32v((int)g_edObjs.size());
         w.close(at);
         if (Gdiplus::Bitmap* flat = EdRender()) {
-            const int fw = (int)flat->GetWidth(), fh = (int)flat->GetHeight();
-            const double kx = 320.0 / (fw > 0 ? fw : 1), ky = 240.0 / (fh > 0 ? fh : 1);
-            const double k = kx < ky ? kx : ky;   // EdMin працює з int і зрізав би масштаб у нуль
-            const int tw = k < 1.0 ? (int)(fw * k + 0.5) : fw;
-            const int th = k < 1.0 ? (int)(fh * k + 0.5) : fh;
-            Gdiplus::Bitmap* thumbBmp = new Gdiplus::Bitmap(tw > 0 ? tw : 1, th > 0 ? th : 1, PixelFormat32bppPARGB);
-            if (thumbBmp && thumbBmp->GetLastStatus() == Gdiplus::Ok) {
-                Gdiplus::Graphics gg(thumbBmp);
-                gg.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-                gg.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-                gg.DrawImage(flat, Gdiplus::Rect(0, 0, tw, th), 0, 0, fw, fh, Gdiplus::UnitPixel);
-                std::vector<BYTE> tp;
-                if (EdPngEncode(thumbBmp, tp)) {
-                    const size_t ta = w.open("THMB");
-                    w.raw(tp.data(), tp.size());
-                    w.close(ta);
-                }
+            std::vector<BYTE> tp;
+            if (EdThumbPng(flat, tp)) {
+                const size_t ta = w.open("THMB");
+                w.raw(tp.data(), tp.size());
+                w.close(ta);
             }
-            delete thumbBmp;
             delete flat;
         }
     }
@@ -16184,8 +16921,13 @@ bool EdDocWrite(const wchar_t* path, const std::wstring& name)
         w.close(at);
     }
 
-    // ⚠ Пишемо у сусідній тимчасовий файл і аж потім підміняємо: обрив на
-    // половині не має перетворювати вчорашню роботу на сміття.
+    return EdWrCommit(path, w);
+}
+
+// ⚠ Пишемо у сусідній тимчасовий файл і аж потім підміняємо: обрив на
+// половині не має перетворювати вчорашню роботу на сміття.
+bool EdWrCommit(const wchar_t* path, const EdWr& w)
+{
     std::wstring tmp = std::wstring(path) + L".part";
     HANDLE f = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -16893,20 +17635,36 @@ void EdLibRetention()
 
 // ⚠ Повторне натискання ПЕРЕЗАПИСУЄ той самий запис, а не плодить копії: шлях
 // документа памʼятається від першого збереження й живе до наступного знімка.
+// Шлях нового запису бібліотеки: дата й час, а при збігу — з номером.
+bool EdLibNewPath(wchar_t* path, wchar_t* stamp)
+{
+    const wchar_t* dir = EdLibDir();
+    if (!dir) return false;
+    EdLibStamp(stamp, 32);
+    wsprintfW(path, L"%s\\%s.lhshot", dir, stamp);
+    // Два знімки в одну секунду — рідкість, але не неможливість.
+    for (int i = 2; i < 100 && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES; ++i)
+        wsprintfW(path, L"%s\\%s (%d).lhshot", dir, stamp, i);
+    return true;
+}
+
+bool EdLibSaveBare(Gdiplus::Bitmap* bmp, const wchar_t* source)
+{
+    wchar_t path[MAX_PATH], stamp[32];
+    if (!EdLibNewPath(path, stamp)) return false;
+    if (!EdDocWriteBare(path, bmp, stamp, source)) return false;
+    EdLibRetention();
+    return true;
+}
+
 bool EdStoreNow()
 {
     if (!g_edSrc) return false;
     if (!g_edDocPath[0]) {
-        const wchar_t* dir = EdLibDir();
-        if (!dir) return false;
         wchar_t stamp[32];
-        EdLibStamp(stamp, 32);
-        if (!g_edDocName[0]) lstrcpynW(g_edDocName, stamp, 128);
         wchar_t path[MAX_PATH];
-        wsprintfW(path, L"%s\\%s.lhshot", dir, stamp);
-        // Два знімки в одну секунду — рідкість, але не неможливість.
-        for (int i = 2; i < 100 && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES; ++i)
-            wsprintfW(path, L"%s\\%s (%d).lhshot", dir, stamp, i);
+        if (!EdLibNewPath(path, stamp)) return false;
+        if (!g_edDocName[0]) lstrcpynW(g_edDocName, stamp, 128);
         lstrcpynW(g_edDocPath, path, MAX_PATH);
         const bool ok = EdDocSaveTo(g_edDocPath);
         if (ok) EdLibRetention();
@@ -17171,6 +17929,23 @@ void CapHkRefresh()
     SetWindowTextW(g_capHkStatus, line);
 }
 
+// CAPS-57: позначки матриці жестів, Esc оверлея й чекбокс швидких знімків —
+// з поточного стану. Кличеться при старті й після кожної зміни.
+void CapActRefresh()
+{
+    if (!g_mainWnd) return;
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            if (HWND b = GetDlgItem(g_mainWnd, IDC_ACT_M0 + r * 3 + c))
+                SendMessageW(b, BM_SETCHECK, g_capAct[r] == c ? BST_CHECKED : BST_UNCHECKED, 0);
+    if (HWND b = GetDlgItem(g_mainWnd, IDC_OV_ESC_CLOSE))
+        SendMessageW(b, BM_SETCHECK, g_ovEscSave ? BST_UNCHECKED : BST_CHECKED, 0);
+    if (HWND b = GetDlgItem(g_mainWnd, IDC_OV_ESC_SAVE))
+        SendMessageW(b, BM_SETCHECK, g_ovEscSave ? BST_CHECKED : BST_UNCHECKED, 0);
+    if (HWND b = GetDlgItem(g_mainWnd, IDC_LIB_QUICK))
+        SendMessageW(b, BM_SETCHECK, g_libQuick ? BST_CHECKED : BST_UNCHECKED, 0);
+}
+
 void CapHkSet(int slot, int packed)
 {
     const int prev = g_hk[slot];
@@ -17234,6 +18009,9 @@ void CapTake(HINSTANCE hInst, HWND owner, CapMode mode, HWND target)
     CapShot shot = {};
     bool ok = false;
     g_capCancelled = false;
+    // Дія: для ділянки — за жестом; для екрана з гарячої клавіші — «без
+    // клавіші» (рішення власника 22.09); буфер і вікно з трею — редактор.
+    int act = (int)CapAct::Editor;
 
     if (mode == CapMode::Clipboard) {
         shot.bmp = CapFromClipboard();
@@ -17242,12 +18020,48 @@ void CapTake(HINSTANCE hInst, HWND owner, CapMode mode, HWND target)
             shot.h = (int)shot.bmp->GetHeight();
             ok = true;
         }
+    } else if (mode == CapMode::Region) {
+        // ⚠ Оверлей створюється всередині цієї самої області DPI: вікно, яке
+        // лягає 1:1 на заморожений кадр, мусить рахувати у фізичних пікселях.
+        CapDpiScope dpi;
+        CapShot whole = {};
+        RECT mon = {}, sel = {};
+        int gst = 0;
+        if (CapRegionEx(&whole, &mon, &sel, &gst)) {
+            act = g_capAct[gst];
+            if (act == (int)CapAct::Overlay) {
+                RECT rel = sel;
+                OffsetRect(&rel, -mon.left, -mon.top);
+                EdOpenOverlay(hInst, whole, mon, rel);      // забирає whole.bmp
+                return;
+            }
+            Gdiplus::Bitmap* part = CapCrop(whole.bmp, mon, sel);
+            delete whole.bmp;
+            if (part) {
+                shot = whole;
+                shot.bmp = part;
+                shot.w = (int)part->GetWidth();
+                shot.h = (int)part->GetHeight();
+                ok = true;
+            }
+        }
     } else {
         CapDpiScope dpi;
+        if (mode == CapMode::Screen) {
+            act = g_capAct[0];
+            if (act == (int)CapAct::Overlay) {
+                CapShot whole = {};
+                RECT mon = {};
+                if (CapFreezeMonitor(&whole, &mon)) {
+                    const RECT rel = { 0, 0, mon.right - mon.left, mon.bottom - mon.top };
+                    EdOpenOverlay(hInst, whole, mon, rel);
+                    return;
+                }
+            }
+        }
         switch (mode) {
         case CapMode::Screen: ok = CapScreen(&shot); break;
         case CapMode::Window: ok = CapWindow(target ? target : CapForegroundTarget(), &shot); break;
-        case CapMode::Region: ok = CapRegion(&shot); break;
         default: break;
         }
     }
@@ -17263,7 +18077,140 @@ void CapTake(HINSTANCE hInst, HWND owner, CapMode mode, HWND target)
     if (mode == CapMode::Window)         label = Str::EdCapWindow;
     else if (mode == CapMode::Region)    label = Str::EdCapRegion;
     else if (mode == CapMode::Clipboard) label = Str::EdCapClip;
+    if (act == (int)CapAct::Clip) { CapQuickCopy(shot.bmp, label); return; }
     EdOpenBitmap(hInst, shot.bmp, S(label), shot.hdr, shot.toneMapped, shot.sdrWhite);
+}
+
+// ---- CAPS-33: редагування в оверлеї ----------------------------------------
+
+// Вхід: заморожений монітор стає документом, рамка — кадром. Уже відкритий
+// редактор закриваємо: оверлей — нове вікно в області DPI знімка, а стан
+// редактора в програмі один.
+void EdOpenOverlay(HINSTANCE hInst, CapShot& whole, const RECT& monRc, const RECT& sel)
+{
+    if (!whole.bmp) return;
+    if (g_edWnd) DestroyWindow(g_edWnd);
+    g_ovMon = monRc;
+    g_edOverlay = true;
+    EdOpenBitmap(hInst, whole.bmp, S(Str::EdCapRegion), whole.hdr, whole.toneMapped, whole.sdrWhite);
+    whole.bmp = nullptr;
+    if (!g_edWnd) { g_edOverlay = false; return; }
+    RECT c = sel;
+    if (c.left < 0) c.left = 0;
+    if (c.top < 0) c.top = 0;
+    if (c.right > g_edImgW) c.right = g_edImgW;
+    if (c.bottom > g_edImgH) c.bottom = g_edImgH;
+    if (c.right - c.left < 4 || c.bottom - c.top < 4) c = RECT{ 0, 0, g_edImgW, g_edImgH };
+    g_edCrop = c;
+    g_edTool = EdTool::Select;
+    EdLayout(g_edWnd);
+    InvalidateRect(g_edWnd, nullptr, FALSE);
+    SetForegroundWindow(g_edWnd);
+    SetFocus(g_edWnd);
+}
+
+// ⚠ Серце гарантії «оверлей = вікно побайтово». Документ вирізається рамкою
+// ТІЄЮ САМОЮ функцією CapCrop, що й у шляху через вікно, позначки зсуваються
+// на початок рамки — і далі це рівно той документ, який дав би редактор.
+// Кличеться перед будь-яким виходом: буфер, бібліотека, вікно.
+bool EdOverlayBake()
+{
+    if (!g_edOverlay || !g_edSrc || !EdHasCrop()) return false;
+    const RECT c = g_edCrop;
+    RECT scr = c;
+    OffsetRect(&scr, g_ovMon.left, g_ovMon.top);
+    Gdiplus::Bitmap* part = CapCrop(g_edSrc, g_ovMon, scr);
+    if (!part) return false;
+    for (size_t i = 0; i < g_edSrcBank.size(); ++i) delete g_edSrcBank[i];
+    g_edSrcBank.clear();
+    g_edSrcBank.push_back(part);
+    g_edSrcId = 0;
+    g_edSrc = part;
+    for (size_t i = 0; i < g_edObjs.size(); ++i) EdMoveObj(g_edObjs[i], -c.left, -c.top);
+    // Скасування теж переходить у нові координати: інакше Ctrl+Z у вікні
+    // поклав би позначки туди, де вони були на моніторі.
+    std::vector<EdSnap>* stacks[2] = { &g_edUndo, &g_edRedo };
+    for (int k = 0; k < 2; ++k)
+        for (size_t i = 0; i < stacks[k]->size(); ++i) {
+            EdSnap& sn = (*stacks[k])[i];
+            for (size_t j = 0; j < sn.objs.size(); ++j) EdMoveObj(sn.objs[j], -c.left, -c.top);
+            sn.crop = RECT{ 0, 0, 0, 0 };
+            sn.srcId = 0;
+        }
+    g_edCrop = RECT{ 0, 0, 0, 0 };
+    EdRebuildImage();
+    return true;
+}
+
+// Оверлей стає звичайним вікном редактора — посередині того самого монітора.
+void EdOverlayEnterWindow(HWND hwnd)
+{
+    g_edOverlay = false;
+    const int dpi = (int)GetDpiForWindow(hwnd);
+    MONITORINFO mi = { sizeof(mi) };
+    GetMonitorInfoW(MonitorFromRect(&g_ovMon, MONITOR_DEFAULTTONEAREST), &mi);
+    const RECT wa = mi.rcWork;
+    const int waW = wa.right - wa.left, waH = wa.bottom - wa.top;
+    int w = MulDiv(1320, dpi, 96), h = MulDiv(760, dpi, 96);
+    if (w > waW - MulDiv(80, dpi, 96)) w = waW - MulDiv(80, dpi, 96);
+    if (h > waH - MulDiv(80, dpi, 96)) h = waH - MulDiv(80, dpi, 96);
+    ShowWindow(hwnd, SW_HIDE);
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, 0);
+    SetWindowLongPtrW(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN);
+    SetWindowPos(hwnd, HWND_NOTOPMOST, wa.left + (waW - w) / 2, wa.top + (waH - h) / 2, w, h,
+                 SWP_FRAMECHANGED | SWP_NOACTIVATE);
+    EdApplyTheme(hwnd);
+    g_edZoom = 1.0f;
+    g_edPanX = g_edPanY = 0;
+    EdFitView();
+    EdLayout(hwnd);
+    ShowWindow(hwnd, SW_SHOW);
+    SetForegroundWindow(hwnd);
+    InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+void EdOverlayToWindow(HWND hwnd)
+{
+    if (!EdOverlayBake()) return;
+    EdOverlayEnterWindow(hwnd);
+}
+
+// Не вдалось віддати результат — роботу не губимо: переходимо у вікно, де
+// можна спробувати ще раз або зберегти інакше.
+void EdOverlayFail(HWND hwnd, Str err)
+{
+    EdOverlayEnterWindow(hwnd);
+    MessageBoxW(hwnd, S(err), kAppName, MB_OK | MB_ICONWARNING);
+}
+
+void EdOverlayCopy(HWND hwnd)
+{
+    if (!EdOverlayBake()) return;
+    if (!EdCopy()) { EdOverlayFail(hwnd, Str::EdErrCopy); return; }
+    // Бібліотека — за тією самою опцією, що й знімок у буфер без редактора.
+    if (g_libQuick) EdStoreNow();
+    CapFlash(S(Str::CapCopied));
+    DestroyWindow(hwnd);
+}
+
+void EdOverlayStore(HWND hwnd)
+{
+    if (!EdOverlayBake()) return;
+    if (!EdStoreNow()) { EdOverlayFail(hwnd, Str::EdErrStore); return; }
+    CapFlash(S(Str::CapStored));
+    DestroyWindow(hwnd);
+}
+
+// Останній Esc (і Alt+F4): за налаштуванням власника — просто закрити або,
+// якщо є позначки, спершу мовчки зберегти в бібліотеку.
+void EdOverlayEsc(HWND hwnd)
+{
+    if (g_ovEscSave && !g_edObjs.empty()) {
+        if (!EdOverlayBake()) return;
+        if (!EdStoreNow()) { EdOverlayFail(hwnd, Str::EdErrStore); return; }
+        CapFlash(S(Str::CapStored));
+    }
+    DestroyWindow(hwnd);
 }
 
 // =================== кінець редактора знімків (CAPS-20) ===================
@@ -17324,6 +18271,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WMAPP_OPENEDITOR:   // CAPS-59: --editor від другого екземпляра або зі старту
         EdOpenBlank(GetModuleHandleW(nullptr));
         return 0;
+
+    case WMAPP_QUICKSAVE: {  // CAPS-57: знімок повз редактор — у бібліотеку
+        CapQuickJob* j = (CapQuickJob*)lp;
+        if (j) {
+            EdLibSaveBare(j->bmp, S(j->label));
+            delete j->bmp;
+            delete j;
+        }
+        LibRefreshNow();
+        return 0;
+    }
 
     case WMAPP_SHAKE:    // від мишачого хука
         MagnifyStart();
@@ -17694,6 +18652,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             LibRefreshNow();
             break;
         }
+        case IDC_ACT_M0 + 0: case IDC_ACT_M0 + 1: case IDC_ACT_M0 + 2:
+        case IDC_ACT_M0 + 3: case IDC_ACT_M0 + 4: case IDC_ACT_M0 + 5:
+        case IDC_ACT_M0 + 6: case IDC_ACT_M0 + 7: case IDC_ACT_M0 + 8: {
+            const int k = LOWORD(wp) - IDC_ACT_M0;
+            CapSetAct(k / 3, k % 3);
+            CapActRefresh();
+            break;
+        }
+        case IDC_OV_ESC_CLOSE:
+        case IDC_OV_ESC_SAVE:
+            g_ovEscSave = (LOWORD(wp) == IDC_OV_ESC_SAVE);
+            RegSaveInt(kRegOvEscSave, g_ovEscSave ? 1 : 0);
+            CapActRefresh();
+            break;
+        case IDC_LIB_QUICK:
+            g_libQuick = SendMessageW(GetDlgItem(hwnd, IDC_LIB_QUICK), BM_GETCHECK, 0, 0) == BST_CHECKED;
+            RegSaveInt(kRegLibQuick, g_libQuick ? 1 : 0);
+            break;
         case IDC_CAP_HKRESET:
             g_hk[0] = kHkDefClip;
             g_hk[1] = kHkDefRegion;
@@ -17886,7 +18862,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // своїм контролом, між групами 6–8 px повітря плюс заголовок групи.
     // ⚠ Сторінки НЕ прокручуються, тож висота вікна — це межа вмісту.
     // 2.6.0: «Перегляд» переросла попередню; 3.27.0: «Знімки» — секція бібліотеки.
-    constexpr int W = 500, H = 760;
+    constexpr int W = 500, H = 790;
     constexpr int TAB_X = 20, TAB_Y = 74, FOOT_H = 42;    // таб-контрол під шапкою, підвал під табом
     constexpr int PX = TAB_X + 20, PW = 420, PY = 116;    // сторінка: лівий край, ширина, перший рядок
     const int w = sc(W), h = sc(H);
@@ -18150,15 +19126,38 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
             y += 30;
         }
     }
-    y += 6;
-    hint(addK, Str::CapHkHint, 3);
-    g_capHkStatus = addK(mkS(L"STATIC", Str::Empty, 0, PX, y, PW, 36, IDC_HINT_GRAY));
-    y += 42;
-    button(addK, Str::CapHkDefaults, PX, 170, IDC_CAP_HKRESET);
-    y += 38;
+    y += 2;
+    hint(addK, Str::CapHkHint, 2);
+    // Рядок стану й «Повернути типові» — в один рядок: місце потрібне матриці.
+    g_capHkStatus = addK(mkS(L"STATIC", Str::Empty, 0, PX, y, 240, 32, IDC_HINT_GRAY));
+    button(addK, Str::CapHkDefaults, PX + 250, 170, IDC_CAP_HKRESET);
+    y += 40;
+    // CAPS-57: жест × дія. Рядки — жест при відпусканні рамки, стовпці — дія;
+    // у кожному рядку й кожному стовпці рівно одна позначка.
+    sec(addK, Str::CapSecGesture);
+    {
+        const Str cols[3] = { Str::CapActColEditor, Str::CapActColClip, Str::CapActColOverlay };
+        const Str rows[3] = { Str::CapGestNone, Str::CapGestShift, Str::CapGestAlt };
+        const int colX[3] = { PX + 130, PX + 225, PX + 320 };
+        for (int c = 0; c < 3; ++c)
+            addK(mkS(L"STATIC", cols[c], SS_CENTER, colX[c] - 45, y, 90, 18, IDC_HINT_GRAY));
+        y += 20;
+        for (int r = 0; r < 3; ++r) {
+            addK(mkS(L"STATIC", rows[r], 0, PX, y + 2, 120, 20, 0));
+            for (int c = 0; c < 3; ++c)
+                addK(mk(L"BUTTON", L"", BS_RADIOBUTTON | WS_TABSTOP, colX[c] - 8, y, 18, 22,
+                        IDC_ACT_M0 + r * 3 + c));
+            y += 24;
+        }
+        y += 4;
+        addK(mkS(L"STATIC", Str::CapOvEscL, 0, PX, y + 2, 120, 20, 0));
+        addK(mkS(L"BUTTON", Str::CapOvEscClose, BS_RADIOBUTTON | WS_TABSTOP, PX + 130, y, 100, 22, IDC_OV_ESC_CLOSE));
+        addK(mkS(L"BUTTON", Str::CapOvEscSave, BS_RADIOBUTTON | WS_TABSTOP, PX + 236, y, 184, 22, IDC_OV_ESC_SAVE));
+        y += 30;
+    }
     sec(addK, Str::CapSecOutput);
-    check(addK, Str::CapKeepTool, IDC_CAP_KEEPTOOL, g_edKeepTool, 2);
-    y -= 6;
+    check(addK, Str::CapKeepTool, IDC_CAP_KEEPTOOL, g_edKeepTool, 1);
+    y += 2;
     sec(addK, Str::CapSecLib);
     {
         // Або кількість, або обсяг — дві умови зразу людина не тримає в голові.
@@ -18177,6 +19176,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         SendMessageW(GetDlgItem(hwnd, mode == 0 ? IDC_LIB_BYCOUNT : IDC_LIB_BYSIZE), BM_SETCHECK, BST_CHECKED, 0);
         EnableWindow(ec, mode == 0);
         EnableWindow(em, mode == 1);
+        check(addK, Str::CapLibQuick, IDC_LIB_QUICK, true, 1);
         hint(addK, Str::CapLibHint, 1);
         g_libNow = addK(mkS(L"STATIC", Str::Empty, 0, PX, y + 6, 200, 20, IDC_LIB_NOW));
         button(addK, Str::CapLibShow, PX + 206, 106, IDC_LIB_SHOW);
@@ -18229,7 +19229,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // Контрол, що не вліз у масив сторінки, ніколи не сховається при перемиканні
     // вкладок — саме так у 2.1.0 «Оновити» лишалась поверх усіх вкладок. Повідомлення
     // для розробника (не локалізоване): користувач його не побачить, бо запас великий.
-    if (g_pageOverflow)
+    if (g_pageOverflow || g_locOverflow)
         MessageBoxW(hwnd, L"Page control array overflow - raise the capacity.",
                     kAppName, MB_ICONERROR | MB_OK);
 
@@ -18276,6 +19276,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     g_edLastAction  = RegLoadInt(kRegEdLast, 0, 0, 1);
     g_edKeepTool    = RegLoadInt(kRegEdKeepTool, 1, 0, 1) != 0;
     CapLoadHotkeys();
+    CapLoadActs();     // CAPS-57: жест × дія, бібліотека для швидких знімків, Esc оверлея
+    CapActRefresh();
     if (!CapApplyHotkeys(hwnd)) TrayBalloon(kAppName, S(Str::CapHkBusy));
     CapHkRefresh();
     // CAPS-59: перший запуск із --editor — редактор одразу, але вже з циклу
