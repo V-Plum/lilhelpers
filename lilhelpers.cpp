@@ -165,6 +165,7 @@ constexpr int  IDC_UPD_STATUS    = 161;
 constexpr int  IDC_UPD_CHECK     = 162;
 constexpr int  IDC_UPD_INSTALL   = 163;
 constexpr int  IDC_UPD_ROLLBACK  = 164;
+constexpr int  IDC_UPD_LOG       = 216;   // CAPS-63: посилання «Журнал перевірок»
 // CAPS-12: мова (вкладка «Налаштування»)
 constexpr int  IDC_LANG_SYSTEM   = 170;   // порядок = LangPref
 constexpr int  IDC_LANG_UK       = 171;
@@ -196,11 +197,13 @@ constexpr UINT IDM_CAPSCREEN   = 4;   // CAPS-21: знімок екрана
 constexpr UINT IDM_CAPWINDOW   = 5;   // CAPS-21: знімок активного вікна
 constexpr UINT IDM_CAPREGION   = 6;   // CAPS-21: знімок ділянки
 constexpr UINT IDM_CAPCLIP     = 7;   // CAPS-21: з буфера обміну
+constexpr UINT IDM_UPDATE_NOW  = 8;   // CAPS-63: «Оновити до X» у меню трею
 constexpr UINT TIMER_MAG_HOLD   = 1;
 constexpr UINT TIMER_MAG_FRAME  = 2;   // кадр оверлейної анімації
 constexpr UINT TIMER_THEME      = 3;   // CAPS-7: перевірка теми раз на хвилину
 constexpr UINT TIMER_UPDATE     = 4;   // CAPS-10: хвилина після старту, далі кожні 30 хв
 constexpr UINT TIMER_TRAY       = 5;   // CAPS-17: повтор додавання іконки, поки панель не готова
+constexpr UINT TIMER_UPDREMIND  = 6;   // CAPS-63: щохвилини — чи можна вже нагадати про оновлення
 
 const wchar_t* kAppName  = L"Little Helpers";   // заголовки вікна/повідомлень, трей
 const wchar_t* kWndClass = L"lilhelpers";
@@ -214,6 +217,8 @@ const wchar_t* kRegLang         = L"Language";       // CAPS-12: 0 систем�
 const wchar_t* kRegUpdDaily     = L"UpdateCheckDaily";  // CAPS-10
 const wchar_t* kRegUpdLast      = L"UpdateLastCheck";   // unix (DWORD)
 const wchar_t* kRegUpdNotified  = L"UpdateNotifiedTag"; // REG_SZ: про яку версію вже казали
+const wchar_t* kRegUpdAvail     = L"UpdateAvailableTag";// CAPS-63: знайдена, ще не встановлена версія
+const wchar_t* kRegUpdRemindDay = L"UpdateRemindedDay"; // CAPS-63: локальний день останнього нагадування
 const wchar_t* kRegPeek         = L"Peek";              // CAPS-16: перегляд по пробілу увімкнено (1)
 
 // ---------- CAPS-12: локалізація ----------
@@ -347,6 +352,11 @@ X(SetThHint,          L"«Автоматично» — як тема засто�
                       L"“Automatic” — follows the Windows app theme (see “Day/night”).")               \
 X(SetSecUpd,          L"Оновлення",                     L"Updates")                                    \
 X(UpdDaily,           L"Щоденна перевірка оновлень",    L"Check for updates daily")                    \
+X(UpdTrayTipFmt,      L"Little Helpers — доступна версія %s",  L"Little Helpers — version %s available")     \
+X(UpdMenuFmt,         L"Оновити до %s",                 L"Update to %s")                               \
+X(UpdLogLink,         L"<a>Журнал перевірок</a>",        L"<a>Update check log</a>")                   \
+X(UpdLogTitle,        L"Журнал перевірок оновлень",     L"Update check log")                           \
+X(UpdLogEmpty,        L"Журнал ще порожній.",           L"The log is empty.")                          \
 X(UpdCheck,           L"Перевірити зараз",              L"Check now")                                  \
 X(UpdInstall,         L"Оновити",                       L"Update")                                     \
 X(UpdRollback,        L"Повернути попередню",           L"Roll back")                                  \
@@ -901,6 +911,8 @@ UpdState      g_updState = UpdState::Idle;
 wchar_t       g_updTag[32] = {};        // доступна версія (tag)
 Str           g_updErr = Str::Empty;    // CAPS-12: остання помилка (код)
 wchar_t       g_updNotified[32] = {};
+int           g_updRemindDay = 0;         // CAPS-63: день останнього нагадування
+bool          g_updDeferLogged = false;   // «відкладено — нікого немає» пишемо в журнал раз
 volatile LONG g_updBusy = 0;
 HWND g_updDailyCb = nullptr, g_updStatus = nullptr;
 HWND g_updCheckBtn = nullptr, g_updInstallBtn = nullptr, g_updRollbackBtn = nullptr;
@@ -2914,6 +2926,112 @@ void TrayEnsure(HWND hwnd)
         KillTimer(hwnd, TIMER_TRAY);   // панелі немає аж 5 хв — це вже не гонка
 }
 
+// ---- CAPS-63: журнал перевірок оновлень ----------------------------------------
+// Короткий текстовий журнал у %LOCALAPPDATA%\Little Helpers\updates.log: коли
+// перевіряли, чим скінчилось, що показали людині. Без нього «я не бачив
+// сповіщення» доводиться відтворювати з пам'яті.
+const wchar_t* UpdLogPath()
+{
+    static wchar_t path[MAX_PATH] = {};
+    if (path[0]) return path;
+    wchar_t* base = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &base)) || !base) return nullptr;
+    wchar_t dir[MAX_PATH];
+    wsprintfW(dir, L"%s\\Little Helpers", base);
+    CoTaskMemFree(base);
+    SHCreateDirectoryExW(nullptr, dir, nullptr);
+    wsprintfW(path, L"%s\\updates.log", dir);
+    return path;
+}
+
+void UpdLog(const wchar_t* fmt, ...)
+{
+    const wchar_t* path = UpdLogPath();
+    if (!path) return;
+    wchar_t msg[400];
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnwprintf_s(msg, 400, _TRUNCATE, fmt, ap);
+    va_end(ap);
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    wchar_t line[480];
+    swprintf(line, 480, L"%04d-%02d-%02d %02d:%02d:%02d  %s\r\n",
+             t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, msg);
+    char u8[1500];
+    const int n = WideCharToMultiByte(CP_UTF8, 0, line, -1, u8, (int)sizeof(u8), nullptr, nullptr);
+    if (n <= 1) return;
+    // Журнал не росте безмежно: понад 64 КБ — лишаємо свіжу половину.
+    HANDLE f = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    LARGE_INTEGER sz = {};
+    GetFileSizeEx(f, &sz);
+    if (sz.QuadPart > 64 * 1024) {
+        std::vector<char> all((size_t)sz.QuadPart);
+        DWORD got = 0;
+        ReadFile(f, all.data(), (DWORD)all.size(), &got, nullptr);
+        size_t cut = all.size() / 2;
+        while (cut < all.size() && all[cut] != '\n') ++cut;
+        if (cut < all.size()) ++cut;
+        SetFilePointer(f, 0, nullptr, FILE_BEGIN);
+        DWORD put = 0;
+        WriteFile(f, all.data() + cut, (DWORD)(all.size() - cut), &put, nullptr);
+        SetEndOfFile(f);
+    }
+    SetFilePointer(f, 0, nullptr, FILE_END);
+    DWORD put = 0;
+    WriteFile(f, u8, (DWORD)(n - 1), &put, nullptr);
+    CloseHandle(f);
+}
+
+// Останні рядки журналу — у звичайному вікні повідомлення: для «що було вночі»
+// цього досить, окремий переглядач не потрібен.
+void UpdShowLog(HWND owner)
+{
+    std::wstring text;
+    if (const wchar_t* path = UpdLogPath()) {
+        HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f != INVALID_HANDLE_VALUE) {
+            LARGE_INTEGER sz = {};
+            GetFileSizeEx(f, &sz);
+            std::vector<char> all((size_t)sz.QuadPart + 1, 0);
+            DWORD got = 0;
+            ReadFile(f, all.data(), (DWORD)sz.QuadPart, &got, nullptr);
+            CloseHandle(f);
+            const int wn = MultiByteToWideChar(CP_UTF8, 0, all.data(), (int)got, nullptr, 0);
+            std::wstring w(wn, L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, all.data(), (int)got, &w[0], wn);
+            // останні 25 рядків
+            size_t pos = w.size(), lines = 0;
+            while (pos > 0 && lines <= 25) { --pos; if (w[pos] == L'\n') ++lines; }
+            text = w.substr(lines > 25 ? pos + 1 : 0);
+        }
+    }
+    MessageBoxW(owner, text.empty() ? S(Str::UpdLogEmpty) : text.c_str(), S(Str::UpdLogTitle),
+                MB_OK | MB_ICONINFORMATION);
+}
+
+// Людина за комп'ютером: останній ввід не давніше 5 хвилин. Нічне сповіщення в
+// порожню кімнату — це сповіщення, якого не було (фідбек власника 23.09).
+bool UpdUserPresent()
+{
+    LASTINPUTINFO li = { sizeof(li) };
+    if (!GetLastInputInfo(&li)) return true;
+    return GetTickCount() - li.dwTime < 5 * 60 * 1000;
+}
+
+int UpdLocalDay()
+{
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    FILETIME ft;
+    SystemTimeToFileTime(&t, &ft);
+    const ULONGLONG v = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    return (int)(v / 864000000000ULL);
+}
+
 void TrayBalloon(const wchar_t* title, const wchar_t* text)
 {
     NOTIFYICONDATAW n = g_nid;
@@ -2922,6 +3040,29 @@ void TrayBalloon(const wchar_t* title, const wchar_t* text)
     lstrcpynW(n.szInfoTitle, title, 64);
     lstrcpynW(n.szInfo, text, 256);
     Shell_NotifyIconW(NIM_MODIFY, &n);
+}
+
+// CAPS-63: нагадати про знайдену версію — раз на день, доки не встановлено, і
+// лише тоді, коли людина поруч. Кличеться щохвилини й після кожної перевірки.
+void UpdMaybeRemind()
+{
+    if (g_updState != UpdState::Available || !g_updDaily || !g_updTag[0]) return;
+    const int day = UpdLocalDay();
+    if (day == g_updRemindDay) return;
+    const wchar_t* ver = g_updTag[0] == L'v' ? g_updTag + 1 : g_updTag;
+    if (!UpdUserPresent()) {
+        if (!g_updDeferLogged) { UpdLog(L"нагадування про %s відкладено: за комп'ютером нікого", ver); g_updDeferLogged = true; }
+        return;
+    }
+    wchar_t text[128] = {};
+    swprintf(text, 128, S(Str::UpdBalloonFmt), ver);
+    TrayBalloon(kAppName, text);
+    g_updRemindDay = day;
+    g_updDeferLogged = false;
+    RegSaveInt(kRegUpdRemindDay, day);
+    lstrcpynW(g_updNotified, g_updTag, 32);
+    RegSaveStr(kRegUpdNotified, g_updTag);
+    UpdLog(L"показано сповіщення про %s", ver);
 }
 
 // --after-update <pid>: зачекати, поки попередній екземпляр вийде (м'ютекс).
@@ -3359,8 +3500,25 @@ void UpdateUpdStatus()
     }
     SetWindowTextW(g_updStatus, line);
     const bool busy = g_updBusy != 0;
+    // CAPS-63: знайдена версія лишається доступною й після збою наступної перевірки.
+    wchar_t curV[32] = {};
+    ExeVersionString(curV, 32);
+    const bool known = g_updTag[0] && CompareVersion(g_updTag, curV) > 0;
     EnableWindow(g_updCheckBtn,    !busy);
-    EnableWindow(g_updInstallBtn,  !busy && g_updState == UpdState::Available);
+    EnableWindow(g_updInstallBtn,  !busy && (g_updState == UpdState::Available ||
+                                             (g_updState == UpdState::Error && known)));
+    // Слід у треї: підказка значка каже про доступну версію, поки її не встановлено.
+    if (g_nid.hWnd) {
+        wchar_t tip[128];
+        if (known && g_updState != UpdState::UpToDate) swprintf(tip, 128, S(Str::UpdTrayTipFmt), avail);
+        else lstrcpynW(tip, g_nid.szTip[0] && !wcschr(g_nid.szTip, L'—') ? g_nid.szTip : kAppName, 128);
+        if (lstrcmpW(tip, g_nid.szTip) != 0) {
+            lstrcpynW(g_nid.szTip, tip, ARRAYSIZE(g_nid.szTip));
+            NOTIFYICONDATAW n = g_nid;
+            n.uFlags = NIF_TIP;
+            Shell_NotifyIconW(NIM_MODIFY, &n);
+        }
+    }
     EnableWindow(g_updRollbackBtn, !busy && OldVersionExists());
 }
 
@@ -18590,6 +18748,13 @@ void ShowTrayMenu(HWND hwnd)
     POINT pt;
     GetCursorPos(&pt);
     HMENU menu = CreatePopupMenu();
+    // CAPS-63: доступна версія — першим пунктом, поки її не встановлено.
+    if (g_updState == UpdState::Available && g_updTag[0] && !g_updBusy) {
+        wchar_t item[64];
+        swprintf(item, 64, S(Str::UpdMenuFmt), g_updTag[0] == L'v' ? g_updTag + 1 : g_updTag);
+        AppendMenuW(menu, MF_STRING, IDM_UPDATE_NOW, item);
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    }
     AppendMenuW(menu, MF_STRING, IDM_SETTINGS, S(Str::MenuSettings));
     // Знімки — окремим підменю: у головному списку вони перекривали решту
     // програми, хоч це лише одна з її функцій.
@@ -18671,34 +18836,49 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             SetTimer(hwnd, TIMER_UPDATE, 30 * 60 * 1000, nullptr);
             if (g_updDaily && NowUnix() - g_updLast > 86400) StartUpdate(false, false);
         }
+        else if (wp == TIMER_UPDREMIND) {   // CAPS-63
+            UpdMaybeRemind();
+        }
         return 0;
 
     case WMAPP_UPDATE: {   // CAPS-10: потік оновлення завершився
         UpdResult* r = (UpdResult*)lp;
         g_updBusy = 0;
+        wchar_t cur[32] = {};
+        ExeVersionString(cur, 32);
+        const wchar_t* how = r->manual ? L"вручну" : L"автоматично";
         if (!r->ok) {
-            g_updState = UpdState::Error;
-            g_updErr = r->err;                  // .new при збої прибирає сам потік
+            // CAPS-63: збій автоматичної перевірки не гасить уже знайдену версію —
+            // інакше «Оновити» зникала б через один невдалий нічний запит.
+            const bool known = g_updTag[0] && CompareVersion(g_updTag, cur) > 0;
+            UpdLog(L"%s %s: помилка — %s", r->install ? L"встановлення" : L"перевірка", how, S(r->err));
+            if (!r->install && !r->manual && known) {
+                g_updState = UpdState::Available;
+            } else {
+                g_updState = UpdState::Error;
+                g_updErr = r->err;              // .new при збої прибирає сам потік
+            }
         } else if (!r->install) {
             g_updLast = NowUnix();
             RegSaveInt(kRegUpdLast, (int)(DWORD)g_updLast);
-            wchar_t cur[32] = {};
-            ExeVersionString(cur, 32);
             if (CompareVersion(r->tag, cur) > 0) {
                 lstrcpynW(g_updTag, r->tag, 32);
                 g_updState = UpdState::Available;
-                if (!r->manual && lstrcmpW(g_updNotified, r->tag) != 0) {
-                    wchar_t text[128] = {};
-                    swprintf(text, 128, S(Str::UpdBalloonFmt),
-                             r->tag[0] == L'v' ? r->tag + 1 : r->tag);
-                    TrayBalloon(kAppName, text);
-                    lstrcpynW(g_updNotified, r->tag, 32);
-                    RegSaveStr(kRegUpdNotified, r->tag);
-                }
+                RegSaveStr(kRegUpdAvail, r->tag);          // CAPS-63: переживає перезапуск
+                UpdLog(L"перевірка %s: доступна %s (у вас %s)", how, r->tag, cur);
+                // Нагадування — не тут напряму, а через UpdMaybeRemind: вона сама
+                // вирішить, чи людина поруч і чи вже нагадували сьогодні. Після
+                // ручної перевірки людина й так дивиться на вікно.
+                if (!r->manual) UpdMaybeRemind();
+                else g_updRemindDay = UpdLocalDay();
             } else {
                 g_updState = UpdState::UpToDate;
+                g_updTag[0] = 0;
+                RegSaveStr(kRegUpdAvail, L"");
+                UpdLog(L"перевірка %s: остання версія (%s)", how, cur);
             }
         } else {
+            UpdLog(L"завантажено й перевірено підпис %s — встановлення", g_updTag);
             g_updState = UpdState::Verified;
             UpdateUpdStatus();
             ApplyDownloadedUpdate();   // при успіху процес завершується
@@ -18812,6 +18992,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         // CAPS-7: посилання на GitHub у шапці. Через explorer, бо програма
         // елевейтований, а браузер має відкритись звичайним користувачем.
+        if (nm->idFrom == IDC_UPD_LOG && (nm->code == NM_CLICK || nm->code == NM_RETURN)) {   // CAPS-63
+            UpdShowLog(hwnd);
+            return 0;
+        }
         if (nm->idFrom == IDC_COPYRIGHT && (nm->code == NM_CLICK || nm->code == NM_RETURN)) {
             const NMLINK* l = (const NMLINK*)lp;
             ShellExecuteW(nullptr, L"open", L"explorer.exe", l->item.szUrl, nullptr, SW_SHOWNORMAL);
@@ -18827,6 +19011,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case WM_RBUTTONUP:
         case WM_CONTEXTMENU:
             ShowTrayMenu(hwnd);
+            break;
+        case NIN_BALLOONUSERCLICK:   // CAPS-63: клік по сповіщенню — туди, де кнопка «Оновити»
+            ShowSettings(hwnd);
             break;
         }
         return 0;
@@ -18849,10 +19036,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             return 0;
         case IDC_UPD_CHECK:
-            if (HIWORD(wp) == BN_CLICKED) StartUpdate(false, true);
+            if (HIWORD(wp) == BN_CLICKED) { UpdLog(L"перевірка вручну"); StartUpdate(false, true); }
             return 0;
         case IDC_UPD_INSTALL:
-            if (HIWORD(wp) == BN_CLICKED && g_updState == UpdState::Available) StartUpdate(true, true);
+            if (HIWORD(wp) == BN_CLICKED && g_updTag[0]) { UpdLog(L"встановлення кнопкою"); StartUpdate(true, true); }
             return 0;
         case IDC_UPD_ROLLBACK:
             if (HIWORD(wp) == BN_CLICKED &&
@@ -19061,6 +19248,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_CAPCLIP:
             CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Clipboard, nullptr);
             break;
+        case IDM_UPDATE_NOW:         // CAPS-63
+            if (g_updState == UpdState::Available) { UpdLog(L"встановлення з меню трею"); StartUpdate(true, true); }
+            break;
         case IDM_EXIT:
             DestroyWindow(hwnd);
             return 0;
@@ -19191,6 +19381,20 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     g_peekOn   = RegLoadInt(kRegPeek, 1, 0, 1) != 0;              // CAPS-16
     g_updLast  = (DWORD)RegLoadInt(kRegUpdLast, 0, INT_MIN, INT_MAX);
     RegLoadStr(kRegUpdNotified, g_updNotified, 32);
+    // CAPS-63: знайдена раніше й ще не встановлена версія — одразу «доступна»,
+    // без чекання наступної перевірки (раз на добу).
+    g_updRemindDay = RegLoadInt(kRegUpdRemindDay, 0, 0, INT_MAX);
+    {
+        wchar_t known[32] = {}, curV[32] = {};
+        RegLoadStr(kRegUpdAvail, known, 32);
+        ExeVersionString(curV, 32);
+        if (known[0] && CompareVersion(known, curV) > 0) {
+            lstrcpynW(g_updTag, known, 32);
+            g_updState = UpdState::Available;
+        } else if (known[0]) {
+            RegSaveStr(kRegUpdAvail, L"");     // уже встановлено
+        }
+    }
     {   // недокачаний файл від обірваного оновлення — прибрати
         wchar_t exe[MAX_PATH] = {}, nw[MAX_PATH + 8] = {};
         ExePath(exe);
@@ -19584,6 +19788,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     g_updRollbackBtn = button(addS, Str::UpdRollback, PX + 280, 140, IDC_UPD_ROLLBACK);
     y += 30 + 12;
     hint(addS, Str::UpdHint, 2);
+    y -= 6;
+    addS(mkS(L"SysLink", Str::UpdLogLink, 0, PX, y, 200, 18, IDC_UPD_LOG));   // CAPS-63
+    y += 24;
     UpdateUpdStatus();
 
     // Таб-контрол — НА САМИЙ НИЗ z-порядку. Попри те, що він створений першим,
@@ -19620,6 +19827,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     g_mainWnd = hwnd;
     ApplyWindowTheme(true);   // CAPS-8: тема вікна до першого показу
     SetTimer(hwnd, TIMER_UPDATE, 60 * 1000, nullptr);   // CAPS-10: перша перевірка за хвилину
+    SetTimer(hwnd, TIMER_UPDREMIND, 60 * 1000, nullptr);   // CAPS-63: нагадування, коли людина поруч
+    UpdateUpdStatus();                                   // CAPS-63: підказка значка — з відомою версією
 
     // CAPS-7: одразу привести тему до часу доби; координати — з кешу, свіжі у фоні.
     EnableThemeControls();
