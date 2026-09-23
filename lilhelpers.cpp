@@ -7339,6 +7339,82 @@ WPARAM RgnKeyMods(LPARAM lp)
     return 0;
 }
 
+// ---- CAPS-60: шари в пам'яті --------------------------------------------------
+// Кадр 4K через GDI+ коштував 120+ мс: щоразу заново малювався весь заморожений
+// знімок і напівпрозоре притемнення, хоча міняються лише рамка й підказка.
+// Шар — DIB-секція, вибрана у власний DC: BitBlt із неї — просто копія пам'яті
+// (3 мс на 4K). Фон складається один раз, а кадр — це копії з шарів.
+struct FastLayer { HDC dc = nullptr; HBITMAP bmp = nullptr; HGDIOBJ old = nullptr;
+                   BYTE* bits = nullptr; int w = 0, h = 0; };
+
+void FastLayerFree(FastLayer& L)
+{
+    if (L.dc) { SelectObject(L.dc, L.old); DeleteDC(L.dc); }
+    if (L.bmp) DeleteObject(L.bmp);
+    L = FastLayer{};
+}
+
+bool FastLayerMake(FastLayer& L, int w, int h)
+{
+    if (L.dc && L.w == w && L.h == h) return true;
+    FastLayerFree(L);
+    if (w < 1 || h < 1) return false;
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;                 // згори вниз, як у GDI+
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    L.bmp = CreateDIBSection(nullptr, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!L.bmp || !bits) { FastLayerFree(L); return false; }
+    L.dc = CreateCompatibleDC(nullptr);
+    if (!L.dc) { FastLayerFree(L); return false; }
+    L.old = SelectObject(L.dc, L.bmp);
+    L.bits = (BYTE*)bits;
+    L.w = w; L.h = h;
+    return true;
+}
+
+// Пікселі знімка — у шар, рядок за рядком (кадр непрозорий, альфа не потрібна).
+bool FastLayerFrom(FastLayer& L, Gdiplus::Bitmap* src)
+{
+    if (!src) return false;
+    const int w = (int)src->GetWidth(), h = (int)src->GetHeight();
+    if (!FastLayerMake(L, w, h)) return false;
+    Gdiplus::BitmapData bd;
+    Gdiplus::Rect all(0, 0, w, h);
+    if (src->LockBits(&all, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bd) != Gdiplus::Ok) return false;
+    GdiFlush();
+    for (int y = 0; y < h; ++y)
+        memcpy(L.bits + (size_t)y * w * 4, (const BYTE*)bd.Scan0 + (size_t)y * bd.Stride, (size_t)w * 4);
+    src->UnlockBits(&bd);
+    return true;
+}
+
+// Притемнена копія: те саме змішування, що давала напівпрозора заливка
+// (альфа 120 кольору 8,8,12), але порахована один раз, а не на кожен кадр.
+bool FastLayerDim(FastLayer& dst, const FastLayer& src)
+{
+    if (!FastLayerMake(dst, src.w, src.h)) return false;
+    GdiFlush();
+    const int a = 120, ia = 255 - a;
+    const int cb = 12 * a, cg = 8 * a, cr = 8 * a;
+    const size_t n = (size_t)src.w * src.h;
+    const BYTE* p = src.bits;
+    BYTE* q = dst.bits;
+    for (size_t i = 0; i < n; ++i, p += 4, q += 4) {
+        q[0] = (BYTE)((p[0] * ia + cb + 127) / 255);
+        q[1] = (BYTE)((p[1] * ia + cg + 127) / 255);
+        q[2] = (BYTE)((p[2] * ia + cr + 127) / 255);
+        q[3] = 255;
+    }
+    return true;
+}
+
+FastLayer g_rgnBright, g_rgnDim, g_rgnBack;   // накладка вибору: фон і буфер кадру
+
 HWND  g_rgnWnd = nullptr;
 Gdiplus::Bitmap* g_rgnImg = nullptr;   // заморожений кадр; НЕ власність цього коду
 RECT  g_rgnMon = {};
@@ -7390,14 +7466,15 @@ RECT RgnSelRect()
 // про Shift та Alt. Дія жесту, що зараз затиснутий, світиться — видно
 // наперед, що станеться при відпусканні (вимога власника 22.09: підказка там
 // само, де координати).
-void RgnHintLabel(HDC dc, Gdiplus::Graphics& g, int w, int h, int ax, int ay,
-                  const wchar_t* head, bool pickHint)
+void RgnHintLabel(HDC dc, Gdiplus::Graphics* g, int w, int h, int ax, int ay,
+                  const wchar_t* head, bool pickHint, RECT* measureOnly = nullptr)
 {
     wchar_t segA[96], segB[96];
     wsprintfW(segA, L"Shift — %s", S(CapActVerb(g_capAct[1])));
     wsprintfW(segB, L"Alt — %s", S(CapActVerb(g_capAct[2])));
     const wchar_t* gap = L"    ";
     const wchar_t* pick = pickHint ? S(Str::RgnHintPick) : nullptr;
+    HGDIOBJ oldF0 = GetCurrentObject(dc, OBJ_FONT);
     auto measure = [&](const wchar_t* t, HFONT f) {
         HGDIOBJ o = SelectObject(dc, f);
         RECT m = { 0, 0, 0, 0 };
@@ -7419,8 +7496,15 @@ void RgnHintLabel(HDC dc, Gdiplus::Graphics& g, int w, int h, int ax, int ay,
     if (by + bh > h) by = h - bh;
     if (bx + bw > w) bx = w - bw;
     if (bx < 0) bx = 0;
+    // CAPS-60: той самий розрахунок каже, ДЕ буде плашка, — щоб перемалювати
+    // рівно її, а не весь екран.
+    if (measureOnly) {
+        SelectObject(dc, oldF0);
+        *measureOnly = RECT{ bx, by, bx + bw, by + bh };
+        return;
+    }
     Gdiplus::SolidBrush back(Gdiplus::Color(225, 20, 20, 24));
-    g.FillRectangle(&back, bx, by, bw, bh);
+    g->FillRectangle(&back, bx, by, bw, bh);
     SetBkMode(dc, TRANSPARENT);
     HGDIOBJ oldF = SelectObject(dc, g_rgnFont);
     SetTextColor(dc, RGB(255, 255, 255));
@@ -7445,6 +7529,35 @@ void RgnHintLabel(HDC dc, Gdiplus::Graphics& g, int w, int h, int ax, int ay,
     }
     SelectObject(dc, oldF);
 }
+
+RECT RgnHoverRect(int w, int h);
+
+// CAPS-60: зміст і прив'язка плашки — одна функція і для малювання, і для
+// обчислення, що перемалювати. Повертає, чи рамку зараз тягнуть.
+bool RgnLabelSpec(int w, int h, int* ax, int* ay, wchar_t* head, bool* pick)
+{
+    const RECT s = g_rgnDragging ? RgnSelRect() : RECT{ 0, 0, 0, 0 };
+    const bool dragged = g_rgnDragging && (s.right - s.left >= 4 || s.bottom - s.top >= 4);
+    if (dragged) {
+        wsprintfW(head, L"%d × %d", (int)(s.right - s.left), (int)(s.bottom - s.top));
+        *ax = (int)s.left; *ay = (int)s.top; *pick = false;
+    } else {
+        if (g_rgnHover >= 0) {
+            const RECT hv = RgnHoverRect(w, h);
+            wsprintfW(head, L"%d, %d    %d × %d", (int)g_rgnCur.x, (int)g_rgnCur.y,
+                      (int)(hv.right - hv.left), (int)(hv.bottom - hv.top));
+        } else {
+            wsprintfW(head, L"%d, %d    %s", (int)g_rgnCur.x, (int)g_rgnCur.y, S(Str::RgnWholeScreen));
+        }
+        *ax = (int)g_rgnCur.x + 12; *ay = (int)g_rgnCur.y + 34; *pick = true;
+    }
+    return dragged;
+}
+
+// Що було намальовано минулого разу — щоб стерти рівно це.
+bool  g_rgnPrevValid = false, g_rgnPrevDragged = false;
+RECT  g_rgnPrevArea = {}, g_rgnPrevBorder = {}, g_rgnPrevLabel = {};   // світле, рамка, плашка
+POINT g_rgnPrevCur = {};
 
 // Що візьме клік без тягання: вікно під курсором або весь монітор.
 RECT RgnHoverRect(int w, int h)
@@ -7485,14 +7598,33 @@ BOOL CALLBACK RgnEnumWin(HWND h, LPARAM lp)
     return TRUE;
 }
 
+// Фон накладки: притемнений кадр, а в `bright` — світлий. З шарів це дві копії
+// пам'яті; без шарів (не вистачило пам'яті) — старий шлях через GDI+.
+void RgnBase(HDC dc, Gdiplus::Graphics& g, int w, int h, const RECT* bright)
+{
+    if (g_rgnDim.dc && g_rgnBright.dc && g_rgnDim.w == w && g_rgnDim.h == h) {
+        BitBlt(dc, 0, 0, w, h, g_rgnDim.dc, 0, 0, SRCCOPY);
+        if (bright && bright->right > bright->left && bright->bottom > bright->top)
+            BitBlt(dc, bright->left, bright->top, bright->right - bright->left, bright->bottom - bright->top,
+                   g_rgnBright.dc, bright->left, bright->top, SRCCOPY);
+        return;
+    }
+    if (g_rgnImg) g.DrawImage(g_rgnImg, 0, 0, w, h);
+    Gdiplus::SolidBrush scrim(Gdiplus::Color(120, 8, 8, 12));
+    if (!bright) { g.FillRectangle(&scrim, 0, 0, w, h); return; }
+    const RECT& b = *bright;
+    g.FillRectangle(&scrim, 0, 0, w, (INT)b.top);
+    g.FillRectangle(&scrim, 0, (INT)b.bottom, w, h - (INT)b.bottom);
+    g.FillRectangle(&scrim, 0, (INT)b.top, (INT)b.left, (INT)(b.bottom - b.top));
+    g.FillRectangle(&scrim, (INT)b.right, (INT)b.top, w - (INT)b.right, (INT)(b.bottom - b.top));
+}
+
 void RgnPaint(HDC dc, int w, int h)
 {
     Gdiplus::Graphics g(dc);
     g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-    if (g_rgnImg) g.DrawImage(g_rgnImg, 0, 0, w, h);
 
     const RECT s = g_rgnDragging ? RgnSelRect() : RECT{ 0, 0, 0, 0 };
-    Gdiplus::SolidBrush scrim(Gdiplus::Color(120, 8, 8, 12));
     const bool dragged = g_rgnDragging && (s.right - s.left >= 4 || s.bottom - s.top >= 4);
     if (!dragged) {
         // CAPS-57: поки не тягнуть, накладка показує, що візьме клік: вікно під
@@ -7500,32 +7632,19 @@ void RgnPaint(HDC dc, int w, int h)
         // краю монітора (клік візьме його весь).
         const RECT hv = RgnHoverRect(w, h);
         const bool whole = (g_rgnHover < 0);
-        if (whole) {
-            g.FillRectangle(&scrim, 0, 0, w, h);
-        } else {
-            g.FillRectangle(&scrim, 0, 0, w, (INT)hv.top);
-            g.FillRectangle(&scrim, 0, (INT)hv.bottom, w, h - (INT)hv.bottom);
-            g.FillRectangle(&scrim, 0, (INT)hv.top, (INT)hv.left, (INT)(hv.bottom - hv.top));
-            g.FillRectangle(&scrim, (INT)hv.right, (INT)hv.top, w - (INT)hv.right, (INT)(hv.bottom - hv.top));
-        }
+        RgnBase(dc, g, w, h, whole ? nullptr : &hv);
         Gdiplus::Pen accent(Gdiplus::Color(230, 80, 160, 255), 2.0f);
         g.DrawRectangle(&accent, (INT)hv.left + 1, (INT)hv.top + 1,
                         (INT)(hv.right - hv.left) - 2, (INT)(hv.bottom - hv.top) - 2);
     } else {
-        // Притемнюємо все, крім вибраного, чотирма прямокутниками: так вибрана
-        // ділянка лишається саме такою, якою піде в редактор.
-        g.FillRectangle(&scrim, 0, 0, w, (INT)s.top);
-        g.FillRectangle(&scrim, 0, (INT)s.bottom, w, h - (INT)s.bottom);
-        g.FillRectangle(&scrim, 0, (INT)s.top, (INT)s.left, (INT)(s.bottom - s.top));
-        g.FillRectangle(&scrim, (INT)s.right, (INT)s.top, w - (INT)s.right, (INT)(s.bottom - s.top));
+        // Притемнене все, крім вибраного: так вибрана ділянка лишається саме
+        // такою, якою піде в редактор.
+        RgnBase(dc, g, w, h, &s);
 
         Gdiplus::Pen white(Gdiplus::Color(235, 255, 255, 255), 1.0f);
         g.DrawRectangle(&white, (INT)s.left, (INT)s.top,
                         (INT)(s.right - s.left) - 1, (INT)(s.bottom - s.top) - 1);
 
-        wchar_t buf[64];
-        wsprintfW(buf, L"%d × %d", (int)(s.right - s.left), (int)(s.bottom - s.top));
-        RgnHintLabel(dc, g, w, h, (int)s.left, (int)s.top, buf, false);
     }
 
     // Напрямні від курсора через увесь екран: ще до першого натискання видно,
@@ -7536,17 +7655,71 @@ void RgnPaint(HDC dc, int w, int h)
         g.DrawLine(&guide, 0, (INT)g_rgnCur.y, w, (INT)g_rgnCur.y);
         g.DrawLine(&guide, (INT)g_rgnCur.x, 0, (INT)g_rgnCur.x, h);
     }
-    if (!dragged) {
-        wchar_t c[96];
-        if (g_rgnHover >= 0) {
-            const RECT hv = RgnHoverRect(w, h);
-            wsprintfW(c, L"%d, %d    %d × %d", (int)g_rgnCur.x, (int)g_rgnCur.y,
-                      (int)(hv.right - hv.left), (int)(hv.bottom - hv.top));
-        } else {
-            wsprintfW(c, L"%d, %d    %s", (int)g_rgnCur.x, (int)g_rgnCur.y, S(Str::RgnWholeScreen));
-        }
-        RgnHintLabel(dc, g, w, h, (int)g_rgnCur.x + 12, (int)g_rgnCur.y + 34, c, true);
+    {
+        int ax = 0, ay = 0;
+        bool pick = false;
+        wchar_t head[96];
+        RgnLabelSpec(w, h, &ax, &ay, head, &pick);
+        RgnHintLabel(dc, &g, w, h, ax, ay, head, pick, &g_rgnPrevLabel);
+        RgnHintLabel(dc, &g, w, h, ax, ay, head, pick);
     }
+    g_rgnPrevValid = true;
+    g_rgnPrevDragged = dragged;
+    // ⚠ Світле й рамка — окремо: над робочим столом рамка йде краєм монітора,
+    // а світлого немає зовсім. Коли їх ототожнювали, перехід «стіл → вікно»
+    // не перемальовував середину вікна (спіймав харнес smooth_test).
+    g_rgnPrevBorder = dragged ? s : RgnHoverRect(w, h);
+    g_rgnPrevArea = (dragged || g_rgnHover >= 0) ? g_rgnPrevBorder : RECT{ 0, 0, 0, 0 };
+    g_rgnPrevCur = g_rgnCur;
+}
+
+// CAPS-60: після руху миші позначаємо до перемальовування лише те, що
+// змінилось: смуги напрямних, плашку, а в рамки — різницю старої й нової
+// ділянки та їхні краї. Незмінна середина рамки не копіюється зовсім.
+void RgnInvalidateFrame(HWND hwnd)
+{
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    const int w = rc.right, h = rc.bottom;
+    int ax = 0, ay = 0;
+    bool pick = false;
+    wchar_t head[96];
+    const bool dragged = RgnLabelSpec(w, h, &ax, &ay, head, &pick);
+    const RECT border = dragged ? RgnSelRect() : RgnHoverRect(w, h);
+    const RECT area = (dragged || g_rgnHover >= 0) ? border : RECT{ 0, 0, 0, 0 };
+    if (!g_rgnPrevValid || dragged != g_rgnPrevDragged) { InvalidateRect(hwnd, nullptr, FALSE); return; }
+    auto inval = [&](LONG l, LONG t, LONG r, LONG b) {
+        RECT x = { l, t, r, b };
+        InvalidateRect(hwnd, &x, FALSE);
+    };
+    auto edges = [&](const RECT& r) {
+        const LONG k = 4;
+        inval(r.left - k, r.top - k, r.right + k, r.top + k);
+        inval(r.left - k, r.bottom - k, r.right + k, r.bottom + k);
+        inval(r.left - k, r.top - k, r.left + k, r.bottom + k);
+        inval(r.right - k, r.top - k, r.right + k, r.bottom + k);
+    };
+    if (!EqualRect(&area, &g_rgnPrevArea)) {
+        HRGN a = CreateRectRgnIndirect(&area), b = CreateRectRgnIndirect(&g_rgnPrevArea);
+        CombineRgn(a, a, b, RGN_XOR);
+        InvalidateRgn(hwnd, a, FALSE);
+        DeleteObject(a);
+        DeleteObject(b);
+    }
+    if (!EqualRect(&border, &g_rgnPrevBorder)) {
+        edges(border);
+        edges(g_rgnPrevBorder);
+    }
+    inval(0, g_rgnPrevCur.y - 2, w, g_rgnPrevCur.y + 3);
+    inval(g_rgnPrevCur.x - 2, 0, g_rgnPrevCur.x + 3, h);
+    inval(0, g_rgnCur.y - 2, w, g_rgnCur.y + 3);
+    inval(g_rgnCur.x - 2, 0, g_rgnCur.x + 3, h);
+    InvalidateRect(hwnd, &g_rgnPrevLabel, FALSE);
+    HDC dc = GetDC(hwnd);
+    RECT lab = {};
+    RgnHintLabel(dc, nullptr, w, h, ax, ay, head, pick, &lab);
+    ReleaseDC(hwnd, dc);
+    InvalidateRect(hwnd, &lab, FALSE);
 }
 
 LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -7555,19 +7728,33 @@ LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_ERASEBKGND:
         return 1;
     case WM_PAINT: {
+        // Область оновлення — ДО BeginPaint: після нього вона вже порожня.
+        HRGN upd = CreateRectRgn(0, 0, 0, 0);
+        if (GetUpdateRgn(hwnd, upd, FALSE) == ERROR) { DeleteObject(upd); upd = nullptr; }
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
-        HDC mem = CreateCompatibleDC(dc);
-        HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
-        HGDIOBJ old = SelectObject(mem, bmp);
-        RgnPaint(mem, rc.right, rc.bottom);
-        BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
-        SelectObject(mem, old);
-        DeleteObject(bmp);
-        DeleteDC(mem);
+        // CAPS-60: буфер кадру живе весь час вибору, а не створюється щоразу.
+        // Малюємо лише в межах області оновлення (upd): поза нею в буфері вже
+        // лежить правильний минулий кадр. Екранний DC BeginPaint обрізає сам.
+        if (FastLayerMake(g_rgnBack, rc.right, rc.bottom)) {
+            SelectClipRgn(g_rgnBack.dc, upd);
+            RgnPaint(g_rgnBack.dc, rc.right, rc.bottom);
+            SelectClipRgn(g_rgnBack.dc, nullptr);
+            BitBlt(dc, 0, 0, rc.right, rc.bottom, g_rgnBack.dc, 0, 0, SRCCOPY);
+        } else {
+            HDC mem = CreateCompatibleDC(dc);
+            HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+            HGDIOBJ old = SelectObject(mem, bmp);
+            RgnPaint(mem, rc.right, rc.bottom);
+            BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+            SelectObject(mem, old);
+            DeleteObject(bmp);
+            DeleteDC(mem);
+        }
         EndPaint(hwnd, &ps);
+        if (upd) DeleteObject(upd);
         return 0;
     }
     case WM_LBUTTONDOWN:
@@ -7584,7 +7771,7 @@ LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_rgnMk = wp;
         if (g_rgnDragging) g_rgnTo = g_rgnCur;
         else RgnUpdateHover();
-        InvalidateRect(hwnd, nullptr, FALSE);
+        RgnInvalidateFrame(hwnd);          // CAPS-60: лише змінене
         return 0;
     case WM_LBUTTONUP: {
         if (!g_rgnDragging) return 0;
@@ -7672,6 +7859,7 @@ bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out, int* g
     g_rgnFrom = g_rgnTo = POINT{ 0, 0 };
     g_rgnGesture = 0;
     g_rgnMk = 0;
+    g_rgnPrevValid = false;
     GetCursorPos(&g_rgnCur);                     // напрямні одразу під курсором
     g_rgnCur.x -= monRc.left;
     g_rgnCur.y -= monRc.top;
@@ -7683,6 +7871,11 @@ bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out, int* g
         EnumWindows(RgnEnumWin, (LPARAM)&mon);
     }
     RgnUpdateHover();
+    // CAPS-60: фон один раз — світлий кадр і притемнена копія.
+    if (!FastLayerFrom(g_rgnBright, frozen) || !FastLayerDim(g_rgnDim, g_rgnBright)) {
+        FastLayerFree(g_rgnBright);
+        FastLayerFree(g_rgnDim);
+    }
 
     g_rgnWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"lilhelpers_region", L"",
                                WS_POPUP, monRc.left, monRc.top,
@@ -7711,6 +7904,10 @@ bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out, int* g
     g_rgnWnd = nullptr;
     g_rgnImg = nullptr;
     g_rgnWins.clear();
+    // 4K-шари — це ~100 МБ; між виборами їх не тримаємо.
+    FastLayerFree(g_rgnBright);
+    FastLayerFree(g_rgnDim);
+    FastLayerFree(g_rgnBack);
     if (!okLocal) return false;
     out->left   = monRc.left + s.left;
     out->top    = monRc.top + s.top;
@@ -8113,6 +8310,10 @@ HWND  g_edWnd = nullptr;
 // увесь монітор 1:1 з клієнтом вікна, кадр (g_edCrop) — рамка. Масштабу й
 // панорами немає, рядка стану й правої панелі теж.
 bool  g_edOverlay = false;
+// CAPS-60: шари фону оверлея й постійний буфер кадру редактора. Шари прив'язані
+// до «покоління» зображення: перебудували знімок — перебудуються й вони.
+int   g_edImgGen = 0;
+int   g_ovLayerGen = -1;
 RECT  g_ovMon = {};             // монітор у екранних координатах
 constexpr int kEdOvTools = 10;  // інструменти рейки без кадру: ним тут є сама рамка
 HFONT g_edFont = nullptr, g_edFontBold = nullptr, g_edFontSmall = nullptr;
@@ -9119,6 +9320,72 @@ bool EdRotHandle(const EdObj& o, RECT* out)
 
 // Габарити вибраного НА ЕКРАНІ. Окрема функція, бо EdSelBounds рахує точки
 // знімка, а ручки живуть у пікселях вікна й не масштабуються.
+bool EdSelScreenBox(RECT* out);
+bool EdManySel();
+
+// ---- CAPS-60: оверлей перемальовує лише змінене під час тягнення -------------
+// Ділянка, де зараз є що міняти: позначка, яку малюють, і вибрані — з запасом
+// на ручки, наконечники й поворот. Стара ділянка + нова = усе, що змінилось.
+RECT g_edDynPrev = {};
+bool g_edDynValid = false;
+
+static void EdDynAdd(RECT& acc, bool& any, const EdObj& o)
+{
+    RECT r = EdObjScreen(o);
+    if (r.right < r.left) { const LONG v = r.left; r.left = r.right; r.right = v; }
+    if (r.bottom < r.top) { const LONG v = r.top; r.top = r.bottom; r.bottom = v; }
+    if (o.rot != 0) {                        // повернута — у описаний квадрат
+        const LONG cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+        const LONG rad = (LONG)(0.5 * sqrt((double)(r.right - r.left) * (r.right - r.left) +
+                                           (double)(r.bottom - r.top) * (r.bottom - r.top))) + 1;
+        r = RECT{ cx - rad, cy - rad, cx + rad, cy + rad };
+    }
+    const int pad = EdPx(56) + (int)(o.thick * EdScale() * 4);
+    InflateRect(&r, pad, pad);
+    if (!any) { acc = r; any = true; } else UnionRect(&acc, &acc, &r);
+}
+
+void EdInvalDrag(HWND hwnd)
+{
+    const bool objDrag = (g_edDrag == EdDrag::New || g_edDrag == EdDrag::Move || g_edDrag == EdDrag::Resize ||
+                          g_edDrag == EdDrag::Rotate || g_edDrag == EdDrag::ManyResize ||
+                          g_edDrag == EdDrag::ManyRotate);
+    bool effects = false;                    // розмиття/пікселі залежать від усього під ними
+    for (size_t i = 0; i < g_edObjs.size() && !effects; ++i) effects = (g_edObjs[i].kind == EdKind::Hide);
+    if (g_edDrag == EdDrag::New && g_edNew.kind == EdKind::Hide) effects = true;
+    if (!objDrag || effects || g_edLibOpen) {
+        InvalidateRect(hwnd, nullptr, FALSE);
+        g_edDynValid = false;
+        return;
+    }
+    RECT cur = {};
+    bool any = false;
+    if (g_edDrag == EdDrag::New) EdDynAdd(cur, any, g_edNew);
+    if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) EdDynAdd(cur, any, g_edObjs[g_edSel]);
+    for (size_t k = 0; k < g_edSelMore.size(); ++k)
+        if (g_edSelMore[k] >= 0 && g_edSelMore[k] < (int)g_edObjs.size()) EdDynAdd(cur, any, g_edObjs[g_edSelMore[k]]);
+    RECT box;
+    if (EdManySel() && EdSelScreenBox(&box)) {
+        InflateRect(&box, EdPx(56), EdPx(56));
+        if (!any) { cur = box; any = true; } else UnionRect(&cur, &cur, &box);
+    }
+    if (!any || !g_edDynValid) {
+        // Перший кадр тягнення — повний: де позначка була ДО нього, тут не знати.
+        InvalidateRect(hwnd, nullptr, FALSE);
+        g_edDynValid = any;
+        g_edDynPrev = cur;
+        return;
+    }
+    InvalidateRect(hwnd, &g_edDynPrev, FALSE);
+    InvalidateRect(hwnd, &cur, FALSE);
+    InvalidateRect(hwnd, &g_edRcStrip, FALSE);   // смуга показує властивості вибраного
+    if (!g_edOverlay) {                          // у вікні живі розміри — в рядку стану й панелі
+        InvalidateRect(hwnd, &g_edRcStatus, FALSE);
+        InvalidateRect(hwnd, &g_edRcPanel, FALSE);
+    }
+    g_edDynPrev = cur;
+}
+
 bool EdSelScreenBox(RECT* out)
 {
     RECT b;
@@ -10893,6 +11160,7 @@ void EdRebuildImage()
     if (!w) return;
     delete g_edImg;
     g_edImg  = w;
+    ++g_edImgGen;                      // CAPS-60: шари оверлея застаріли
     g_edImgW = (int)w->GetWidth();
     g_edImgH = (int)w->GetHeight();
     // Плитки розмиття й маркера зроблені з ПІКСЕЛІВ знімка. Щойно пікселі інші —
@@ -11909,6 +12177,21 @@ void EdPaintOvFrame(HDC dc, Gdiplus::Graphics& g, const EdTheme& t, const RECT& 
     EdDrawText(dc, lab, buf, g_edFontSmall, RGB(255, 255, 255), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
+FastLayer g_ovBright, g_ovDim, g_edBack;   // CAPS-60
+
+// CAPS-60: видимий шматок масштабованого знімка разом із шахівницею. У
+// розгорнутому вікні з 4K-знімком бікубічне масштабування коштувало ~570 мс на
+// КОЖЕН кадр; тепер — один раз на зміну виду, а кадр — копія пам'яті.
+FastLayer g_edView;
+struct EdViewKey { int gen; RECT ir, vis; bool orig; const void* cmp; bool dark; int vx, vy, vw, vh; };
+EdViewKey g_edViewKey = { -1 };
+
+bool EdViewKeyEq(const EdViewKey& a, const EdViewKey& b)
+{
+    return a.gen == b.gen && EqualRect(&a.ir, &b.ir) && EqualRect(&a.vis, &b.vis) && a.orig == b.orig &&
+           a.cmp == b.cmp && a.dark == b.dark && a.vx == b.vx && a.vy == b.vy && a.vw == b.vw && a.vh == b.vh;
+}
+
 void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     HBRUSH b = CreateSolidBrush(t.canvas);
@@ -11933,28 +12216,82 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     // CAPS-33: в оверлеї під рамкою — увесь заморожений монітор 1:1, поза
     // рамкою притемнений так само, як у накладці вибору: перехід між ними не
     // має бути помітним.
+    // CAPS-60: із шарів — дві копії пам'яті замість 4K через GDI+ на кожен кадр.
+    bool ovLayered = false;
     if (g_edOverlay) {
-        g.DrawImage(g_edImg, Gdiplus::Rect(0, 0, g_edImgW, g_edImgH), 0, 0, g_edImgW, g_edImgH,
-                    Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush scrim(Gdiplus::Color(120, 8, 8, 12));
-        const int W = g_edRcCanvas.right, H = g_edRcCanvas.bottom;
-        g.FillRectangle(&scrim, 0, 0, W, (INT)ir.top);
-        g.FillRectangle(&scrim, 0, (INT)ir.bottom, W, H - (INT)ir.bottom);
-        g.FillRectangle(&scrim, 0, (INT)ir.top, (INT)ir.left, (INT)(ir.bottom - ir.top));
-        g.FillRectangle(&scrim, (INT)ir.right, (INT)ir.top, W - (INT)ir.right, (INT)(ir.bottom - ir.top));
+        if (g_ovLayerGen != g_edImgGen || g_ovBright.w != g_edImgW || g_ovBright.h != g_edImgH) {
+            if (FastLayerFrom(g_ovBright, g_edImg) && FastLayerDim(g_ovDim, g_ovBright)) g_ovLayerGen = g_edImgGen;
+            else { FastLayerFree(g_ovBright); FastLayerFree(g_ovDim); g_ovLayerGen = -1; }
+        }
+        if (g_ovLayerGen == g_edImgGen) {
+            ovLayered = true;
+            BitBlt(dc, 0, 0, g_edImgW, g_edImgH, g_ovDim.dc, 0, 0, SRCCOPY);
+            BitBlt(dc, ir.left, ir.top, ir.right - ir.left, ir.bottom - ir.top, g_ovBright.dc, ir.left, ir.top, SRCCOPY);
+        } else {
+            g.DrawImage(g_edImg, Gdiplus::Rect(0, 0, g_edImgW, g_edImgH), 0, 0, g_edImgW, g_edImgH,
+                        Gdiplus::UnitPixel);
+            Gdiplus::SolidBrush scrim(Gdiplus::Color(120, 8, 8, 12));
+            const int W = g_edRcCanvas.right, H = g_edRcCanvas.bottom;
+            g.FillRectangle(&scrim, 0, 0, W, (INT)ir.top);
+            g.FillRectangle(&scrim, 0, (INT)ir.bottom, W, H - (INT)ir.bottom);
+            g.FillRectangle(&scrim, 0, (INT)ir.top, (INT)ir.left, (INT)(ir.bottom - ir.top));
+            g.FillRectangle(&scrim, (INT)ir.right, (INT)ir.top, W - (INT)ir.right, (INT)(ir.bottom - ir.top));
+        }
     }
     // ⚠ Під знімком — шахівниця, навколо — межа. Без них після збільшення
     // полотна не видно ні того, де воно закінчується, ні того, що порожнє місце
     // прозоре, а не біле (зауваження власника).
-    if (!g_edOverlay)
+    const bool orig = (g_edCompare && g_edCmp);
+    bool viewCached = false;
+    if (!g_edOverlay) {
+        // ⚠ Шар на 2 px ширший за знімок: бікубічне згладжування краю виходить
+        // за нього на піксель, і шар рівно по знімку обрізав би цю кайму.
+        RECT irx = ir, vis;
+        InflateRect(&irx, 2, 2);
+        if (IntersectRect(&vis, &irx, &g_edRcCanvas)) {
+            const EdViewKey key = { g_edImgGen, ir, vis, orig, orig ? (const void*)g_edCmp : nullptr, g_edDark,
+                                    EdViewX(), EdViewY(), EdViewW(), EdViewH() };
+            // Шар — у ТИХ САМИХ координатах, що й кадр (від 0,0 вікна): бікубічне
+            // масштабування GDI+ залежить від положення на пристрої, і будь-який
+            // зсув давав розбіжні пікселі (131 зі світовою трансформацією, 1010
+            // зі зсувом координат). Так результат побайтово той самий.
+            if (!EdViewKeyEq(key, g_edViewKey) &&
+                FastLayerMake(g_edView, vis.right, vis.bottom)) {
+                // Той самий рецепт, що й без кешу, лише зсунутий на початок шару:
+                // шахівниця й бікубічне масштабування — рівно так, як на екрані.
+                Gdiplus::Graphics gv(g_edView.dc);
+                gv.SetClip(Gdiplus::Rect(vis.left, vis.top, vis.right - vis.left, vis.bottom - vis.top));
+                gv.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+                gv.SetInterpolationMode(EdScale() < 1.0 ? Gdiplus::InterpolationModeHighQualityBicubic
+                                                        : Gdiplus::InterpolationModeNearestNeighbor);
+                Gdiplus::SolidBrush bg(EdC(t.canvas));
+                gv.FillRectangle(&bg, (INT)vis.left, (INT)vis.top, (INT)(vis.right - vis.left), (INT)(vis.bottom - vis.top));
+                if (Gdiplus::Bitmap* tile = EdCheckerTile()) {
+                    Gdiplus::TextureBrush tb(tile);
+                    tb.SetWrapMode(Gdiplus::WrapModeTile);
+                    gv.FillRectangle(&tb, (INT)ir.left, (INT)ir.top,
+                                     (INT)(ir.right - ir.left), (INT)(ir.bottom - ir.top));
+                }
+                gv.DrawImage(orig ? g_edCmp : g_edImg,
+                             Gdiplus::Rect(ir.left, ir.top, ir.right - ir.left, ir.bottom - ir.top),
+                             EdViewX(), EdViewY(), EdViewW(), EdViewH(), Gdiplus::UnitPixel);
+                gv.Flush(Gdiplus::FlushIntentionSync);
+                g_edViewKey = key;
+            }
+            if (EdViewKeyEq(key, g_edViewKey)) {
+                BitBlt(dc, vis.left, vis.top, vis.right - vis.left, vis.bottom - vis.top, g_edView.dc, vis.left, vis.top, SRCCOPY);
+                viewCached = true;
+            }
+        }
+    }
+    if (!g_edOverlay && !viewCached)
     if (Gdiplus::Bitmap* tile = EdCheckerTile()) {
         Gdiplus::TextureBrush tb(tile);
         tb.SetWrapMode(Gdiplus::WrapModeTile);
         g.FillRectangle(&tb, (INT)ir.left, (INT)ir.top,
                         (INT)(ir.right - ir.left), (INT)(ir.bottom - ir.top));
     }
-
-    const bool orig = (g_edCompare && g_edCmp);
+    if (!ovLayered && !viewCached)
     g.DrawImage(orig ? g_edCmp : g_edImg,
                 Gdiplus::Rect(ir.left, ir.top, ir.right - ir.left, ir.bottom - ir.top),
                 EdViewX(), EdViewY(), EdViewW(), EdViewH(), Gdiplus::UnitPixel);
@@ -14884,20 +15221,34 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 1;
 
     case WM_PAINT: {
+        HRGN upd = CreateRectRgn(0, 0, 0, 0);
+        if (GetUpdateRgn(hwnd, upd, FALSE) == ERROR) { DeleteObject(upd); upd = nullptr; }
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
         EdLayout(hwnd);
-        HDC mem = CreateCompatibleDC(dc);
-        HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
-        HGDIOBJ oldBmp = SelectObject(mem, bmp);
-        EdPaint(hwnd, mem);
-        BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
-        SelectObject(mem, oldBmp);
-        DeleteObject(bmp);
-        DeleteDC(mem);
+        // CAPS-60: буфер кадру живе разом із вікном і перестворюється лише
+        // при зміні розміру — не 33 МБ на кожен рух миші в 4K. Малюємо в
+        // межах області оновлення: поза нею в буфері вже правильний кадр.
+        const bool fresh = !g_edBack.dc || g_edBack.w != rc.right || g_edBack.h != rc.bottom;
+        if (FastLayerMake(g_edBack, rc.right, rc.bottom)) {
+            if (upd && !fresh) SelectClipRgn(g_edBack.dc, upd);
+            EdPaint(hwnd, g_edBack.dc);
+            SelectClipRgn(g_edBack.dc, nullptr);
+            BitBlt(dc, 0, 0, rc.right, rc.bottom, g_edBack.dc, 0, 0, SRCCOPY);
+        } else {
+            HDC mem = CreateCompatibleDC(dc);
+            HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+            HGDIOBJ oldBmp = SelectObject(mem, bmp);
+            EdPaint(hwnd, mem);
+            BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+            SelectObject(mem, oldBmp);
+            DeleteObject(bmp);
+            DeleteDC(mem);
+        }
         EndPaint(hwnd, &ps);
+        if (upd) DeleteObject(upd);
         return 0;
     }
 
@@ -14923,7 +15274,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (n.bottom > g_edImgH) n.bottom = g_edImgH;
             if (n.right - n.left >= 4 && n.bottom - n.top >= 4) g_edCrop = n;
             EdLayout(hwnd);
-            InvalidateRect(hwnd, nullptr, FALSE);
+            EdInvalDrag(hwnd);
             return 0;
         }
         if (g_edDrag == EdDrag::Slider) { EdSetAlphaAt(pt.x); return 0; }
@@ -14934,7 +15285,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_edPanX += pt.x - g_edDragFrom.x;
             g_edPanY += pt.y - g_edDragFrom.y;
             g_edDragFrom = pt;
-            InvalidateRect(hwnd, nullptr, FALSE);
+            EdInvalDrag(hwnd);
             return 0;
         }
         if (g_edDrag == EdDrag::New) {
@@ -14960,7 +15311,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 g_edNew.h = img.y - g_edNew.y;
                 if (wp & MK_SHIFT) EdConstrain(g_edNew);   // теж із повідомлення
             }
-            InvalidateRect(hwnd, nullptr, FALSE);
+            EdInvalDrag(hwnd);
             return 0;
         }
         if (g_edDrag == EdDrag::Move && g_edSel >= 0) {
@@ -14983,7 +15334,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 for (size_t k = 0; k < g_edSelMore.size(); ++k)
                     if (g_edSelMore[k] >= 0 && g_edSelMore[k] < (int)g_edObjs.size())
                         EdMoveObj(g_edObjs[g_edSelMore[k]], mdx, mdy);
-            InvalidateRect(hwnd, nullptr, FALSE);
+            EdInvalDrag(hwnd);
             return 0;
         }
         if (g_edDrag == EdDrag::Crop) {
@@ -15006,7 +15357,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             EdCropClamp(n);
             g_edCropEdit = n;
             EdLayout(hwnd);
-            InvalidateRect(hwnd, nullptr, FALSE);
+            EdInvalDrag(hwnd);
             return 0;
         }
         if (g_edDrag == EdDrag::CropMove) {
@@ -15018,12 +15369,12 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             EdCropClamp(n);
             g_edCropEdit = n;
             EdLayout(hwnd);
-            InvalidateRect(hwnd, nullptr, FALSE);
+            EdInvalDrag(hwnd);
             return 0;
         }
         if (g_edDrag == EdDrag::ManyResize) {
             EdManyResize(g_edHandle, EdToImage(pt), (wp & MK_SHIFT) != 0);
-            InvalidateRect(hwnd, nullptr, FALSE);
+            EdInvalDrag(hwnd);
             return 0;
         }
         if (g_edDrag == EdDrag::ManyRotate) {
@@ -15035,7 +15386,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (wp & MK_SHIFT) deg = floor(deg / 15.0 + 0.5) * 15.0;
             int d = (int)((deg < 0) ? deg - 0.5 : deg + 0.5) % 360;
             EdManyRotate(d);
-            InvalidateRect(hwnd, nullptr, FALSE);
+            EdInvalDrag(hwnd);
             return 0;
         }
         if (g_edDrag == EdDrag::Rotate && g_edSel >= 0) {
@@ -15052,7 +15403,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             int d = (int)(deg + 0.5) % 360;
             if (d < 0) d += 360;
             o.rot = d;
-            InvalidateRect(hwnd, nullptr, FALSE);
+            EdInvalDrag(hwnd);
             return 0;
         }
         if (g_edDrag == EdDrag::Resize && g_edSel >= 0) {
@@ -15071,7 +15422,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             // ⚠ Shift беремо з wParam повідомлення, а не з GetKeyState — див.
             // сусідню гілку повороту.
             EdResizeSel(g_edHandle, EdToImage(rp), (wp & MK_SHIFT) != 0);
-            InvalidateRect(hwnd, nullptr, FALSE);
+            EdInvalDrag(hwnd);
             return 0;
         }
 
@@ -15694,6 +16045,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_LBUTTONUP: {
+        g_edDynValid = false;               // CAPS-60
         if (g_edDrag == EdDrag::OvSel) {
             g_edDrag = EdDrag::None;
             ReleaseCapture();
@@ -16060,6 +16412,12 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         EdFreeFonts();
         g_edWnd = nullptr;
         g_edOverlay = false;
+        FastLayerFree(g_ovBright);
+        FastLayerFree(g_ovDim);
+        FastLayerFree(g_edBack);
+        FastLayerFree(g_edView);
+        g_edViewKey.gen = -1;
+        g_ovLayerGen = -1;
         return 0;
 
     default: break;
@@ -18146,6 +18504,9 @@ bool EdOverlayBake()
 void EdOverlayEnterWindow(HWND hwnd)
 {
     g_edOverlay = false;
+    FastLayerFree(g_ovBright);
+    FastLayerFree(g_ovDim);
+    g_ovLayerGen = -1;
     const int dpi = (int)GetDpiForWindow(hwnd);
     MONITORINFO mi = { sizeof(mi) };
     GetMonitorInfoW(MonitorFromRect(&g_ovMon, MONITOR_DEFAULTTONEAREST), &mi);
