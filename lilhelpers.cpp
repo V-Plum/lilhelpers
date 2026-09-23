@@ -9471,10 +9471,12 @@ int EdHandles(const EdObj& o, RECT out[8])
     if (EdIsSegment(o.kind)) {
         const RECT ir = EdImageRect();
         const double sc = EdScale();
-        const int cx[2] = { ir.left + (int)(o.x * sc + 0.5),
-                            ir.left + (int)((o.x + o.w) * sc + 0.5) };
-        const int cy[2] = { ir.top + (int)(o.y * sc + 0.5),
-                            ir.top + (int)((o.y + o.h) * sc + 0.5) };
+        // ⚠ Зсув кадру (EdViewX/Y) — обов'язково: в оверлеї кадр — це рамка.
+        const int vx = EdViewX(), vy = EdViewY();
+        const int cx[2] = { ir.left + (int)((o.x - vx) * sc + 0.5),
+                            ir.left + (int)((o.x + o.w - vx) * sc + 0.5) };
+        const int cy[2] = { ir.top + (int)((o.y - vy) * sc + 0.5),
+                            ir.top + (int)((o.y + o.h - vy) * sc + 0.5) };
         for (int i = 0; i < 2; ++i) {
             out[i].left = cx[i] - k;  out[i].top = cy[i] - k;
             out[i].right = out[i].left + h;  out[i].bottom = out[i].top + h;
@@ -13450,15 +13452,18 @@ bool EdHitObject(const EdObj& o, POINT pt)
         pt.y = (LONG)(py + 0.5);
     }
     const double tol = EdPx(4) + o.thick * sc / 2.0;
+    // ⚠ Екранне місце — зі зсувом кадру, як у EdObjScreen: без нього в оверлеї
+    // (кадр = рамка) лінію й олівець неможливо було вибрати (зауваження власника 23.09).
+    const double ox = ir.left - EdViewX() * sc, oy = ir.top - EdViewY() * sc;
     if (EdIsSegment(o.kind)) {
-        const double ax = ir.left + o.x * sc, ay = ir.top + o.y * sc;
-        const double bx = ir.left + (o.x + o.w) * sc, by = ir.top + (o.y + o.h) * sc;
+        const double ax = ox + o.x * sc, ay = oy + o.y * sc;
+        const double bx = ox + (o.x + o.w) * sc, by = oy + (o.y + o.h) * sc;
         return EdDistToSeg(pt.x, pt.y, ax, ay, bx, by) <= tol;
     }
     if (o.kind == EdKind::Pen) {
         for (size_t i = 1; i < o.pts.size(); ++i) {
-            const double ax = ir.left + o.pts[i - 1].x * sc, ay = ir.top + o.pts[i - 1].y * sc;
-            const double bx = ir.left + o.pts[i].x * sc, by = ir.top + o.pts[i].y * sc;
+            const double ax = ox + o.pts[i - 1].x * sc, ay = oy + o.pts[i - 1].y * sc;
+            const double bx = ox + o.pts[i].x * sc, by = oy + o.pts[i].y * sc;
             if (EdDistToSeg(pt.x, pt.y, ax, ay, bx, by) <= tol) return true;
         }
         return false;
@@ -14602,8 +14607,10 @@ void EdTextBegin(HWND hwnd, POINT img, int idx)
 
     const double sc = EdScale();
     const RECT ir = EdImageRect();
-    const int px = ir.left + (int)(o.x * sc + 0.5);
-    const int py = ir.top  + (int)(o.y * sc + 0.5);
+    // ⚠ Зі зсувом кадру: інакше в оверлеї поле введення стояло не там, де
+    // потім з'являвся напис (зауваження власника 23.09).
+    const int px = ir.left + (int)((o.x - EdViewX()) * sc + 0.5);
+    const int py = ir.top  + (int)((o.y - EdViewY()) * sc + 0.5);
     int ew = (int)((o.boxw > 0 ? o.boxw : o.w) * sc + 0.5) + EdPx(18);
     int eh = (int)(o.h * sc + 0.5) + EdPx(12);
     if (ew < EdPx(90)) ew = EdPx(90);
