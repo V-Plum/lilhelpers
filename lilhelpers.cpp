@@ -16676,8 +16676,12 @@ Gdiplus::Bitmap* EdRender()
     return out;
 }
 
-// CF_DIB: знизу вгору, 32 біти, BI_RGB. Альфа в цьому форматі нічия — більшість
-// програм її ігнорує, — тому байт альфи ставимо 255 і не сподіваємось на нього.
+// CF_DIB: знизу вгору, 24 біти, BI_RGB. Альфа в цьому форматі нічия —
+// більшість програм її ігнорує, — тож прозорість їде в PNG, а тут її немає.
+// 24 біти — найсумісніший вид DIB і на чверть менший (CAPS-62).
+// ⚠ Історія буфера Windows (Win+V) має власний ліміт ~3,5 МБ на СТИСНЕНЕ
+// зображення (виміряно шумом: 3,15 МБ — так, 3,58 — ні). Однорідні знімки
+// проходять навіть у 4K, «важкі» великі — ні, від будь-якої програми.
 HGLOBAL EdDibGlobal(Gdiplus::Bitmap* bmp)
 {
     const int w = (int)bmp->GetWidth(), h = (int)bmp->GetHeight();
@@ -16685,8 +16689,9 @@ HGLOBAL EdDibGlobal(Gdiplus::Bitmap* bmp)
     Gdiplus::Rect all(0, 0, w, h);
     if (bmp->LockBits(&all, Gdiplus::ImageLockModeRead, PixelFormat32bppPARGB, &bd) != Gdiplus::Ok)
         return nullptr;
-    const SIZE_T bits = (SIZE_T)w * h * 4;
-    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + bits);
+    const SIZE_T stride = ((SIZE_T)w * 3 + 3) & ~(SIZE_T)3;
+    const SIZE_T bits = stride * h;
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(BITMAPINFOHEADER) + bits);
     if (mem) {
         BYTE* p = (BYTE*)GlobalLock(mem);
         BITMAPINFOHEADER* bi = (BITMAPINFOHEADER*)p;
@@ -16695,18 +16700,17 @@ HGLOBAL EdDibGlobal(Gdiplus::Bitmap* bmp)
         bi->biWidth = w;
         bi->biHeight = h;                 // додатна = знизу вгору
         bi->biPlanes = 1;
-        bi->biBitCount = 32;
+        bi->biBitCount = 24;
         bi->biCompression = BI_RGB;
         bi->biSizeImage = (DWORD)bits;
         BYTE* dst = p + sizeof(BITMAPINFOHEADER);
         for (int y = 0; y < h; ++y) {
             const BYTE* src = (const BYTE*)bd.Scan0 + (size_t)y * bd.Stride;
-            BYTE* row = dst + (size_t)(h - 1 - y) * w * 4;
+            BYTE* row = dst + (size_t)(h - 1 - y) * stride;
             for (int x = 0; x < w; ++x) {
-                row[x * 4 + 0] = src[x * 4 + 0];
-                row[x * 4 + 1] = src[x * 4 + 1];
-                row[x * 4 + 2] = src[x * 4 + 2];
-                row[x * 4 + 3] = 255;
+                row[x * 3 + 0] = src[x * 4 + 0];
+                row[x * 3 + 1] = src[x * 4 + 1];
+                row[x * 3 + 2] = src[x * 4 + 2];
             }
         }
         GlobalUnlock(mem);
@@ -16766,13 +16770,13 @@ void EdTick(EdHit what)
 bool EdClipPut(Gdiplus::Bitmap* flat, HWND owner)
 {
     if (!flat) return false;
-    // Три формати одразу: PNG для месенджерів і браузерів, CF_DIB для Office,
-    // CF_BITMAP для найстарішого, що трапляється. Жоден із них поодинці не
-    // приймається скрізь.
+    // Два формати: PNG для месенджерів і браузерів, CF_DIB для Office і решти.
+    // ⚠ CF_BITMAP свідомо НЕ кладемо (CAPS-62): GDI+ віддає DIB-секцію, і з нею
+    // історія буфера Windows (Win+V) відкидає ВЕСЬ запис — перевірено
+    // експериментом: PNG+DIB потрапляє, PNG+DIB+CF_BITMAP ні. Програмам, що
+    // просять CF_BITMAP, Windows синтезує його з CF_DIB сама.
     HGLOBAL png = EdPngGlobal(flat);
     HGLOBAL dib = EdDibGlobal(flat);
-    HBITMAP ddb = nullptr;
-    flat->GetHBITMAP(Gdiplus::Color(255, 255, 255, 255), &ddb);
 
     bool ok = false;
     if (OpenClipboard(owner)) {
@@ -16780,12 +16784,10 @@ bool EdClipPut(Gdiplus::Bitmap* flat, HWND owner)
         const UINT pngFmt = CapClipboardPngFormat();
         if (png && pngFmt && SetClipboardData(pngFmt, png)) { png = nullptr; ok = true; }
         if (dib && SetClipboardData(CF_DIB, dib))           { dib = nullptr; ok = true; }
-        if (ddb && SetClipboardData(CF_BITMAP, ddb))        { ddb = nullptr; ok = true; }
         CloseClipboard();
     }
     if (png) GlobalFree(png);
     if (dib) GlobalFree(dib);
-    if (ddb) DeleteObject(ddb);
     return ok;
 }
 
