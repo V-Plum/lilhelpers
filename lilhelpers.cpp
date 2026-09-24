@@ -198,6 +198,9 @@ constexpr int  IDC_VID_SHOWLIB   = 222;
 constexpr int  IDC_VID_LIBMB     = 223;   // CAPS-74: межа обсягу відео в бібліотеці
 constexpr int  IDC_CAP_ENABLE    = 224;   // CAPS-87: прапорці активності
 constexpr int  IDC_VID_ENABLE    = 225;
+constexpr int  IDC_VID_CURSOR    = 226;   // CAPS-76: курсор у записі
+constexpr int  IDC_VID_CLICKS    = 227;   //          підсвічування кліків
+constexpr int  IDC_VID_CLR0      = 228;   //          228..230 = колір кліку
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -531,11 +534,18 @@ X(VidFpsL,            L"Кадрів за секунду",             L"Frames 
 X(VidFps30,           L"30",                            L"30")                                         \
 X(VidFps60,           L"60",                            L"60")                                         \
 X(VidQualL,           L"Якість відео",                  L"Video quality")                              \
-X(VidQLow,            L"Менший файл",                   L"Smaller file")                               \
+X(VidQLow,            L"Менша",                         L"Lower")                                      \
 X(VidQNormal,         L"Звичайна",                      L"Normal")                                     \
 X(VidQHigh,           L"Висока",                        L"High")                                       \
-X(VidQualHint,        L"60 кадрів — плавніше, але файл майже вдвічі більший. «Висока» — для дрібного тексту й руху.", \
-                      L"60 fps is smoother but the file is almost twice as big. \"High\" is for small text and motion.") \
+X(VidQualHint,        L"60 кадрів — плавніше, але файл майже вдвічі більший.",                         \
+                      L"60 fps is smoother, but the file is almost twice as big.")                     \
+X(VidSecCursor,       L"Курсор і кліки",                L"Cursor and clicks")                          \
+X(VidCursorShow,      L"Показувати курсор",             L"Show the cursor")                            \
+X(VidClicksShow,      L"Підсвічувати кліки: лівий — коло, правий — подвійне", L"Highlight clicks: left is a ring, right a double one") \
+X(VidClickClrL,       L"Колір кліку",                   L"Click colour")                               \
+X(VidClrYellow,       L"Жовтий",                        L"Yellow")                                     \
+X(VidClrRed,          L"Червоний",                      L"Red")                                        \
+X(VidClrBlue,         L"Синій",                         L"Blue")                                       \
 X(VidSecWhere,        L"Де записи",                     L"Where recordings go")                        \
 X(VidWhereText,       L"Записи лежать у бібліотеці знімків, поруч зі знімками. HDR-екран записується з тією самою компенсацією, що й знімки.", \
                       L"Recordings are kept in the shot library next to your shots. An HDR screen is recorded with the same compensation as shots.") \
@@ -19338,6 +19348,7 @@ struct VidMeta {
     int w = 0, h = 0;
     LONGLONG dur = 0;                     // 100 нс
     std::vector<BYTE> thumbPng;
+    std::vector<BYTE> mouse;              // CAPS-76: журнал миші (MOUS), як є
 };
 
 bool VidMetaWrite(const std::wstring& mp4, const VidMeta& m)
@@ -19357,6 +19368,11 @@ bool VidMetaWrite(const std::wstring& mp4, const VidMeta& m)
     if (!m.thumbPng.empty()) {
         at = w.open("THMB");
         w.raw(m.thumbPng.data(), m.thumbPng.size());
+        w.close(at);
+    }
+    if (!m.mouse.empty()) {
+        at = w.open("MOUS");
+        w.raw(m.mouse.data(), m.mouse.size());
         w.close(at);
     }
     // Через .tmp і підміну: обірваний запис не лишить напівфайл. Прихований —
@@ -19399,6 +19415,7 @@ bool VidMetaRead(const std::wstring& mp4, VidMeta& m)
         else if (!memcmp(t, "META", 4)) { m.created = b.u64v(); m.name = b.str(); }
         else if (!memcmp(t, "INFO", 4)) { m.w = b.i32v(); m.h = b.i32v(); m.dur = (LONGLONG)b.u64v(); }
         else if (!memcmp(t, "THMB", 4)) { m.thumbPng.assign(raw.data() + r.at, raw.data() + r.at + len); }
+        else if (!memcmp(t, "MOUS", 4)) { m.mouse.assign(raw.data() + r.at, raw.data() + r.at + len); }
         r.at += len;
     }
     return !r.bad;
@@ -19450,7 +19467,10 @@ void VidLibScanInto(const wchar_t* dir, bool keep)
             // Назву, дану людиною, зберігаємо й тоді, коли кеш застарів.
             const std::wstring keepName = had ? m.name : L"";
             const ULONGLONG keepCreated = had ? m.created : 0;
+            std::vector<BYTE> keepMouse;             // CAPS-76: журнал миші переживає перерахунок кешу
+            if (had) keepMouse.swap(m.mouse);
             m = VidMeta{};
+            m.mouse.swap(keepMouse);
             m.srcSize = size;
             m.srcTime = mtime;
             m.created = keepCreated ? keepCreated : mtime;
@@ -23062,10 +23082,21 @@ const wchar_t* kRegVidQuality = L"VideoQuality";
 int g_vidFps = 30;        // 30 або 60
 int g_vidQuality = 1;     // 0 — менший файл, 1 — звичайна, 2 — висока
 
+// CAPS-76: курсор і кліки — з наступного запису.
+const wchar_t* kRegVidCursor   = L"VideoCursor";
+const wchar_t* kRegVidClicks   = L"VideoClicks";
+const wchar_t* kRegVidClickClr = L"VideoClickColor";
+bool g_vidCursor = true, g_vidClicks = true;
+int  g_vidClickClr = 0;
+const COLORREF kVidClickColors[3] = { RGB(255, 193, 7), RGB(229, 57, 53), RGB(30, 136, 229) };
+
 void VidLoadSettings()
 {
     g_vidFps = RegLoadInt(kRegVidFps, 30, 15, 60) >= 45 ? 60 : 30;
     g_vidQuality = RegLoadInt(kRegVidQuality, 1, 0, 2);
+    g_vidCursor = RegLoadInt(kRegVidCursor, 1, 0, 1) != 0;
+    g_vidClicks = RegLoadInt(kRegVidClicks, 1, 0, 1) != 0;
+    g_vidClickClr = RegLoadInt(kRegVidClickClr, 0, 0, 2);
 }
 
 // Бітів на піксель на кадр. Екранний вміст здебільшого нерухомий, тож навіть
@@ -23093,9 +23124,15 @@ int VidSynthMode() { return 0; }
 // ---- шейдер ----
 // Ті самі формули, що в CapConvert, лише на GPU. off — де ділянка лежить у
 // копії кадру; Load бере піксель 1:1, без фільтрації.
+// CAPS-76: поверх тону — кліки й курсор, уже в SDR (білий курсор на HDR-екрані
+// лишається білим). Курсор — текстура «множник + додаток»: out = out·a + rgb. Так
+// одним рядком виходять і звичайний курсор, і напівпрозорий, і XOR-інверсія
+// монохромного I-beam (a = −1, rgb = 1), яку малювати чорним — класична пастка.
 const char kVidHlsl[] =
     "Texture2D<float4> src : register(t0);\n"
-    "cbuffer P : register(b0) { int2 off; int mode; float white; };\n"
+    "Texture2D<float4> cur : register(t1);\n"
+    "cbuffer P : register(b0) { int2 off; int mode; float white; int2 curPos; int2 curSize;\n"
+    "    float4 clk[8]; float4 clkCol[8]; int nClk; float scale; int2 pad; };\n"
     "float4 VS(uint id : SV_VertexID) : SV_Position {\n"
     "    float2 p = float2((id << 1) & 2, id & 2);\n"
     "    return float4(p * float2(2, -2) + float2(-1, 1), 0, 1);\n"
@@ -23109,17 +23146,34 @@ const char kVidHlsl[] =
     "    float3 p = pow(max(e, 0), 1.0 / m2);\n"
     "    return 10000.0 * pow(max(p - c1, 0) / (c2 - c3 * p), 1.0 / m1);\n"
     "}\n"
-    "float4 PS(float4 pos : SV_Position) : SV_Target {\n"
-    "    float4 c = src.Load(int3(int2(pos.xy) + off, 0));\n"
-    "    if (mode == 1) return float4(Srgb(c.rgb / (white / 80.0)), 1);\n"
+    "float3 Tone(float4 c) {\n"
+    "    if (mode == 1) return Srgb(c.rgb / (white / 80.0));\n"
     "    if (mode == 2) {\n"
     "        float3 n = Pq(c.rgb) / white;\n"
     "        float3 r = float3(dot(n, float3( 1.6605, -0.5876, -0.0728)),\n"
     "                          dot(n, float3(-0.1246,  1.1329, -0.0083)),\n"
     "                          dot(n, float3(-0.0182, -0.1006,  1.1187)));\n"
-    "        return float4(Srgb(r), 1);\n"
+    "        return Srgb(r);\n"
     "    }\n"
-    "    return float4(c.rgb, 1);\n"
+    "    return c.rgb;\n"
+    "}\n"
+    "float4 PS(float4 pos : SV_Position) : SV_Target {\n"
+    "    float3 o = Tone(src.Load(int3(int2(pos.xy) + off, 0)));\n"
+    "    float lw = 2.5 * scale;\n"
+    "    for (int i = 0; i < nClk; ++i) {\n"
+    "        float4 c = clk[i];\n"
+    "        float d = length(pos.xy - c.xy);\n"
+    "        float k = saturate(lw * 0.5 + 0.5 - abs(d - c.z));\n"
+    "        if (clkCol[i].w > 0.5 && clkCol[i].w < 1.5) k = max(k, saturate(lw * 0.5 + 0.5 - abs(d - c.z * 0.6)));\n"
+    "        k = max(k, saturate(5.0 * scale + 0.5 - d) * 0.75);\n"
+    "        o = lerp(o, clkCol[i].rgb, k * c.w);\n"
+    "    }\n"
+    "    int2 q = int2(pos.xy) - curPos;\n"
+    "    if (q.x >= 0 && q.y >= 0 && q.x < curSize.x && q.y < curSize.y) {\n"
+    "        float4 m = cur.Load(int3(q, 0));\n"
+    "        o = saturate(o * m.a + m.rgb);\n"
+    "    }\n"
+    "    return float4(o, 1);\n"
     "}\n";
 
 typedef HRESULT (WINAPI* VidD3DCompileFn)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, ID3DInclude*,
@@ -23161,6 +23215,9 @@ struct VidJob {
     int fps;
     float bpp;
     int synth;
+    bool cursor, clicks;           // CAPS-76
+    COLORREF clickClr;
+    float scale;                   // DPI монітора: товщина кілець
     wchar_t part[MAX_PATH], path[MAX_PATH];
     HANDLE stop;
 };
@@ -23485,6 +23542,273 @@ struct VidEnc {
     LONGLONG written = 0;
 };
 
+// ---- CAPS-76: курсор і кліки ----
+// Duplication (і BitBlt, і синтетика) віддає кадр БЕЗ курсора. Курсор беремо з
+// GetCursorInfo — однаково для всіх джерел (і для WGC згодом), а кліки — з
+// низькорівневого хука миші головного потоку, з мітками часу того самого QPC,
+// що й кадри. Малює все шейдер, після тону.
+
+// Константи шейдера — рівно як cbuffer P (вирівнювання по 16 байт).
+struct VidCb {
+    int offX, offY, mode; float white;
+    int curX, curY, curW, curH;
+    float clk[8][4];                  // x, y, радіус, непрозорість
+    float clkCol[8][4];               // колір + вид: 0 клік, 1 правий (подвійне коло), 2 утримання
+    int nClk; float scale; int pad[2];
+};
+static_assert(sizeof(VidCb) % 16 == 0, "cbuffer — кратний 16 байтам");
+
+ID3D11ShaderResourceView* g_vidCurSrv = nullptr;   // текстура курсора поточного запису
+
+struct VidMouseEv { LONGLONG qpc; LONG x, y; BYTE btn, down; };
+SRWLOCK g_vidMouseLock = SRWLOCK_INIT;
+std::vector<VidMouseEv> g_vidMouseEvs;              // від старту запису
+HHOOK g_vidMouseHook = nullptr;
+volatile LONG g_vidClickFrame = -1;                 // кадр, де з'явився останній клік (харнес)
+volatile LONG g_vidFrameNow = -1;                   // кадр, який зараз пишеться (харнес)
+
+void VidMousePush(LONG x, LONG y, int btn, bool down)
+{
+    LARGE_INTEGER q;
+    QueryPerformanceCounter(&q);
+    AcquireSRWLockExclusive(&g_vidMouseLock);
+    if (g_vidMouseEvs.size() < 200000) g_vidMouseEvs.push_back(VidMouseEv{ q.QuadPart, x, y, (BYTE)btn, (BYTE)(down ? 1 : 0) });
+    ReleaseSRWLockExclusive(&g_vidMouseLock);
+}
+
+// Хук живе лише під час запису. Процес підвищений, тож бачить кліки й над
+// вікнами адміністратора (звичайний процес їх би не побачив).
+LRESULT CALLBACK VidMouseProc(int code, WPARAM wp, LPARAM lp)
+{
+    if (code == HC_ACTION) {
+        const MSLLHOOKSTRUCT* m = (const MSLLHOOKSTRUCT*)lp;
+        int btn = -1;
+        bool down = false;
+        switch (wp) {
+        case WM_LBUTTONDOWN: btn = 0; down = true; break;
+        case WM_LBUTTONUP:   btn = 0; break;
+        case WM_RBUTTONDOWN: btn = 1; down = true; break;
+        case WM_RBUTTONUP:   btn = 1; break;
+        case WM_MBUTTONDOWN: btn = 2; down = true; break;
+        case WM_MBUTTONUP:   btn = 2; break;
+        default: break;
+        }
+        if (btn >= 0) VidMousePush(m->pt.x, m->pt.y, btn, down);   // точки хука — фізичні пікселі
+    }
+    return CallNextHookEx(nullptr, code, wp, lp);
+}
+
+void VidMouseHookOn(bool on)
+{
+    if (on && !g_vidMouseHook) {
+        AcquireSRWLockExclusive(&g_vidMouseLock);
+        g_vidMouseEvs.clear();
+        ReleaseSRWLockExclusive(&g_vidMouseLock);
+        g_vidMouseHook = SetWindowsHookExW(WH_MOUSE_LL, VidMouseProc, GetModuleHandleW(nullptr), 0);
+    } else if (!on && g_vidMouseHook) {
+        UnhookWindowsHookEx(g_vidMouseHook);
+        g_vidMouseHook = nullptr;
+    }
+}
+
+// Тестова збірка підміняє: синтетичний курсор у заданій точці.
+bool VidCursorNow(POINT* pt, HCURSOR* h)
+{
+    CURSORINFO ci = {};
+    ci.cbSize = sizeof(ci);
+    if (!GetCursorInfo(&ci) || !(ci.flags & CURSOR_SHOWING) || !ci.hCursor) return false;
+    *pt = ci.ptScreenPos;                 // потік запису — per-monitor aware: фізичні пікселі
+    *h = ci.hCursor;
+    return true;
+}
+
+// Форма курсора → текстура «множник + додаток» (a, rgb): out = out·a + rgb.
+// Три види форм: монохромна (AND/XOR — XOR інвертує фон), кольорова з альфою,
+// кольорова з маскою (там, де маска 1 і колір не чорний, — інверсія).
+ID3D11ShaderResourceView* VidCursorBuild(ID3D11Device* dev, HCURSOR hc, int& w, int& h, POINT& hot)
+{
+    ICONINFO ii = {};
+    if (!GetIconInfo(hc, &ii)) return nullptr;
+    hot.x = (LONG)ii.xHotspot;
+    hot.y = (LONG)ii.yHotspot;
+    BITMAP bm = {};
+    GetObjectW(ii.hbmMask, sizeof(bm), &bm);
+    const bool mono = !ii.hbmColor;
+    w = bm.bmWidth;
+    h = mono ? bm.bmHeight / 2 : bm.bmHeight;
+    ID3D11ShaderResourceView* srv = nullptr;
+    if (w > 0 && h > 0 && w <= 512 && h <= 512) {
+        std::vector<DWORD> mask((size_t)w * bm.bmHeight), color;
+        HDC dc = GetDC(nullptr);
+        BITMAPINFO bi = {};
+        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth = w;
+        bi.bmiHeader.biHeight = -bm.bmHeight;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        GetDIBits(dc, ii.hbmMask, 0, (UINT)bm.bmHeight, mask.data(), &bi, DIB_RGB_COLORS);
+        if (!mono) {
+            color.resize((size_t)w * h);
+            bi.bmiHeader.biHeight = -h;
+            GetDIBits(dc, ii.hbmColor, 0, (UINT)h, color.data(), &bi, DIB_RGB_COLORS);
+        }
+        ReleaseDC(nullptr, dc);
+        bool alpha = false;
+        for (size_t i = 0; i < color.size() && !alpha; ++i) if (color[i] >> 24) alpha = true;
+        std::vector<float> px((size_t)w * h * 4);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                float* p = &px[((size_t)y * w + x) * 4];
+                const bool andBit = (mask[(size_t)y * w + x] & 0xFFFFFF) != 0;
+                float r = 0, g = 0, b = 0, a = 1;
+                if (mono) {
+                    const bool xorBit = (mask[(size_t)(y + h) * w + x] & 0xFFFFFF) != 0;
+                    if (!andBit) { a = 0; r = g = b = xorBit ? 1.0f : 0.0f; }   // чорний або білий
+                    else if (xorBit) { a = -1; r = g = b = 1; }                  // інверсія фону
+                } else {
+                    const DWORD c = color[(size_t)y * w + x];
+                    const float cr = ((c >> 16) & 255) / 255.0f, cg = ((c >> 8) & 255) / 255.0f, cb = (c & 255) / 255.0f;
+                    if (alpha) {
+                        const float ca = (c >> 24) / 255.0f;               // альфа ікон — пряма, не помножена
+                        a = 1 - ca; r = cr * ca; g = cg * ca; b = cb * ca;
+                    } else if (!andBit) { a = 0; r = cr; g = cg; b = cb; }
+                    else if (c & 0xFFFFFF) { a = -1; r = g = b = 1; }
+                }
+                p[0] = r; p[1] = g; p[2] = b; p[3] = a;
+            }
+        D3D11_TEXTURE2D_DESC d = {};
+        d.Width = (UINT)w; d.Height = (UINT)h; d.MipLevels = 1; d.ArraySize = 1;
+        d.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; d.SampleDesc.Count = 1;
+        d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA init = { px.data(), (UINT)w * 16, 0 };
+        ID3D11Texture2D* tex = nullptr;
+        if (SUCCEEDED(dev->CreateTexture2D(&d, &init, &tex)) && tex) {
+            dev->CreateShaderResourceView(tex, nullptr, &srv);
+            tex->Release();                   // вид тримає текстуру сам
+        }
+    }
+    DeleteObject(ii.hbmMask);
+    if (ii.hbmColor) DeleteObject(ii.hbmColor);
+    return srv;
+}
+
+// Стан накладки на час одного запису: курсор, кільця кліків, журнал миші.
+struct VidOverlay {
+    bool cursor = false, clicks = false;
+    float col[3] = { 1, 1, 1 };
+    float scale = 1;
+    RECT sel = {};
+    ID3D11Device* dev = nullptr;
+    HCURSOR shape = nullptr;
+    int cw = 0, ch = 0;
+    POINT hot = {};
+    size_t seen = 0;                  // скільки подій хука вже забрали
+    std::vector<VidMouseEv> evs;      // забрані; старі прибираються
+    bool held[3] = { false, false, false };
+    LONGLONG heldAt[3] = { 0, 0, 0 };
+    size_t proc = 0;                  // скільки з evs уже враховано в стані кнопок
+    std::vector<BYTE> log;            // блок MOUS: записи по 13 байт — мс, x, y, кнопка | натиснуто << 4
+
+    void Begin(const VidJob* j, ID3D11Device* d)
+    {
+        cursor = j->cursor;
+        clicks = j->clicks;
+        col[0] = GetRValue(j->clickClr) / 255.0f;
+        col[1] = GetGValue(j->clickClr) / 255.0f;
+        col[2] = GetBValue(j->clickClr) / 255.0f;
+        scale = j->scale > 0.5f ? j->scale : 1.0f;
+        sel = j->sel;
+        dev = d;
+        InterlockedExchange(&g_vidClickFrame, -1);
+    }
+
+    void End()
+    {
+        if (g_vidCurSrv) { g_vidCurSrv->Release(); g_vidCurSrv = nullptr; }
+        shape = nullptr;
+    }
+
+    void Frame(LONGLONG T, LONGLONG t0, LONGLONG f, LONGLONG k, VidCb& cb)
+    {
+        cb.scale = scale;
+        InterlockedExchange(&g_vidFrameNow, (LONG)k);
+        if (clicks) {
+            AcquireSRWLockShared(&g_vidMouseLock);
+            for (; seen < g_vidMouseEvs.size(); ++seen) {
+                const VidMouseEv& e = g_vidMouseEvs[seen];
+                if (e.qpc < t0) continue;                       // до першого кадру (сама гаряча клавіша)
+                evs.push_back(e);
+                BYTE rec[13];
+                const INT32 ms = (INT32)((e.qpc - t0) * 1000 / f), x = e.x - sel.left, y = e.y - sel.top;
+                memcpy(rec, &ms, 4); memcpy(rec + 4, &x, 4); memcpy(rec + 8, &y, 4);
+                rec[12] = (BYTE)(e.btn | (e.down << 4));
+                log.insert(log.end(), rec, rec + 13);
+            }
+            ReleaseSRWLockShared(&g_vidMouseLock);
+            // стан кнопок на мить кадру
+            for (; proc < evs.size() && evs[proc].qpc <= T; ++proc) {
+                const VidMouseEv& e = evs[proc];
+                if (e.btn < 3) { held[e.btn] = e.down != 0; if (e.down) heldAt[e.btn] = e.qpc; }
+                if (e.down) InterlockedExchange(&g_vidClickFrame, (LONG)k);   // кадр, де клік з'явився
+            }
+            // кільця кліків: розходяться 350 мс
+            const LONGLONG life = f * 35 / 100;
+            int n = 0;
+            for (size_t i = 0; i < proc && n < 8; ++i) {
+                const VidMouseEv& e = evs[i];
+                if (!e.down || T - e.qpc >= life) continue;
+                const float p = (float)(T - e.qpc) / (float)life;
+                cb.clk[n][0] = (float)(e.x - sel.left) + 0.5f;
+                cb.clk[n][1] = (float)(e.y - sel.top) + 0.5f;
+                cb.clk[n][2] = (6.0f + 20.0f * p) * scale;
+                cb.clk[n][3] = 1.0f - p;
+                cb.clkCol[n][0] = col[0]; cb.clkCol[n][1] = col[1]; cb.clkCol[n][2] = col[2];
+                cb.clkCol[n][3] = e.btn == 1 ? 1.0f : 0.0f;
+                ++n;
+            }
+            // утримання (тягнуть): стале кільце під курсором, поки кнопку тримають
+            if (held[0] && T - heldAt[0] >= life && n < 8) {
+                POINT pt;
+                HCURSOR hc;
+                if (VidCursorNow(&pt, &hc)) {
+                    cb.clk[n][0] = (float)(pt.x - sel.left) + 0.5f;
+                    cb.clk[n][1] = (float)(pt.y - sel.top) + 0.5f;
+                    cb.clk[n][2] = 14.0f * scale;
+                    cb.clk[n][3] = 0.85f;
+                    cb.clkCol[n][0] = col[0]; cb.clkCol[n][1] = col[1]; cb.clkCol[n][2] = col[2];
+                    cb.clkCol[n][3] = 2.0f;
+                    ++n;
+                }
+            }
+            cb.nClk = n;
+            // забрані й відіграні — геть (журнал уже записано)
+            if (proc > 256) {
+                size_t drop = 0;
+                while (drop < proc && T - evs[drop].qpc > f * 2) ++drop;
+                evs.erase(evs.begin(), evs.begin() + drop);
+                proc -= drop;
+            }
+        }
+        if (cursor) {
+            POINT pt;
+            HCURSOR hc;
+            if (VidCursorNow(&pt, &hc)) {
+                if (hc != shape) {
+                    if (g_vidCurSrv) { g_vidCurSrv->Release(); g_vidCurSrv = nullptr; }
+                    g_vidCurSrv = VidCursorBuild(dev, hc, cw, ch, hot);
+                    shape = hc;
+                }
+                if (g_vidCurSrv) {
+                    cb.curX = pt.x - hot.x - sel.left;
+                    cb.curY = pt.y - hot.y - sel.top;
+                    cb.curW = cw;
+                    cb.curH = ch;
+                }
+            }
+        }
+    }
+};
+
 void VidEncClose(VidEnc& e)
 {
     if (e.sw) e.sw->Release();
@@ -23507,7 +23831,7 @@ HRESULT VidEncOpen(VidEnc& e, VidSrc& s, const wchar_t* path, UINT w, UINT h, in
     HRESULT hr = s.dev->CreateVertexShader(g_vidVsBlob->GetBufferPointer(), g_vidVsBlob->GetBufferSize(), nullptr, &e.vs);
     if (SUCCEEDED(hr)) hr = s.dev->CreatePixelShader(g_vidPsBlob->GetBufferPointer(), g_vidPsBlob->GetBufferSize(), nullptr, &e.ps);
     if (SUCCEEDED(hr)) {
-        D3D11_BUFFER_DESC bd = { 16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0 };
+        D3D11_BUFFER_DESC bd = { (UINT)sizeof(VidCb), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0 };
         hr = s.dev->CreateBuffer(&bd, nullptr, &e.cb);
     }
     if (FAILED(hr)) return hr;
@@ -23603,11 +23927,13 @@ HRESULT VidEncOpen(VidEnc& e, VidSrc& s, const wchar_t* path, UINT w, UINT h, in
     return hr;
 }
 
-void VidDraw(VidEnc& e, VidSrc& s, ID3D11Texture2D* target)
+void VidDraw(VidEnc& e, VidSrc& s, ID3D11Texture2D* target, const VidCb* over)
 {
     ID3D11RenderTargetView* rtv = nullptr;
     if (FAILED(s.dev->CreateRenderTargetView(target, nullptr, &rtv)) || !rtv) return;
-    struct { int offX, offY, mode; float white; } cbv = { s.offX, s.offY, VidToneMode(s), s.white };
+    VidCb cbv = {};
+    if (over) cbv = *over;
+    cbv.offX = s.offX; cbv.offY = s.offY; cbv.mode = VidToneMode(s); cbv.white = s.white;
     s.ctx->UpdateSubresource(e.cb, 0, nullptr, &cbv, 0, 0);
     D3D11_VIEWPORT vp = { 0.0f, 0.0f, (float)e.w, (float)e.h, 0.0f, 1.0f };
     s.ctx->OMSetRenderTargets(1, &rtv, nullptr);
@@ -23616,20 +23942,21 @@ void VidDraw(VidEnc& e, VidSrc& s, ID3D11Texture2D* target)
     s.ctx->IASetInputLayout(nullptr);
     s.ctx->VSSetShader(e.vs, nullptr, 0);
     s.ctx->PSSetShader(e.ps, nullptr, 0);
-    s.ctx->PSSetShaderResources(0, 1, &s.srv);
+    ID3D11ShaderResourceView* srvs[2] = { s.srv, (over && over->curW > 0) ? g_vidCurSrv : nullptr };
+    s.ctx->PSSetShaderResources(0, 2, srvs);
     s.ctx->PSSetConstantBuffers(0, 1, &e.cb);
     s.ctx->Draw(3, 0);
     // Відв'язуємо: у копію кадру наступним ділом пише CopyResource.
     ID3D11RenderTargetView* noRtv = nullptr;
-    ID3D11ShaderResourceView* noSrv = nullptr;
+    ID3D11ShaderResourceView* noSrv[2] = { nullptr, nullptr };
     s.ctx->OMSetRenderTargets(1, &noRtv, nullptr);
-    s.ctx->PSSetShaderResources(0, 1, &noSrv);
+    s.ctx->PSSetShaderResources(0, 2, noSrv);
     rtv->Release();
 }
 
 // Один семпл на слот k тривалістю n слотів (n > 1 — ми відстали, і пропущені
 // слоти покриває цей самий кадр; див. пункт 1 угорі).
-HRESULT VidEmit(VidEnc& e, VidSrc& s, LONGLONG k, LONGLONG n)
+HRESULT VidEmit(VidEnc& e, VidSrc& s, LONGLONG k, LONGLONG n, const VidCb* over)
 {
     IMFSample* smp = nullptr;
     HRESULT hr;
@@ -23648,14 +23975,14 @@ HRESULT VidEmit(VidEnc& e, VidSrc& s, LONGLONG k, LONGLONG n)
         if (SUCCEEDED(hr)) hr = mb->QueryInterface(__uuidof(IMFDXGIBuffer), (void**)&db);
         if (SUCCEEDED(hr)) hr = db->GetResource(__uuidof(ID3D11Texture2D), (void**)&tx);
         if (SUCCEEDED(hr)) {
-            VidDraw(e, s, tx);
+            VidDraw(e, s, tx, over);
             mb->SetCurrentLength(bytes);
         }
         if (tx) tx->Release();
         if (db) db->Release();
         if (mb) mb->Release();
     } else {
-        VidDraw(e, s, e.rt);
+        VidDraw(e, s, e.rt, over);
         s.ctx->CopyResource(e.stage, e.rt);
         D3D11_MAPPED_SUBRESOURCE m = {};
         hr = s.ctx->Map(e.stage, 0, D3D11_MAP_READ, 0, &m);
@@ -23718,6 +24045,8 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
     QueryPerformanceFrequency(&qf);
     const LONGLONG f = qf.QuadPart, fps = j->fps;
     LONGLONG t0 = 0, k = 0;
+    VidOverlay ov;                                   // CAPS-76: курсор, кліки, журнал миші
+    ov.Begin(j, s.dev);
     for (;;) {
         if (WaitForSingleObject(j->stop, 0) == WAIT_OBJECT_0) break;
         if (!s.have) {                       // до першого справжнього кадру часу ще немає
@@ -23740,7 +24069,9 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
         if (n < 1) n = 1;
         if (s.synth) VidSynthFill(s, j->sel, k);
         else if (s.gdi) VidGdiGrab(s, j->sel);
-        hr = VidEmit(e, s, k, n);
+        VidCb cb = {};
+        ov.Frame(t0 + k * f / fps, t0, f, k, cb);
+        hr = VidEmit(e, s, k, n, &cb);
         if (FAILED(hr)) { r->err = Str::VidErrWrite; break; }
         k += n;
     }
@@ -23757,10 +24088,17 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
         }
     }
     VidEncClose(e);
+    ov.End();
     VidSrcClose(s);
     if (r->frames <= 0) { DeleteFileW(j->part); return SUCCEEDED(hr) ? S_FALSE : hr; }
     if (!MoveFileExW(j->part, j->path, MOVEFILE_REPLACE_EXISTING)) {
         if (SUCCEEDED(hr)) { hr = HRESULT_FROM_WIN32(GetLastError()); r->err = Str::VidErrWrite; }
+    } else if (!ov.log.empty()) {
+        // Журнал миші — у .lhmeta (блок MOUS): для редактора й звіту далі (CAPS-81, CAPS-84).
+        // Решту бібліотека дорахує сама: кеш свідомо без розміру файла.
+        VidMeta m;
+        m.mouse = ov.log;
+        VidMetaWrite(j->path, m);
     }
     return hr;
 }
@@ -24088,6 +24426,10 @@ void VidStart()
     j->fps = g_vidFps;
     j->bpp = VidBitsPerPixel(g_vidQuality);
     j->synth = VidSynthMode();
+    j->cursor = g_vidCursor;                       // CAPS-76
+    j->clicks = g_vidClicks;
+    j->clickClr = kVidClickColors[g_vidClickClr];
+    j->scale = (float)CapMonitorScale(j->mon);
     if (!VidLibPath(j->part, j->path)) {
         delete j;
         MessageBoxW(nullptr, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
@@ -24103,6 +24445,7 @@ void VidStart()
     }
     g_vidJob = j;
     g_vidStartMs = GetTickCount64();
+    VidMouseHookOn(j->clicks);                     // CAPS-76: кліки — з хука головного потоку
     if (!fullMon) VidFrameShow(sel, mon);
     VidTraySet(true);
 }
@@ -24120,6 +24463,10 @@ void VidSettingsRefresh(HWND hwnd)
     set(IDC_VID_FPS30, g_vidFps != 60);
     set(IDC_VID_FPS60, g_vidFps == 60);
     for (int i = 0; i < 3; ++i) set(IDC_VID_QLOW + i, g_vidQuality == i);
+    set(IDC_VID_CURSOR, g_vidCursor);              // CAPS-76
+    set(IDC_VID_CLICKS, g_vidClicks);
+    for (int i = 0; i < 3; ++i) set(IDC_VID_CLR0 + i, g_vidClickClr == i);
+    if (HWND b = GetDlgItem(hwnd, IDC_VID_CLR0)) for (int i = 0; i < 3; ++i) EnableWindow(GetDlgItem(hwnd, IDC_VID_CLR0 + i), g_vidClicks);
 }
 
 void VidStop()
@@ -24139,6 +24486,7 @@ void VidReleaseJob()
     g_vidThread = nullptr;
     if (g_vidJob) { if (g_vidJob->stop) CloseHandle(g_vidJob->stop); delete g_vidJob; }
     g_vidJob = nullptr;
+    VidMouseHookOn(false);                         // CAPS-76
     VidFrameHide();
     VidTraySet(false);
 }
@@ -24712,6 +25060,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_vidQuality = LOWORD(wp) - IDC_VID_QLOW;
             RegSaveInt(kRegVidQuality, g_vidQuality);
             break;
+        case IDC_VID_CURSOR:         // CAPS-76: діє з наступного запису
+        case IDC_VID_CLICKS:
+            if (HIWORD(wp) == BN_CLICKED) {
+                const bool on = SendMessageW(GetDlgItem(hwnd, LOWORD(wp)), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                if (LOWORD(wp) == IDC_VID_CURSOR) { g_vidCursor = on; RegSaveInt(kRegVidCursor, on ? 1 : 0); }
+                else { g_vidClicks = on; RegSaveInt(kRegVidClicks, on ? 1 : 0); VidSettingsRefresh(hwnd); }
+            }
+            break;
+        case IDC_VID_CLR0:
+        case IDC_VID_CLR0 + 1:
+        case IDC_VID_CLR0 + 2:
+            g_vidClickClr = LOWORD(wp) - IDC_VID_CLR0;
+            RegSaveInt(kRegVidClickClr, g_vidClickClr);
+            break;
         case IDC_CAP_ENABLE:         // CAPS-87
         case IDC_VID_ENABLE:
             if (HIWORD(wp) == BN_CLICKED) {
@@ -25271,7 +25633,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     y += 30;
     g_vidHkStatus = addV(mkS(L"STATIC", Str::Empty, 0, PX + 192, y, 224, 18, IDC_HINT_GRAY));
     y += 22;
-    hint(addV, Str::VidHkHint, 3);
+    hint(addV, Str::VidHkHint, 2);
     y += 4;
     sec(addV, Str::VidSecQuality);
     addV(mkS(L"STATIC", Str::VidFpsL, 0, PX, y + 3, 150, 20, 0));
@@ -25280,22 +25642,24 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     CheckRadioButton(hwnd, IDC_VID_FPS30, IDC_VID_FPS60, g_vidFps == 60 ? IDC_VID_FPS60 : IDC_VID_FPS30);
     y += 28;
     addV(mkS(L"STATIC", Str::VidQualL, 0, PX, y + 3, 150, 20, 0));
-    radio(addV, Str::VidQLow,    PX + 160, 110, IDC_VID_QLOW,     true);
-    radio(addV, Str::VidQNormal, PX + 160, 110, IDC_VID_QLOW + 1, false);
-    radio(addV, Str::VidQHigh,   PX + 160, 110, IDC_VID_QLOW + 2, false);
-    {
-        // три варіанти стовпчиком: у рядок «Менший файл» і «Звичайна» не влазять
-        const int ys[3] = { 0, 24, 48 };
-        for (int i = 0; i < 3; ++i)
-            if (HWND b = GetDlgItem(hwnd, IDC_VID_QLOW + i))
-                SetWindowPos(b, nullptr, sc(PX + 160), sc(y + ys[i]), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    }
+    // CAPS-76: три варіанти в рядок (було стовпчиком) — місце потрібне курсору й звуку
+    radio(addV, Str::VidQLow,    PX + 160, 75, IDC_VID_QLOW,     true);
+    radio(addV, Str::VidQNormal, PX + 238, 95, IDC_VID_QLOW + 1, false);
+    radio(addV, Str::VidQHigh,   PX + 336, 80, IDC_VID_QLOW + 2, false);
     CheckRadioButton(hwnd, IDC_VID_QLOW, IDC_VID_QLOW + 2, IDC_VID_QLOW + g_vidQuality);
-    y += 76;
-    hint(addV, Str::VidQualHint, 2);
-    y += 4;
+    y += 28;
+    hint(addV, Str::VidQualHint, 1);
+    y += 2;
+    sec(addV, Str::VidSecCursor);                 // CAPS-76
+    check(addV, Str::VidCursorShow, IDC_VID_CURSOR, g_vidCursor);
+    check(addV, Str::VidClicksShow, IDC_VID_CLICKS, g_vidClicks);
+    addV(mkS(L"STATIC", Str::VidClickClrL, 0, PX + 22, y + 3, 130, 20, 0));
+    radio(addV, Str::VidClrYellow, PX + 160, 75, IDC_VID_CLR0,     true);
+    radio(addV, Str::VidClrRed,    PX + 238, 95, IDC_VID_CLR0 + 1, false);
+    radio(addV, Str::VidClrBlue,   PX + 336, 80, IDC_VID_CLR0 + 2, false);
+    CheckRadioButton(hwnd, IDC_VID_CLR0, IDC_VID_CLR0 + 2, IDC_VID_CLR0 + g_vidClickClr);
+    y += 38;
     sec(addV, Str::VidSecWhere);
-    text(addV, Str::VidWhereText, 3, 0, 8);
     {   // CAPS-74: своя межа для відео — знімки вона не витісняє
         addV(mkS(L"STATIC", Str::VidLibLimitL, 0, PX, y + 3, 250, 20, 0));
         HWND em = addV(mk(L"EDIT", L"", ES_NUMBER | ES_CENTER | WS_BORDER | WS_TABSTOP, PX + 256, y - 1, 80, 24, IDC_VID_LIBMB));
