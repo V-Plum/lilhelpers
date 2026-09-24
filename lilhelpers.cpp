@@ -189,6 +189,11 @@ constexpr int  IDC_ACT_M0        = 204;   // CAPS-57: матриця жест ×
 constexpr int  IDC_OV_ESC_CLOSE  = 213;   // CAPS-57: Esc в оверлеї — закрити
 constexpr int  IDC_OV_ESC_SAVE   = 214;   //          або зберегти й закрити
 constexpr int  IDC_LIB_QUICK     = 215;   // CAPS-57: у бібліотеку й знімки без редактора
+constexpr int  IDC_VID_HK        = 216;   // CAPS-73: вкладка «Відео»
+constexpr int  IDC_VID_FPS30     = 217;
+constexpr int  IDC_VID_FPS60     = 218;
+constexpr int  IDC_VID_QLOW      = 219;   // 219..221 = якість 0..2
+constexpr int  IDC_VID_SHOWLIB   = 222;
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -199,12 +204,15 @@ constexpr UINT IDM_CAPWINDOW   = 5;   // CAPS-21: знімок активног�
 constexpr UINT IDM_CAPREGION   = 6;   // CAPS-21: знімок ділянки
 constexpr UINT IDM_CAPCLIP     = 7;   // CAPS-21: з буфера обміну
 constexpr UINT IDM_UPDATE_NOW  = 8;   // CAPS-63: «Оновити до X» у меню трею
+constexpr UINT IDM_VIDREC      = 9;   // CAPS-73: почати запис відео
+constexpr UINT IDM_VIDSTOP     = 10;  // CAPS-73: зупинити запис
 constexpr UINT TIMER_MAG_HOLD   = 1;
 constexpr UINT TIMER_MAG_FRAME  = 2;   // кадр оверлейної анімації
 constexpr UINT TIMER_THEME      = 3;   // CAPS-7: перевірка теми раз на хвилину
 constexpr UINT TIMER_UPDATE     = 4;   // CAPS-10: хвилина після старту, далі кожні 30 хв
 constexpr UINT TIMER_TRAY       = 5;   // CAPS-17: повтор додавання іконки, поки панель не готова
 constexpr UINT TIMER_UPDREMIND  = 6;   // CAPS-63: щохвилини — чи можна вже нагадати про оновлення
+constexpr UINT TIMER_VIDTIP     = 7;   // CAPS-73: тривалість запису в підказці трею
 
 const wchar_t* kAppName  = L"Little Helpers";   // заголовки вікна/повідомлень, трей
 const wchar_t* kWndClass = L"lilhelpers";
@@ -475,6 +483,7 @@ X(CapHkNone,          L"не задано",                     L"not set")     
 X(CapHkBusy,          L"Частину гарячих клавіш тримає інша програма — знімки по них не працюватимуть.", \
                       L"Another program holds some hotkeys; those shortcuts will not work.")           \
 X(TabShots,           L"Знімки",                        L"Shots")                                      \
+X(TabVideo,           L"Відео",                         L"Video")                                      \
 X(CapSecHotkeys,      L"Гарячі клавіші",                L"Hotkeys")                                    \
 X(CapHkClipL,         L"Зображення з буфера",           L"From clipboard")                             \
 X(CapHkEditorL,       L"Порожній редактор",             L"Blank editor")                               \
@@ -502,6 +511,36 @@ X(RgnActOverlay,      L"редагувати тут",                L"edit in p
 X(RgnHintPick,        L"Клік — вікно · Space — увесь екран",                                          \
                       L"Click: window · Space: whole screen")                                          \
 X(RgnWholeScreen,     L"Увесь екран",                   L"Whole screen")                               \
+X(RgnVidStart,        L"Відпустіть — почати запис · Esc — скасувати",                                  \
+                      L"Release to start recording · Esc to cancel")                                   \
+X(RgnVidHover,        L"Запис відео · Esc — скасувати", L"Record video · Esc to cancel")               \
+X(VidSecRec,          L"Запис",                         L"Recording")                                  \
+X(VidHkLabel,         L"Почати / зупинити запис",       L"Start / stop recording")                     \
+X(VidHkHint,          L"Та сама клавіша зупиняє запис. Що записувати, вибирається рамкою: тягніть — ділянка, клік — вікно, Space — увесь екран.", \
+                      L"The same key stops recording. Pick what to record with the frame: drag for an area, click for a window, Space for the whole screen.") \
+X(VidSecQuality,      L"Якість",                        L"Quality")                                    \
+X(VidFpsL,            L"Кадрів за секунду",             L"Frames per second")                          \
+X(VidFps30,           L"30",                            L"30")                                         \
+X(VidFps60,           L"60",                            L"60")                                         \
+X(VidQualL,           L"Якість відео",                  L"Video quality")                              \
+X(VidQLow,            L"Менший файл",                   L"Smaller file")                               \
+X(VidQNormal,         L"Звичайна",                      L"Normal")                                     \
+X(VidQHigh,           L"Висока",                        L"High")                                       \
+X(VidQualHint,        L"60 кадрів — плавніше, але файл майже вдвічі більший. «Висока» — для дрібного тексту й руху.", \
+                      L"60 fps is smoother but the file is almost twice as big. \"High\" is for small text and motion.") \
+X(VidSecWhere,        L"Де записи",                     L"Where recordings go")                        \
+X(VidWhereText,       L"Записи лежать у бібліотеці знімків, поруч зі знімками. HDR-екран записується з тією самою компенсацією, що й знімки.", \
+                      L"Recordings are kept in the shot library next to your shots. An HDR screen is recorded with the same compensation as shots.") \
+X(VidMenuStart,       L"Записати відео",                L"Record video")                               \
+X(VidMenuStop,        L"Зупинити запис",                L"Stop recording")                             \
+X(VidTipFmt,          L"Little Helpers · запис %s",     L"Little Helpers · recording %s")              \
+X(VidSaved,           L"Відео збережено — клацніть, щоб відкрити",                                    \
+                      L"Video saved — click to open")                                                  \
+X(VidErrScreen,       L"Не вдалося почати запис: екран зараз недоступний для захоплення (наприклад, згорнуте вікно віддаленого робочого стола або заблокований екран).", \
+                      L"Could not start recording: the screen can't be captured right now (for example, a minimized remote desktop window or a locked screen).") \
+X(VidErrEncoder,      L"Не вдалося створити відеофайл.", L"Could not create the video file.")          \
+X(VidErrWrite,        L"Запис перервано помилкою. Записане до неї збережено, якщо це було можливо.",   \
+                      L"Recording stopped with an error. What was recorded before it has been saved if possible.") \
 X(CapHkPress,         L"натисніть комбінацію…",         L"press a combination…")                       \
 X(CapHkTaken,         L"зайнято іншою програмою",       L"held by another app")                        \
 X(CapHkOff,           L"вимкнено",                      L"off")                                        \
@@ -859,9 +898,9 @@ void RememberLoc(HWND h, Str id)
         g_locOverflow = true;
 }
 
-constexpr int kTabCount = 6;
+constexpr int kTabCount = 7;
 const Str kTabTitles[kTabCount] = { Str::TabLayout, Str::TabCursor, Str::TabTheme,
-                                    Str::TabPeek, Str::TabShots, Str::TabSettings };
+                                    Str::TabPeek, Str::TabShots, Str::TabVideo, Str::TabSettings };
 
 // Два способи перехопити клавішу. Основний тримає Caps Lock вимкненим, але це
 // клавіатурний хук, який деякі захисні програми не люблять; запасний працює
@@ -890,6 +929,7 @@ HWND  g_layoutCheckbox = nullptr;
 HWND  g_pageSettings[32] = {};  int g_pageSettingsN = 0;
 HWND  g_pagePeek[24]     = {};  int g_pagePeekN = 0;   // CAPS-16
 HWND  g_pageShots[64]    = {};  int g_pageShotsN = 0;  // CAPS-21; CAPS-57: матриця жестів — ще двадцять
+HWND  g_pageVideo[32]    = {};  int g_pageVideoN = 0;  // CAPS-73
 
 // ---------- CAPS-8: тема самого вікна ----------
 //
@@ -3357,6 +3397,7 @@ bool IsPageControl(HWND c)
     for (int i = 0; i < g_pageSettingsN; ++i) if (g_pageSettings[i] == c) return true;
     for (int i = 0; i < g_pagePeekN; ++i)     if (g_pagePeek[i]     == c) return true;
     for (int i = 0; i < g_pageShotsN; ++i)    if (g_pageShots[i]    == c) return true;
+    for (int i = 0; i < g_pageVideoN; ++i)    if (g_pageVideo[i]    == c) return true;
     return false;
 }
 
@@ -3378,7 +3419,8 @@ void SelectTab(int index)
     ShowGroup(g_thAdv, g_thAdvN, index == 2 && g_thAdvVisible);
     ShowGroup(g_pagePeek, g_pagePeekN, index == 3);          // CAPS-16
     ShowGroup(g_pageShots, g_pageShotsN, index == 4);        // CAPS-21
-    ShowGroup(g_pageSettings, g_pageSettingsN, index == 5);
+    ShowGroup(g_pageVideo, g_pageVideoN, index == 5);        // CAPS-73
+    ShowGroup(g_pageSettings, g_pageSettingsN, index == 6);
 }
 
 // CAPS-12: обидві кнопки «Детально» несуть ще й стрілку стану, тож їхній підпис
@@ -7623,6 +7665,7 @@ std::vector<RECT> g_rgnWins;
 int   g_rgnHover = -1;         // вікно під курсором; -1 — робочий стіл, тобто весь монітор
 WPARAM g_rgnMk = 0;            // модифікатори з останнього руху миші — для підказки
 int   g_rgnGesture = 0;        // жест, яким вибір завершено
+bool  g_rgnVideo = false;      // CAPS-73: вибір для запису — жестів немає, підказка інша
 
 RECT RgnSelRect()
 {
@@ -7666,6 +7709,12 @@ void RgnHintLabel(HDC dc, Gdiplus::Graphics* g, int w, int h, int ax, int ay,
     wsprintfW(segA, L"Shift — %s", S(CapActVerb(g_capAct[1])));
     wsprintfW(segB, L"Alt — %s", S(CapActVerb(g_capAct[2])));
     const wchar_t* gap = L"    ";
+    if (g_rgnVideo) {              // CAPS-73: для відео жест нічого не міняє
+        // «Відпустіть» — лише коли вже тягнуть; до того це просто назва режиму.
+        lstrcpynW(segA, S(pickHint ? Str::RgnVidHover : Str::RgnVidStart), 96);
+        segB[0] = 0;
+        gap = L"";
+    }
     const wchar_t* pick = pickHint ? S(Str::RgnHintPick) : nullptr;
     HGDIOBJ oldF0 = GetCurrentObject(dc, OBJ_FONT);
     auto measure = [&](const wchar_t* t, HFONT f) {
@@ -7708,11 +7757,11 @@ void RgnHintLabel(HDC dc, Gdiplus::Graphics* g, int w, int h, int ax, int ay,
     const COLORREF on = RGB(120, 190, 255), off = RGB(190, 190, 196);
     int x = bx + 8, y = r1.bottom + 4;
     RECT ra = { x, y, x + sa.cx, y + sa.cy };
-    SetTextColor(dc, gst == 1 ? on : off);
+    SetTextColor(dc, (gst == 1 && !g_rgnVideo) ? on : off);
     DrawTextW(dc, segA, -1, &ra, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
     x += sa.cx + sg.cx;
     RECT rb = { x, y, x + sb.cx, y + sb.cy };
-    SetTextColor(dc, gst == 2 ? on : off);
+    SetTextColor(dc, (gst == 2 && !g_rgnVideo) ? on : off);
     DrawTextW(dc, segB, -1, &rb, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
     if (pick) {
         y += sa.cy + 2;
@@ -8033,6 +8082,10 @@ LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out, int* gesture)
 {
+    // CAPS-73: друга клавіша, натиснута, поки накладка вже відкрита (скажімо,
+    // Alt+Shift+4 посеред вибору ділянки для відео), відкрила б вкладену накладку
+    // поверх тих самих глобальних змінних. Повторний запит — просто скасування.
+    if (g_rgnWnd) return false;
     static bool registered = false;
     if (!registered) {
         WNDCLASSW wc = {};
@@ -19472,11 +19525,12 @@ bool EdConfirmClose()
 // Уся родина Win+модифікатор+цифра належить оболонці (помилка 1409) і для нас
 // недоступна в принципі.
 
-constexpr int kHkIdClip = 11, kHkIdRegion = 12, kHkIdScreen = 13, kHkIdEditor = 14;
+constexpr int kHkIdClip = 11, kHkIdRegion = 12, kHkIdScreen = 13, kHkIdEditor = 14, kHkIdVideo = 15;
 const wchar_t* kRegHkClip   = L"CapHotkeyClipboard";
 const wchar_t* kRegHkRegion = L"CapHotkeyRegion";
 const wchar_t* kRegHkScreen = L"CapHotkeyScreen";
 const wchar_t* kRegHkEditor = L"CapHotkeyEditor";     // CAPS-59
+const wchar_t* kRegHkVideo  = L"CapHotkeyVideo";      // CAPS-73
 
 constexpr int kHkDefClip   = (int)(((MOD_CONTROL | MOD_ALT) << 16) | '4');
 constexpr int kHkDefRegion = (int)(((MOD_ALT | MOD_SHIFT) << 16) | '4');
@@ -19484,10 +19538,14 @@ constexpr int kHkDefScreen = (int)(((MOD_ALT | MOD_SHIFT) << 16) | '3');
 // CAPS-59: порожній редактор. Літера, а не цифра: це не «знімок №4», а інший
 // вхід. Ctrl+Alt+E на PLUM-MEDIA вільна (виміряно 21.09.2026).
 constexpr int kHkDefEditor = (int)(((MOD_CONTROL | MOD_ALT) << 16) | 'E');
+// CAPS-73: запис відео — продовження ряду 3/4 (як Cmd+Shift+5 у macOS).
+// Alt+Shift+5 на PLUM-MEDIA вільна (виміряно 24.09.2026; резерв — Ctrl+Alt+5).
+constexpr int kHkDefVideo  = (int)(((MOD_ALT | MOD_SHIFT) << 16) | '5');
 
-constexpr int kHkCount = 4;
-int  g_hk[kHkCount]   = { kHkDefClip, kHkDefRegion, kHkDefScreen, kHkDefEditor };
-bool g_hkOk[kHkCount] = { false, false, false, false };
+constexpr int kHkCount = 5;
+constexpr int kHkShots = 4;    // перші чотири живуть на вкладці «Знімки», п'ята — на «Відео»
+int  g_hk[kHkCount]   = { kHkDefClip, kHkDefRegion, kHkDefScreen, kHkDefEditor, kHkDefVideo };
+bool g_hkOk[kHkCount] = { false, false, false, false, false };
 
 void CapLoadHotkeys()
 {
@@ -19495,6 +19553,7 @@ void CapLoadHotkeys()
     g_hk[1] = RegLoadInt(kRegHkRegion, kHkDefRegion, 0, 0x7FFFFFFF);
     g_hk[2] = RegLoadInt(kRegHkScreen, kHkDefScreen, 0, 0x7FFFFFFF);
     g_hk[3] = RegLoadInt(kRegHkEditor, kHkDefEditor, 0, 0x7FFFFFFF);
+    g_hk[4] = RegLoadInt(kRegHkVideo,  kHkDefVideo,  0, 0x7FFFFFFF);
 }
 
 void CapSaveHotkeys()
@@ -19503,6 +19562,7 @@ void CapSaveHotkeys()
     RegSaveInt(kRegHkRegion, g_hk[1]);
     RegSaveInt(kRegHkScreen, g_hk[2]);
     RegSaveInt(kRegHkEditor, g_hk[3]);
+    RegSaveInt(kRegHkVideo,  g_hk[4]);
 }
 
 // Повертає true, якщо всі ввімкнені клавіші зайнялись. Мовчазна невдача тут
@@ -19510,7 +19570,7 @@ void CapSaveHotkeys()
 // програма вдає, що все гаразд.
 bool CapApplyHotkeys(HWND hwnd)
 {
-    const int ids[kHkCount] = { kHkIdClip, kHkIdRegion, kHkIdScreen, kHkIdEditor };
+    const int ids[kHkCount] = { kHkIdClip, kHkIdRegion, kHkIdScreen, kHkIdEditor, kHkIdVideo };
     bool all = true;
     for (int i = 0; i < kHkCount; ++i) {
         UnregisterHotKey(hwnd, ids[i]);
@@ -19599,6 +19659,7 @@ struct CapDpiScope {
 
 HWND g_capHkEdit[kHkCount] = {};
 HWND g_capHkStatus  = nullptr;
+HWND g_vidHkStatus  = nullptr;   // CAPS-73
 
 void CapHkRefresh()
 {
@@ -19608,12 +19669,17 @@ void CapHkRefresh()
         CapHotkeyText(g_hk[i], buf, 128);
         SetWindowTextW(g_capHkEdit[i], buf);
     }
+    // CAPS-73: клавіша відео — на своїй вкладці й зі своїм рядком стану.
+    if (g_vidHkStatus) {
+        const wchar_t* what = !g_hk[4] ? S(Str::CapHkOff) : (!g_hkOk[4] ? S(Str::CapHkTaken) : L"");
+        SetWindowTextW(g_vidHkStatus, what);
+    }
     if (!g_capHkStatus) return;
     // Один рядок стану на всі три: місця на сторінці 420 px, а окрема колонка
     // під кожним полем не вміщає жодного осмисленого тексту.
     wchar_t line[512] = {};
-    const Str names[kHkCount] = { Str::CapHkClipL, Str::EdCapRegion, Str::EdCapScreen, Str::CapHkEditorL };
-    for (int i = 0; i < kHkCount; ++i) {
+    const Str names[kHkShots] = { Str::CapHkClipL, Str::EdCapRegion, Str::EdCapScreen, Str::CapHkEditorL };
+    for (int i = 0; i < kHkShots; ++i) {
         const wchar_t* what = nullptr;
         if (!g_hk[i])         what = S(Str::CapHkOff);
         else if (!g_hkOk[i])  what = S(Str::CapHkTaken);
@@ -19930,6 +19996,1116 @@ void EdOverlayEsc(HWND hwnd)
 
 // =================== кінець редактора знімків (CAPS-20) ===================
 
+// ===================== CAPS-73: запис відео =====================
+// Конвеєр: Desktop Duplication → власна копія останнього кадру (у форматі
+// джерела) → піксельний шейдер, що вирізає ділянку і робить той самий тон, що
+// й CapConvert для знімків → текстура з пулу семплів → IMFSinkWriter (H.264 у
+// MP4, апаратний енкодер). Кадр не покидає відеопам'ять: тон на процесорі, як
+// у знімках, для 4K@60 означав би пів мільярда пікселів на секунду.
+//
+// Виміряно пробою (scratchpad\vidprobe.cpp, 24.09.2026), а не вгадано:
+//  1. MP4-мультиплексор рахує час за ТРИВАЛІСТЮ семплів, а не за мітками:
+//     пропущений слот мовчки вкорочує відео, і звук чи лог потім роз'їжджаються.
+//     Тому, відставши, пишемо ОДИН семпл, що тривалістю покриває всі пропущені
+//     слоти.
+//  2. GOP = fps дає ключовий кадр щосекунди (stss: 1, 31, 61…) — на цьому
+//     триматимуться перемотка й обрізання в редакторі (CAPS-78/79).
+//  3. RGB32 → NV12 робить конвертер MF (BT.709, 16–235); кольори повертаються
+//     декодуванням ±1.
+//  4. У RDP-сесії, коли вікно віддаленого стола згорнуте, і Duplication, і BitBlt
+//     відповідають E_ACCESSDENIED: захоплювати тоді нема чого взагалі.
+//
+// Постійна частота кадрів (CFR): екран віддає кадр лише тоді, коли щось
+// змінилось, а ми пишемо кожен слот, повторюючи останню картинку. Один годинник
+// (QPC від першого кадру) — основа для звуку, кліків і логу DevTools у наступних
+// етапах.
+
+constexpr UINT WMAPP_VIDDONE = WM_APP + 12;   // потік запису завершився: lp = VidResult*
+
+const wchar_t* kRegVidFps     = L"VideoFps";
+const wchar_t* kRegVidQuality = L"VideoQuality";
+int g_vidFps = 30;        // 30 або 60
+int g_vidQuality = 1;     // 0 — менший файл, 1 — звичайна, 2 — висока
+
+void VidLoadSettings()
+{
+    g_vidFps = RegLoadInt(kRegVidFps, 30, 15, 60) >= 45 ? 60 : 30;
+    g_vidQuality = RegLoadInt(kRegVidQuality, 1, 0, 2);
+}
+
+// Бітів на піксель на кадр. Екранний вміст здебільшого нерухомий, тож навіть
+// «звичайна» якість дає чіткий текст; «висока» — для дрібного шрифту й руху.
+float VidBitsPerPixel(int q) { return q <= 0 ? 0.06f : (q >= 2 ? 0.16f : 0.10f); }
+
+// codecapi.h є не в кожному наборі заголовків — два потрібні значення свої.
+const GUID kVidCodecGopSize = { 0x95f31b26, 0x95a4, 0x41aa, { 0x93, 0x03, 0x24, 0x6a, 0x7f, 0xc6, 0xee, 0xf1 } };
+constexpr UINT32 kVidH264High = 100;   // eAVEncH264VProfile_High
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x00000011
+#endif
+#ifndef MF_E_SAMPLEALLOCATOR_EMPTY
+#define MF_E_SAMPLEALLOCATOR_EMPTY ((HRESULT)0xC00D4A3EL)   // пул семплів тимчасово порожній
+#endif
+
+// Тестова збірка підміняє це синтетичним джерелом (make_testbuild.py):
+// 1 — SDR зі смугами номера кадру, 2 — scRGB FP16, 3 — PQ 10 біт.
+int VidSynthMode() { return 0; }
+
+// ---- шейдер ----
+// Ті самі формули, що в CapConvert, лише на GPU. off — де ділянка лежить у
+// копії кадру; Load бере піксель 1:1, без фільтрації.
+const char kVidHlsl[] =
+    "Texture2D<float4> src : register(t0);\n"
+    "cbuffer P : register(b0) { int2 off; int mode; float white; };\n"
+    "float4 VS(uint id : SV_VertexID) : SV_Position {\n"
+    "    float2 p = float2((id << 1) & 2, id & 2);\n"
+    "    return float4(p * float2(2, -2) + float2(-1, 1), 0, 1);\n"
+    "}\n"
+    "float3 Srgb(float3 l) {\n"
+    "    l = saturate(l);\n"
+    "    return l <= 0.0031308 ? 12.92 * l : 1.055 * pow(l, 1.0 / 2.4) - 0.055;\n"
+    "}\n"
+    "float3 Pq(float3 e) {\n"
+    "    const float m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;\n"
+    "    float3 p = pow(max(e, 0), 1.0 / m2);\n"
+    "    return 10000.0 * pow(max(p - c1, 0) / (c2 - c3 * p), 1.0 / m1);\n"
+    "}\n"
+    "float4 PS(float4 pos : SV_Position) : SV_Target {\n"
+    "    float4 c = src.Load(int3(int2(pos.xy) + off, 0));\n"
+    "    if (mode == 1) return float4(Srgb(c.rgb / (white / 80.0)), 1);\n"
+    "    if (mode == 2) {\n"
+    "        float3 n = Pq(c.rgb) / white;\n"
+    "        float3 r = float3(dot(n, float3( 1.6605, -0.5876, -0.0728)),\n"
+    "                          dot(n, float3(-0.1246,  1.1329, -0.0083)),\n"
+    "                          dot(n, float3(-0.0182, -0.1006,  1.1187)));\n"
+    "        return float4(Srgb(r), 1);\n"
+    "    }\n"
+    "    return float4(c.rgb, 1);\n"
+    "}\n";
+
+typedef HRESULT (WINAPI* VidD3DCompileFn)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, ID3DInclude*,
+                                          LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
+ID3DBlob* g_vidVsBlob = nullptr;
+ID3DBlob* g_vidPsBlob = nullptr;
+
+// Компілятор шейдерів — системна d3dcompiler_47.dll: fxc на машині збірки немає,
+// а MinGW його не має взагалі. ⚠ Лише з System32: процес підвищений, і DLL,
+// підкладена поруч, виконалася б з правами адміністратора.
+bool VidShaders()
+{
+    if (g_vidVsBlob && g_vidPsBlob) return true;
+    static HMODULE dll = nullptr;
+    if (!dll) dll = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    VidD3DCompileFn compile = dll ? (VidD3DCompileFn)(void*)GetProcAddress(dll, "D3DCompile") : nullptr;
+    if (!compile) return false;
+    ID3DBlob *vs = nullptr, *ps = nullptr, *err = nullptr;
+    const SIZE_T n = sizeof(kVidHlsl) - 1;
+    if (FAILED(compile(kVidHlsl, n, "vid", nullptr, nullptr, "VS", "vs_4_0", 0, 0, &vs, &err))) {
+        if (err) err->Release();
+        return false;
+    }
+    if (FAILED(compile(kVidHlsl, n, "vid", nullptr, nullptr, "PS", "ps_4_0", 0, 0, &ps, &err))) {
+        if (err) err->Release();
+        vs->Release();
+        return false;
+    }
+    g_vidVsBlob = vs;
+    g_vidPsBlob = ps;
+    return true;
+}
+
+// ---- джерело кадрів ----
+
+struct VidJob {
+    HMONITOR mon;
+    RECT monRc, sel;               // фізичні пікселі робочого стола
+    int fps;
+    float bpp;
+    int synth;
+    wchar_t part[MAX_PATH], path[MAX_PATH];
+    HANDLE stop;
+};
+
+struct VidResult {
+    HRESULT hr;
+    Str err;
+    LONGLONG frames;
+    bool gdi, cpu;
+    wchar_t path[MAX_PATH];
+};
+
+struct VidSrc {
+    ID3D11Device* dev = nullptr;
+    ID3D11DeviceContext* ctx = nullptr;
+    IDXGIAdapter1* adapter = nullptr;
+    IDXGIOutput6* output = nullptr;
+    IDXGIOutputDuplication* dup = nullptr;
+    ID3D11Texture2D* last = nullptr;          // останній кадр — його й повторюємо
+    ID3D11ShaderResourceView* srv = nullptr;
+    DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN;
+    UINT tw = 0, th = 0;
+    DXGI_COLOR_SPACE_TYPE cs = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+    float white = kCapScrgbWhite;
+    wchar_t device[32] = {};
+    int offX = 0, offY = 0;                   // де ділянка лежить у копії кадру
+    bool have = false;                        // є хоч один справжній кадр
+    bool gdi = false;                         // запасний шлях: BitBlt
+    HDC scr = nullptr, mem = nullptr;
+    HBITMAP bmp = nullptr;
+    HGDIOBJ oldBmp = nullptr;
+    void* bits = nullptr;
+    int synth = 0;
+    std::vector<BYTE> synthBuf;
+    DWORD lostAt = 0;
+};
+
+// Біле SDR, від якого рахується тон. Та сама логіка, що в CapConvert: якщо
+// система не сказала, для HDR брати 80 ніт не можна — вийде бліде.
+void VidRefreshWhite(VidSrc& s)
+{
+    const float sw = s.device[0] ? CapSdrWhiteNits(s.device) : -1.0f;
+    const bool hdr = (s.cs != DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+    s.white = (sw > 1.0f) ? sw : (hdr ? kCapHdrFallback : kCapScrgbWhite);
+}
+
+int VidToneMode(const VidSrc& s)
+{
+    if (s.fmt == DXGI_FORMAT_R16G16B16A16_FLOAT) return 1;
+    if (s.fmt == DXGI_FORMAT_R10G10B10A2_UNORM &&
+        (s.cs == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 || s.cs == DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020))
+        return 2;
+    return 0;   // 8 біт і 10 біт без PQ — значення вже гамма-кодовані
+}
+
+bool VidEnsureLast(VidSrc& s, DXGI_FORMAT fmt, UINT w, UINT h)
+{
+    if (s.last && s.fmt == fmt && s.tw == w && s.th == h) return true;
+    if (s.srv) { s.srv->Release(); s.srv = nullptr; }
+    if (s.last) { s.last->Release(); s.last = nullptr; }
+    s.have = false;
+    D3D11_TEXTURE2D_DESC d = {};
+    d.Width = w; d.Height = h; d.MipLevels = 1; d.ArraySize = 1;
+    d.Format = fmt; d.SampleDesc.Count = 1; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    if (FAILED(s.dev->CreateTexture2D(&d, nullptr, &s.last)) || !s.last) return false;
+    if (FAILED(s.dev->CreateShaderResourceView(s.last, nullptr, &s.srv)) || !s.srv) return false;
+    s.fmt = fmt; s.tw = w; s.th = h;
+    return true;
+}
+
+HRESULT VidDupOpen(VidSrc& s)
+{
+    const DXGI_FORMAT want[3] = { DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                  DXGI_FORMAT_R10G10B10A2_UNORM,
+                                  DXGI_FORMAT_B8G8R8A8_UNORM };
+    HRESULT hr = s.output->DuplicateOutput1(s.dev, 0, 3, want, &s.dup);
+    if (FAILED(hr) || !s.dup) { s.dup = nullptr; return FAILED(hr) ? hr : E_FAIL; }
+    DXGI_OUTDUPL_DESC d = {};
+    s.dup->GetDesc(&d);
+    // Між спробами могли ввімкнути чи вимкнути HDR — колірний простір і біле
+    // перечитуємо щоразу, а не лише на старті.
+    DXGI_OUTPUT_DESC1 d1 = {};
+    if (SUCCEEDED(s.output->GetDesc1(&d1))) s.cs = d1.ColorSpace;
+    VidRefreshWhite(s);
+    if (!VidEnsureLast(s, d.ModeDesc.Format, d.ModeDesc.Width, d.ModeDesc.Height)) {
+        s.dup->Release();
+        s.dup = nullptr;
+        return E_OUTOFMEMORY;
+    }
+    return S_OK;
+}
+
+// Новий кадр екрана, якщо він прийде до таймауту. Втрату доступу (UAC, зміна
+// режиму, блокування) переживаємо: між спробами відкрити дублювання знову
+// повторюється останній кадр.
+void VidPull(VidSrc& s, UINT timeoutMs)
+{
+    if (s.gdi || s.synth) { Sleep(timeoutMs); return; }   // ці знімаються в мить слота
+    if (!s.dup) {
+        if (GetTickCount() - s.lostAt >= 250 && FAILED(VidDupOpen(s))) s.lostAt = GetTickCount();
+        if (!s.dup) { Sleep(timeoutMs < 20 ? timeoutMs : 20); return; }
+    }
+    IDXGIResource* res = nullptr;
+    DXGI_OUTDUPL_FRAME_INFO fi = {};
+    const HRESULT hr = s.dup->AcquireNextFrame(timeoutMs, &fi, &res);
+    if (hr == DXGI_ERROR_WAIT_TIMEOUT) return;
+    if (FAILED(hr)) {
+        if (res) res->Release();
+        s.dup->Release();
+        s.dup = nullptr;
+        s.lostAt = GetTickCount();
+        return;
+    }
+    // Перший кадр після DuplicateOutput порожній — як і в знімках, пропускаємо.
+    if (fi.LastPresentTime.QuadPart != 0 || fi.AccumulatedFrames > 0) {
+        ID3D11Texture2D* tx = nullptr;
+        if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&tx)) && tx) {
+            D3D11_TEXTURE2D_DESC td = {};
+            tx->GetDesc(&td);
+            if (td.Format == s.fmt && td.Width == s.tw && td.Height == s.th) {
+                s.ctx->CopyResource(s.last, tx);
+                s.have = true;
+            }
+            tx->Release();
+        }
+    }
+    if (res) res->Release();
+    s.dup->ReleaseFrame();
+}
+
+// Запасний шлях (RDP без дублювання, старі драйвери): BitBlt ділянки в мить
+// слота. Лише SDR — у сесіях, де немає дублювання, немає й HDR.
+void VidGdiGrab(VidSrc& s, const RECT& sel)
+{
+    const int w = sel.right - sel.left, h = sel.bottom - sel.top;
+    if (!BitBlt(s.mem, 0, 0, w, h, s.scr, sel.left, sel.top, SRCCOPY | CAPTUREBLT)) return;
+    GdiFlush();
+    s.ctx->UpdateSubresource(s.last, 0, nullptr, s.bits, (UINT)w * 4, 0);
+    s.have = true;
+}
+
+unsigned short VidFloatToHalf(float f)
+{
+    if (f <= 0.0f) return 0;
+    if (f >= 65504.0f) return 0x7BFF;
+    int e = 0;
+    const float m = frexpf(f, &e);          // f = m · 2^e, m ∈ [0.5, 1)
+    const int he = e + 14;
+    if (he <= 0) return (unsigned short)(f / 5.9604644775390625e-8f + 0.5f);   // субнормальні
+    unsigned mant = (unsigned)((m * 2.0f - 1.0f) * 1024.0f + 0.5f);
+    unsigned exp = (unsigned)he;
+    if (mant == 1024) { mant = 0; ++exp; }
+    return (unsigned short)((exp << 10) | mant);
+}
+
+// PQ-кодування нітів — обернене до CapPqToNits.
+float VidNitsToPq(float nits)
+{
+    const double m1 = 0.1593017578125, m2 = 78.84375;
+    const double c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+    const double y = pow(nits / 10000.0, m1);
+    return (float)pow((c1 + c2 * y) / (1.0 + c3 * y), m2);
+}
+
+// Синтетичне джерело для харнеса. Ділянка: угорі 16 двійкових смуг 64×64 з
+// номером слота (білі = 1), нижче — чотири сірі смуги відомої яскравості.
+// Поза ділянкою — пурпурове: якщо зсув ділянки хибний, у відео з'явиться пурпур.
+// SDR-смуги: 25, 50, 75, 100 % sRGB; HDR-смуги: ¼, ½, 1 і 5 білих SDR у
+// лінійному світлі — після тону це 137, 188, 255, 255.
+void VidSynthFill(VidSrc& s, const RECT& sel, LONGLONG k)
+{
+    const int w = sel.right - sel.left, h = sel.bottom - sel.top;
+    const int bpp = (s.fmt == DXGI_FORMAT_R16G16B16A16_FLOAT) ? 8 : 4;
+    const size_t pitch = (size_t)w * bpp;
+    s.synthBuf.resize(pitch * h);
+    const float lin[4] = { 0.25f, 0.5f, 1.0f, 5.0f };
+    const BYTE sdr[4] = { 64, 128, 191, 255 };
+    for (int y = 0; y < h; ++y) {
+        BYTE* row = s.synthBuf.data() + (size_t)y * pitch;
+        for (int x = 0; x < w; ++x) {
+            int band = x * 4 / w;
+            bool bit = false, isBar = (y < 64 && x < 16 * 64);
+            if (isBar) bit = ((k >> (x / 64)) & 1) != 0;
+            if (s.fmt == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+                const float v = isBar ? (bit ? s.white / 80.0f : 0.0f) : lin[band] * s.white / 80.0f;
+                const unsigned short hv = VidFloatToHalf(v), one = VidFloatToHalf(1.0f);
+                unsigned short* p = (unsigned short*)(row + (size_t)x * 8);
+                p[0] = p[1] = p[2] = hv; p[3] = one;
+            } else if (s.fmt == DXGI_FORMAT_R10G10B10A2_UNORM) {
+                const float nits = isBar ? (bit ? s.white : 0.0f) : lin[band] * s.white;
+                const UINT32 c = (UINT32)(VidNitsToPq(nits) * 1023.0f + 0.5f);
+                *(UINT32*)(row + (size_t)x * 4) = c | (c << 10) | (c << 20) | (3u << 30);
+            } else {
+                const BYTE v = isBar ? (bit ? 255 : 0) : sdr[band];
+                BYTE* p = row + (size_t)x * 4;
+                p[0] = p[1] = p[2] = v; p[3] = 255;
+            }
+        }
+    }
+    D3D11_BOX box = { (UINT)s.offX, (UINT)s.offY, 0, (UINT)(s.offX + w), (UINT)(s.offY + h), 1 };
+    s.ctx->UpdateSubresource(s.last, 0, &box, s.synthBuf.data(), (UINT)pitch, 0);
+    s.have = true;
+}
+
+void VidSrcClose(VidSrc& s)
+{
+    if (s.dup) s.dup->Release();
+    if (s.srv) s.srv->Release();
+    if (s.last) s.last->Release();
+    if (s.ctx) { s.ctx->ClearState(); s.ctx->Release(); }
+    if (s.dev) s.dev->Release();
+    if (s.output) s.output->Release();
+    if (s.adapter) s.adapter->Release();
+    if (s.mem) { if (s.oldBmp) SelectObject(s.mem, s.oldBmp); DeleteDC(s.mem); }
+    if (s.bmp) DeleteObject(s.bmp);
+    if (s.scr) ReleaseDC(nullptr, s.scr);
+    s = VidSrc{};
+}
+
+HRESULT VidSrcOpen(VidSrc& s, const VidJob* j)
+{
+    CapOutput co = {};
+    if (!CapFindOutput(j->mon, &co)) return DXGI_ERROR_NOT_FOUND;
+    s.adapter = co.adapter;
+    s.output = co.output;
+    s.cs = co.cs;
+    lstrcpynW(s.device, co.device, 32);
+    // Пристрій — на ТОМУ Ж адаптері, що й дублювання, і з відеопідтримкою:
+    // інакше MF не віддасть кадр апаратному енкодеру без копії.
+    HRESULT hr = D3D11CreateDevice(s.adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+                                   D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+                                   nullptr, 0, D3D11_SDK_VERSION, &s.dev, nullptr, &s.ctx);
+    if (FAILED(hr))   // деякі драйвери не мають відеопідтримки — тоді кодує процесор
+        hr = D3D11CreateDevice(s.adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                               nullptr, 0, D3D11_SDK_VERSION, &s.dev, nullptr, &s.ctx);
+    if (FAILED(hr)) return hr;
+    // MF торкається контексту з власних потоків.
+    ID3D10Multithread* mt = nullptr;
+    if (SUCCEEDED(s.dev->QueryInterface(__uuidof(ID3D10Multithread), (void**)&mt)) && mt) {
+        mt->SetMultithreadProtected(TRUE);
+        mt->Release();
+    }
+    const int w = j->sel.right - j->sel.left, h = j->sel.bottom - j->sel.top;
+    s.synth = j->synth;
+    if (s.synth) {
+        // Синтетика лежить у копії розміру монітора — так перевіряється і зсув ділянки.
+        const DXGI_FORMAT f = s.synth == 2 ? DXGI_FORMAT_R16G16B16A16_FLOAT
+                            : s.synth == 3 ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_B8G8R8A8_UNORM;
+        s.cs = s.synth == 3 ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
+             : s.synth == 2 ? DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+        s.white = s.synth == 1 ? kCapScrgbWhite : kCapHdrFallback;
+        const UINT mw = (UINT)(j->monRc.right - j->monRc.left), mh = (UINT)(j->monRc.bottom - j->monRc.top);
+        if (!VidEnsureLast(s, f, mw, mh)) return E_OUTOFMEMORY;
+        // тло поза ділянкою — пурпур
+        const int bpp = f == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4;
+        std::vector<BYTE> bg((size_t)mw * bpp * mh);
+        for (size_t i = 0; i < (size_t)mw * mh; ++i) {
+            BYTE* p = bg.data() + i * bpp;
+            if (bpp == 8) {
+                unsigned short* q = (unsigned short*)p;
+                q[0] = VidFloatToHalf(s.white / 80.0f); q[1] = 0; q[2] = q[0]; q[3] = VidFloatToHalf(1.0f);
+            } else if (f == DXGI_FORMAT_R10G10B10A2_UNORM) {
+                const UINT32 c = (UINT32)(VidNitsToPq(s.white) * 1023.0f + 0.5f);
+                *(UINT32*)p = c | (c << 20) | (3u << 30);
+            } else { p[0] = 255; p[1] = 0; p[2] = 255; p[3] = 255; }
+        }
+        s.ctx->UpdateSubresource(s.last, 0, nullptr, bg.data(), mw * bpp, 0);
+        s.offX = j->sel.left - j->monRc.left;
+        s.offY = j->sel.top - j->monRc.top;
+        return S_OK;
+    }
+    hr = VidDupOpen(s);
+    if (SUCCEEDED(hr)) {
+        s.offX = j->sel.left - j->monRc.left;
+        s.offY = j->sel.top - j->monRc.top;
+        return S_OK;
+    }
+    // Дублювання недоступне (RDP, віртуалка, старий драйвер) — BitBlt.
+    s.gdi = true;
+    s.cs = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+    s.scr = GetDC(nullptr);
+    s.mem = s.scr ? CreateCompatibleDC(s.scr) : nullptr;
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    s.bmp = s.mem ? CreateDIBSection(s.scr, &bi, DIB_RGB_COLORS, &s.bits, nullptr, 0) : nullptr;
+    if (!s.bmp || !s.bits) return E_FAIL;
+    s.oldBmp = SelectObject(s.mem, s.bmp);
+    if (!VidEnsureLast(s, DXGI_FORMAT_B8G8R8A8_UNORM, (UINT)w, (UINT)h)) return E_OUTOFMEMORY;
+    s.offX = s.offY = 0;
+    // Пробний кадр: якщо й BitBlt не бачить екрана, писати нема чого.
+    if (!BitBlt(s.mem, 0, 0, w, h, s.scr, j->sel.left, j->sel.top, SRCCOPY | CAPTUREBLT))
+        return E_ACCESSDENIED;
+    return S_OK;
+}
+
+// ---- енкодер ----
+
+struct VidEnc {
+    IMFDXGIDeviceManager* dm = nullptr;
+    UINT token = 0;
+    IMFSinkWriter* sw = nullptr;
+    DWORD stream = 0;
+    IMFVideoSampleAllocatorEx* alloc = nullptr;
+    bool cpu = false;                          // кадр іде енкодеру через системну пам'ять
+    ID3D11Texture2D* rt = nullptr;             // лише для cpu: куди малює шейдер
+    ID3D11Texture2D* stage = nullptr;          //                і звідки читаємо
+    ID3D11VertexShader* vs = nullptr;
+    ID3D11PixelShader* ps = nullptr;
+    ID3D11Buffer* cb = nullptr;
+    UINT w = 0, h = 0;
+    int fps = 30;
+    LONGLONG written = 0;
+};
+
+void VidEncClose(VidEnc& e)
+{
+    if (e.sw) e.sw->Release();
+    if (e.alloc) { e.alloc->UninitializeSampleAllocator(); e.alloc->Release(); }
+    if (e.dm) e.dm->Release();
+    if (e.rt) e.rt->Release();
+    if (e.stage) e.stage->Release();
+    if (e.vs) e.vs->Release();
+    if (e.ps) e.ps->Release();
+    if (e.cb) e.cb->Release();
+    e = VidEnc{};
+}
+
+// gpu = true: текстури йдуть енкодеру напряму (апаратний шлях). Якщо так не
+// вийшло (немає апаратного H.264 — віртуалка, RDP), викликаємо ще раз із
+// gpu = false: MF бере програмний енкодер, а кадр читаємо в пам'ять.
+HRESULT VidEncOpen(VidEnc& e, VidSrc& s, const wchar_t* path, UINT w, UINT h, int fps, float bpp, bool gpu)
+{
+    e.w = w; e.h = h; e.fps = fps; e.cpu = !gpu;
+    HRESULT hr = s.dev->CreateVertexShader(g_vidVsBlob->GetBufferPointer(), g_vidVsBlob->GetBufferSize(), nullptr, &e.vs);
+    if (SUCCEEDED(hr)) hr = s.dev->CreatePixelShader(g_vidPsBlob->GetBufferPointer(), g_vidPsBlob->GetBufferSize(), nullptr, &e.ps);
+    if (SUCCEEDED(hr)) {
+        D3D11_BUFFER_DESC bd = { 16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0 };
+        hr = s.dev->CreateBuffer(&bd, nullptr, &e.cb);
+    }
+    if (FAILED(hr)) return hr;
+
+    IMFAttributes* wa = nullptr;
+    hr = MFCreateAttributes(&wa, 4);
+    if (FAILED(hr)) return hr;
+    wa->SetGUID(MF_TRANSCODE_CONTAINERTYPE, MFTranscodeContainerType_MPEG4);   // розширення .part нічого не каже
+    if (gpu) {
+        hr = MFCreateDXGIDeviceManager(&e.token, &e.dm);
+        if (SUCCEEDED(hr)) hr = e.dm->ResetDevice(s.dev, e.token);
+        if (SUCCEEDED(hr)) {
+            wa->SetUnknown(MF_SINK_WRITER_D3D_MANAGER, e.dm);
+            wa->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
+        }
+    }
+    if (SUCCEEDED(hr)) hr = MFCreateSinkWriterFromURL(path, nullptr, wa, &e.sw);
+    wa->Release();
+    if (FAILED(hr)) return hr;
+
+    double br = (double)w * h * fps * bpp;
+    if (br < 1e6) br = 1e6;
+    if (br > 1e8) br = 1e8;
+    IMFMediaType* ot = nullptr;
+    hr = MFCreateMediaType(&ot);
+    if (FAILED(hr)) return hr;
+    ot->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    ot->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
+    ot->SetUINT32(MF_MT_AVG_BITRATE, (UINT32)br);
+    ot->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+    ot->SetUINT32(MF_MT_MPEG2_PROFILE, kVidH264High);
+    ot->SetUINT32(MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709);
+    ot->SetUINT32(MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709);
+    ot->SetUINT32(MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709);
+    ot->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235);
+    MFSetAttributeSize(ot, MF_MT_FRAME_SIZE, w, h);
+    MFSetAttributeRatio(ot, MF_MT_FRAME_RATE, (UINT32)fps, 1);
+    MFSetAttributeRatio(ot, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+    hr = e.sw->AddStream(ot, &e.stream);
+    ot->Release();
+    if (FAILED(hr)) return hr;
+
+    IMFMediaType* it = nullptr;
+    hr = MFCreateMediaType(&it);
+    if (FAILED(hr)) return hr;
+    it->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    it->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+    it->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+    // ⚠ Крок рядка — ЛИШЕ для шляху через пам'ять, де рядки кладемо самі. У GPU-
+    // текстури крок свій, вирівняний (ширина 1160 px — не 4640 байт), і вказаний тут
+    // w×4 змушував конвертер читати її навскоси: кадр виходив скошеним.
+    if (!gpu) it->SetUINT32(MF_MT_DEFAULT_STRIDE, w * 4);   // згори вниз
+    MFSetAttributeSize(it, MF_MT_FRAME_SIZE, w, h);
+    MFSetAttributeRatio(it, MF_MT_FRAME_RATE, (UINT32)fps, 1);
+    MFSetAttributeRatio(it, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+    IMFAttributes* ep = nullptr;
+    MFCreateAttributes(&ep, 1);
+    if (ep) ep->SetUINT32(kVidCodecGopSize, (UINT32)fps);   // ключовий кадр щосекунди
+    hr = e.sw->SetInputMediaType(e.stream, it, ep);
+    if (ep) ep->Release();
+    if (SUCCEEDED(hr) && gpu) {
+        // Енкодер тримає текстуру асинхронно — малювати в ту саму не можна.
+        // Пул семплів знає, які з них уже звільнені.
+        hr = MFCreateVideoSampleAllocatorEx(__uuidof(IMFVideoSampleAllocatorEx), (void**)&e.alloc);
+        if (SUCCEEDED(hr)) hr = e.alloc->SetDirectXManager(e.dm);
+        IMFAttributes* aa = nullptr;
+        if (SUCCEEDED(hr)) hr = MFCreateAttributes(&aa, 2);
+        if (SUCCEEDED(hr)) {
+            aa->SetUINT32(MF_SA_D3D11_BINDFLAGS, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+            aa->SetUINT32(MF_SA_D3D11_USAGE, D3D11_USAGE_DEFAULT);
+            hr = e.alloc->InitializeSampleAllocatorEx(4, 16, aa, it);
+            aa->Release();
+        }
+    }
+    it->Release();
+    if (SUCCEEDED(hr) && !gpu) {
+        D3D11_TEXTURE2D_DESC d = {};
+        d.Width = w; d.Height = h; d.MipLevels = 1; d.ArraySize = 1;
+        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM; d.SampleDesc.Count = 1;
+        d.BindFlags = D3D11_BIND_RENDER_TARGET;
+        hr = s.dev->CreateTexture2D(&d, nullptr, &e.rt);
+        if (SUCCEEDED(hr)) {
+            d.BindFlags = 0;
+            d.Usage = D3D11_USAGE_STAGING;
+            d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            hr = s.dev->CreateTexture2D(&d, nullptr, &e.stage);
+        }
+    }
+    if (SUCCEEDED(hr)) hr = e.sw->BeginWriting();
+    return hr;
+}
+
+void VidDraw(VidEnc& e, VidSrc& s, ID3D11Texture2D* target)
+{
+    ID3D11RenderTargetView* rtv = nullptr;
+    if (FAILED(s.dev->CreateRenderTargetView(target, nullptr, &rtv)) || !rtv) return;
+    struct { int offX, offY, mode; float white; } cbv = { s.offX, s.offY, VidToneMode(s), s.white };
+    s.ctx->UpdateSubresource(e.cb, 0, nullptr, &cbv, 0, 0);
+    D3D11_VIEWPORT vp = { 0.0f, 0.0f, (float)e.w, (float)e.h, 0.0f, 1.0f };
+    s.ctx->OMSetRenderTargets(1, &rtv, nullptr);
+    s.ctx->RSSetViewports(1, &vp);
+    s.ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    s.ctx->IASetInputLayout(nullptr);
+    s.ctx->VSSetShader(e.vs, nullptr, 0);
+    s.ctx->PSSetShader(e.ps, nullptr, 0);
+    s.ctx->PSSetShaderResources(0, 1, &s.srv);
+    s.ctx->PSSetConstantBuffers(0, 1, &e.cb);
+    s.ctx->Draw(3, 0);
+    // Відв'язуємо: у копію кадру наступним ділом пише CopyResource.
+    ID3D11RenderTargetView* noRtv = nullptr;
+    ID3D11ShaderResourceView* noSrv = nullptr;
+    s.ctx->OMSetRenderTargets(1, &noRtv, nullptr);
+    s.ctx->PSSetShaderResources(0, 1, &noSrv);
+    rtv->Release();
+}
+
+// Один семпл на слот k тривалістю n слотів (n > 1 — ми відстали, і пропущені
+// слоти покриває цей самий кадр; див. пункт 1 угорі).
+HRESULT VidEmit(VidEnc& e, VidSrc& s, LONGLONG k, LONGLONG n)
+{
+    IMFSample* smp = nullptr;
+    HRESULT hr;
+    const DWORD bytes = e.w * e.h * 4;
+    if (!e.cpu) {
+        for (int tries = 0;; ++tries) {
+            hr = e.alloc->AllocateSample(&smp);
+            if (hr != MF_E_SAMPLEALLOCATOR_EMPTY || tries >= 250) break;
+            Sleep(2);                      // енкодер ще тримає всі текстури пулу
+        }
+        if (FAILED(hr)) return hr;
+        IMFMediaBuffer* mb = nullptr;
+        IMFDXGIBuffer* db = nullptr;
+        ID3D11Texture2D* tx = nullptr;
+        hr = smp->GetBufferByIndex(0, &mb);
+        if (SUCCEEDED(hr)) hr = mb->QueryInterface(__uuidof(IMFDXGIBuffer), (void**)&db);
+        if (SUCCEEDED(hr)) hr = db->GetResource(__uuidof(ID3D11Texture2D), (void**)&tx);
+        if (SUCCEEDED(hr)) {
+            VidDraw(e, s, tx);
+            mb->SetCurrentLength(bytes);
+        }
+        if (tx) tx->Release();
+        if (db) db->Release();
+        if (mb) mb->Release();
+    } else {
+        VidDraw(e, s, e.rt);
+        s.ctx->CopyResource(e.stage, e.rt);
+        D3D11_MAPPED_SUBRESOURCE m = {};
+        hr = s.ctx->Map(e.stage, 0, D3D11_MAP_READ, 0, &m);
+        IMFMediaBuffer* mb = nullptr;
+        if (SUCCEEDED(hr)) {
+            hr = MFCreateMemoryBuffer(bytes, &mb);
+            BYTE* dst = nullptr;
+            if (SUCCEEDED(hr)) hr = mb->Lock(&dst, nullptr, nullptr);
+            if (SUCCEEDED(hr)) {
+                for (UINT y = 0; y < e.h; ++y)          // RowPitch ≠ ширина×4 — рядками
+                    memcpy(dst + (size_t)y * e.w * 4, (const BYTE*)m.pData + (size_t)y * m.RowPitch, e.w * 4);
+                mb->Unlock();
+                mb->SetCurrentLength(bytes);
+            }
+            s.ctx->Unmap(e.stage, 0);
+        }
+        if (SUCCEEDED(hr)) hr = MFCreateSample(&smp);
+        if (SUCCEEDED(hr)) hr = smp->AddBuffer(mb);
+        if (mb) mb->Release();
+    }
+    if (SUCCEEDED(hr)) {
+        smp->SetSampleTime(k * 10000000LL / e.fps);
+        smp->SetSampleDuration((k + n) * 10000000LL / e.fps - k * 10000000LL / e.fps);
+        hr = e.sw->WriteSample(e.stream, smp);
+        if (SUCCEEDED(hr)) ++e.written;
+    }
+    if (smp) smp->Release();
+    return hr;
+}
+
+// ---- потік запису ----
+
+volatile LONG g_vidExiting = 0;   // програма виходить: результат не шлемо, прибираємо самі
+
+HRESULT VidRecord(VidJob* j, VidResult* r)
+{
+    VidSrc s;
+    VidEnc e;
+    HRESULT hr = VidSrcOpen(s, j);
+    r->gdi = s.gdi;
+    if (FAILED(hr)) { r->err = Str::VidErrScreen; VidSrcClose(s); return hr; }
+    if (!VidShaders()) { r->err = Str::VidErrEncoder; VidSrcClose(s); return E_NOINTERFACE; }
+    const UINT w = (UINT)(j->sel.right - j->sel.left), h = (UINT)(j->sel.bottom - j->sel.top);
+    hr = VidEncOpen(e, s, j->part, w, h, j->fps, j->bpp, true);
+    if (FAILED(hr)) {
+        VidEncClose(e);
+        DeleteFileW(j->part);
+        hr = VidEncOpen(e, s, j->part, w, h, j->fps, j->bpp, false);
+    }
+    r->cpu = e.cpu;
+    if (FAILED(hr)) {
+        r->err = Str::VidErrEncoder;
+        VidEncClose(e);
+        VidSrcClose(s);
+        DeleteFileW(j->part);
+        return hr;
+    }
+
+    LARGE_INTEGER qf, q;
+    QueryPerformanceFrequency(&qf);
+    const LONGLONG f = qf.QuadPart, fps = j->fps;
+    LONGLONG t0 = 0, k = 0;
+    for (;;) {
+        if (WaitForSingleObject(j->stop, 0) == WAIT_OBJECT_0) break;
+        if (!s.have) {                       // до першого справжнього кадру часу ще немає
+            if (s.synth) VidSynthFill(s, j->sel, 0);
+            else if (s.gdi) VidGdiGrab(s, j->sel);
+            else VidPull(s, 50);
+            if (s.have) { QueryPerformanceCounter(&q); t0 = q.QuadPart; }
+            else if (s.gdi) Sleep(20);
+            continue;
+        }
+        QueryPerformanceCounter(&q);
+        const LONGLONG due = t0 + k * f / fps;
+        if (q.QuadPart < due) {
+            LONGLONG ms = (due - q.QuadPart) * 1000 / f;
+            VidPull(s, (UINT)(ms < 1 ? 1 : (ms > 50 ? 50 : ms)));
+            continue;
+        }
+        // Скільки слотів уже настало, включно з k.
+        LONGLONG n = (q.QuadPart - t0) * fps / f - k + 1;
+        if (n < 1) n = 1;
+        if (s.synth) VidSynthFill(s, j->sel, k);
+        else if (s.gdi) VidGdiGrab(s, j->sel);
+        hr = VidEmit(e, s, k, n);
+        if (FAILED(hr)) { r->err = Str::VidErrWrite; break; }
+        k += n;
+    }
+    r->frames = e.written;
+    // Навіть після помилки пробуємо дописати файл: записане до неї лишається цілим.
+    // Не дописався — у файлі немає індексу (moov), і показувати його в бібліотеці
+    // як запис не можна: жоден програвач його не відкриє.
+    if (e.written > 0) {
+        const HRESULT fh = e.sw->Finalize();
+        if (FAILED(fh)) {
+            if (SUCCEEDED(hr)) hr = fh;
+            r->err = Str::VidErrWrite;
+            r->frames = 0;
+        }
+    }
+    VidEncClose(e);
+    VidSrcClose(s);
+    if (r->frames <= 0) { DeleteFileW(j->part); return SUCCEEDED(hr) ? S_FALSE : hr; }
+    if (!MoveFileExW(j->part, j->path, MOVEFILE_REPLACE_EXISTING)) {
+        if (SUCCEEDED(hr)) { hr = HRESULT_FROM_WIN32(GetLastError()); r->err = Str::VidErrWrite; }
+    }
+    return hr;
+}
+
+DWORD WINAPI VidThread(LPVOID p)
+{
+    VidJob* j = (VidJob*)p;
+    VidResult* r = new VidResult{};
+    r->err = Str::VidErrWrite;
+    lstrcpynW(r->path, j->path, MAX_PATH);
+    // Координати ділянки — фізичні пікселі; BitBlt у запасному шляху має
+    // бачити їх так само.
+    SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+    const bool mf = SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_LITE));
+    r->hr = mf ? VidRecord(j, r) : E_FAIL;
+    if (mf) MFShutdown();
+    if (com) CoUninitialize();
+    if (InterlockedCompareExchange(&g_vidExiting, 0, 0) || !PostMessageW(g_mainWnd, WMAPP_VIDDONE, 0, (LPARAM)r))
+        delete r;
+    return 0;
+}
+
+// ---- керування з головного потоку ----
+
+HANDLE    g_vidThread = nullptr;
+VidJob*   g_vidJob = nullptr;
+bool      g_vidPicking = false;
+ULONGLONG g_vidStartMs = 0;
+HWND      g_vidFrame = nullptr;
+HICON     g_vidRecIcon = nullptr, g_vidBaseIcon = nullptr;
+wchar_t   g_vidToastPath[MAX_PATH] = {};
+HWND      g_vidToast = nullptr;
+
+bool VidRecording() { return g_vidThread != nullptr; }
+
+// Шлях у бібліотеці: той самий штамп дати й часу, що в знімків. Пишемо в
+// «.mp4.part» і перейменовуємо лише після Finalize — недописане відео ніде не
+// видно як готове.
+bool VidLibPath(wchar_t* part, wchar_t* path)
+{
+    const wchar_t* dir = EdLibDir();
+    if (!dir) return false;
+    wchar_t stamp[32];
+    EdLibStamp(stamp, 32);
+    wsprintfW(path, L"%s\\%s.mp4", dir, stamp);
+    for (int i = 2; i < 100 && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES; ++i)
+        wsprintfW(path, L"%s\\%s (%d).mp4", dir, stamp, i);
+    wsprintfW(part, L"%s.part", path);
+    return true;
+}
+
+// Ділянка — в межах монітора, не менша за 64 px (менше апаратні енкодери не
+// беруть), висота парна (вимога H.264), а ширина КРАТНА 16.
+// ⚠ Ширину виміряно пробою (24.09.2026, Intel UHD 630): 1280 і 1232 px — чистий
+// кадр, 1160 і 1234 — скошений по діагоналі, бо апаратний конвеєр RGB→NV12→H.264
+// читає поверхню з кроком, вирівняним до макроблока. Висота на це не впливає.
+// Ширину розширюємо симетрично (з вибраного нічого не губиться, довкола ≤15 px),
+// а звужуємо лише тоді, коли розширяти вже нікуди — скажімо, монітор 1366 px.
+void VidFitRect(RECT& r, const RECT& mon)
+{
+    IntersectRect(&r, &r, &mon);
+    auto grow = [](LONG& a, LONG& b, LONG lo, LONG hi, LONG want) {
+        if (want > hi - lo) want = hi - lo;
+        if (b - a >= want) return;
+        const LONG c = (a + b) / 2;
+        a = c - want / 2; b = a + want;
+        if (a < lo) { b += lo - a; a = lo; }
+        if (b > hi) { a -= b - hi; b = hi; }
+    };
+    grow(r.left, r.right, mon.left, mon.right, 64);
+    grow(r.top, r.bottom, mon.top, mon.bottom, 64);
+    LONG w = r.right - r.left;
+    if (w % 16) {
+        grow(r.left, r.right, mon.left, mon.right, (w + 15) / 16 * 16);
+        w = r.right - r.left;
+        if (w % 16) r.right -= w % 16;     // розширяти нікуди — звужуємо
+    }
+    if ((r.bottom - r.top) & 1) --r.bottom;
+}
+
+// Червона рамка ЗОВНІ ділянки: у кадр вона не потрапляє за самою геометрією, а
+// WDA_EXCLUDEFROMCAPTURE — запобіжник на випадок, якщо ділянка впирається в край
+// і рамку підсуне. Мишу пропускає наскрізь.
+LRESULT CALLBACK VidFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_NCHITTEST) return HTTRANSPARENT;
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void VidFrameShow(const RECT& sel, const RECT& mon)
+{
+    static bool reg = false;
+    if (!reg) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc   = VidFrameProc;
+        wc.hInstance     = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"lilhelpers_vidframe";
+        wc.hbrBackground = CreateSolidBrush(RGB(229, 57, 53));
+        RegisterClassW(&wc);
+        reg = true;
+    }
+    const int t = (int)(2.0 * CapMonitorScale(MonitorFromRect(&mon, MONITOR_DEFAULTTONEAREST)) + 0.5);
+    RECT o = sel;
+    InflateRect(&o, t + 1, t + 1);
+    g_vidFrame = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+                                 L"lilhelpers_vidframe", L"", WS_POPUP,
+                                 o.left, o.top, o.right - o.left, o.bottom - o.top,
+                                 nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!g_vidFrame) return;
+    HRGN outer = CreateRectRgn(0, 0, o.right - o.left, o.bottom - o.top);
+    HRGN inner = CreateRectRgn(t, t, o.right - o.left - t, o.bottom - o.top - t);
+    CombineRgn(outer, outer, inner, RGN_DIFF);
+    DeleteObject(inner);
+    SetWindowRgn(g_vidFrame, outer, FALSE);       // регіон тепер належить вікну
+    SetLayeredWindowAttributes(g_vidFrame, 0, 255, LWA_ALPHA);
+    SetWindowDisplayAffinity(g_vidFrame, WDA_EXCLUDEFROMCAPTURE);
+    ShowWindow(g_vidFrame, SW_SHOWNOACTIVATE);
+}
+
+void VidFrameHide()
+{
+    if (g_vidFrame) DestroyWindow(g_vidFrame);
+    g_vidFrame = nullptr;
+}
+
+// Значок трею з червоною крапкою: з самого значка програми, щоб крапка лягла
+// на ту саму картинку в будь-якому масштабі.
+HICON VidMakeRecIcon(HICON base)
+{
+    ICONINFO ii = {};
+    if (!base || !GetIconInfo(base, &ii)) return nullptr;
+    BITMAP bm = {};
+    GetObjectW(ii.hbmColor ? ii.hbmColor : ii.hbmMask, sizeof(bm), &bm);
+    const int w = bm.bmWidth, h = ii.hbmColor ? bm.bmHeight : bm.bmHeight / 2;
+    HICON out = nullptr;
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    void* bits = nullptr;
+    HDC dc = GetDC(nullptr);
+    HBITMAP color = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (color && bits && ii.hbmColor &&
+        GetDIBits(dc, ii.hbmColor, 0, (UINT)h, bits, &bi, DIB_RGB_COLORS) == h) {
+        DWORD* px = (DWORD*)bits;
+        bool anyAlpha = false;
+        for (int i = 0; i < w * h; ++i) if (px[i] >> 24) { anyAlpha = true; break; }
+        if (!anyAlpha) for (int i = 0; i < w * h; ++i) px[i] |= 0xFF000000;
+        {
+            Gdiplus::Bitmap canvas(w, h, w * 4, PixelFormat32bppARGB, (BYTE*)bits);
+            Gdiplus::Graphics g(&canvas);
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            const float d = w * 0.5f, x = w - d - w * 0.02f, y = h - d - h * 0.02f;
+            Gdiplus::SolidBrush red(Gdiplus::Color(255, 229, 57, 53));
+            Gdiplus::Pen ring(Gdiplus::Color(255, 255, 255, 255), w / 16.0f > 1.0f ? w / 16.0f : 1.0f);
+            g.FillEllipse(&red, x, y, d, d);
+            g.DrawEllipse(&ring, x, y, d, d);
+        }
+        HBITMAP mask = CreateBitmap(w, h, 1, 1, nullptr);
+        ICONINFO ni = { TRUE, 0, 0, mask, color };
+        out = CreateIconIndirect(&ni);
+        if (mask) DeleteObject(mask);
+    }
+    ReleaseDC(nullptr, dc);
+    if (color) DeleteObject(color);
+    if (ii.hbmColor) DeleteObject(ii.hbmColor);
+    if (ii.hbmMask) DeleteObject(ii.hbmMask);
+    return out;
+}
+
+void VidTipTick()
+{
+    if (!g_nid.hWnd || !VidRecording()) return;
+    wchar_t t[16];
+    FormatDuration((LONGLONG)(GetTickCount64() - g_vidStartMs) * 10000LL, t, 16);
+    wchar_t tip[128];
+    swprintf(tip, 128, S(Str::VidTipFmt), t);
+    lstrcpynW(g_nid.szTip, tip, ARRAYSIZE(g_nid.szTip));
+    NOTIFYICONDATAW n = g_nid;
+    n.uFlags = NIF_TIP;
+    Shell_NotifyIconW(NIM_MODIFY, &n);
+}
+
+void UpdateUpdStatus();
+
+void VidTraySet(bool rec)
+{
+    if (!g_nid.hWnd) return;
+    if (rec) {
+        g_vidBaseIcon = g_nid.hIcon;
+        if (!g_vidRecIcon) g_vidRecIcon = VidMakeRecIcon(g_vidBaseIcon);
+        if (g_vidRecIcon) g_nid.hIcon = g_vidRecIcon;
+        SetTimer(g_mainWnd, TIMER_VIDTIP, 1000, nullptr);
+    } else {
+        KillTimer(g_mainWnd, TIMER_VIDTIP);
+        if (g_vidBaseIcon) g_nid.hIcon = g_vidBaseIcon;
+        lstrcpynW(g_nid.szTip, kAppName, ARRAYSIZE(g_nid.szTip));
+    }
+    NOTIFYICONDATAW n = g_nid;
+    n.uFlags = NIF_ICON | NIF_TIP;
+    Shell_NotifyIconW(NIM_MODIFY, &n);
+    if (rec) VidTipTick();
+    else UpdateUpdStatus();     // повернути підказку про доступне оновлення, якщо вона була
+}
+
+// Відкрити запис. ⚠ Не ShellExecute напряму: процес підвищений, і програвач
+// успадкував би права адміністратора. explorer.exe передає файл звичайній
+// (непідвищеній) оболонці.
+void VidOpenFile(const wchar_t* path)
+{
+    wchar_t arg[MAX_PATH + 4];
+    swprintf(arg, MAX_PATH + 4, L"\"%s\"", path);
+    ShellExecuteW(nullptr, L"open", L"explorer.exe", arg, nullptr, SW_SHOWNORMAL);
+}
+
+// «Відео збережено» біля курсора — як CapFlash, але клікабельне й довше: це
+// єдиний шлях до щойно записаного, поки немає редактора відео.
+LRESULT CALLBACK VidToastProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH b = CreateSolidBrush(RGB(28, 28, 32));
+        FillRect(dc, &rc, b);
+        DeleteObject(b);
+        HFONT f = CreateUIFont(105, FW_SEMIBOLD);
+        HGDIOBJ o = SelectObject(dc, f);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(255, 255, 255));
+        DrawTextW(dc, S(Str::VidSaved), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(dc, o);
+        DeleteObject(f);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_SETCURSOR:
+        SetCursor(LoadCursorW(nullptr, IDC_HAND));
+        return TRUE;
+    case WM_MOUSEMOVE:                         // під курсором не зникає
+        KillTimer(hwnd, 1);
+        SetTimer(hwnd, 1, 4000, nullptr);
+        return 0;
+    case WM_LBUTTONUP:
+        VidOpenFile(g_vidToastPath);
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_RBUTTONUP:
+    case WM_TIMER:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        if (g_vidToast == hwnd) g_vidToast = nullptr;
+        return 0;
+    default: break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void VidToastShow(const wchar_t* path)
+{
+    static bool reg = false;
+    if (!reg) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc   = VidToastProc;
+        wc.hInstance     = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"lilhelpers_vidtoast";
+        wc.hCursor       = LoadCursorW(nullptr, IDC_HAND);
+        RegisterClassW(&wc);
+        reg = true;
+    }
+    if (g_vidToast) DestroyWindow(g_vidToast);
+    lstrcpynW(g_vidToastPath, path, MAX_PATH);
+    const UINT dpi = GetDpiForSystem();
+    HDC dc = GetDC(nullptr);
+    HFONT f = CreateUIFont(105, FW_SEMIBOLD);
+    HGDIOBJ o = SelectObject(dc, f);
+    RECT m = { 0, 0, 0, 0 };
+    DrawTextW(dc, S(Str::VidSaved), -1, &m, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(dc, o);
+    DeleteObject(f);
+    ReleaseDC(nullptr, dc);
+    const int w = (m.right - m.left) + MulDiv(28, dpi, 96), h = MulDiv(34, dpi, 96);
+    POINT pt = {};
+    GetCursorPos(&pt);
+    g_vidToast = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+                                 L"lilhelpers_vidtoast", L"", WS_POPUP,
+                                 pt.x + MulDiv(16, dpi, 96), pt.y + MulDiv(16, dpi, 96), w, h,
+                                 nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!g_vidToast) return;
+    SetLayeredWindowAttributes(g_vidToast, 0, 240, LWA_ALPHA);
+    ShowWindow(g_vidToast, SW_SHOWNOACTIVATE);
+    SetTimer(g_vidToast, 1, 5000, nullptr);
+}
+
+void VidStart()
+{
+    if (g_vidThread || g_vidPicking) return;
+    g_vidPicking = true;
+    g_capCancelled = false;
+    // Уся геометрія — у фізичних пікселях, і рамку-індикатор ставимо в них же.
+    CapDpiScope dpi;
+    CapShot whole = {};
+    RECT mon = {}, sel = {};
+    int gst = 0;
+    g_rgnVideo = true;
+    const bool picked = CapRegionEx(&whole, &mon, &sel, &gst);
+    g_rgnVideo = false;
+    delete whole.bmp;
+    g_vidPicking = false;
+    if (!picked) {
+        if (!g_capCancelled) MessageBoxW(nullptr, S(Str::VidErrScreen), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    // «Увесь екран» — до вирівнювання: монітор 3840×2089 після нього вже 2088, і
+    // рамку показало б навколо всього екрана, частково за його межами.
+    const bool fullMon = EqualRect(&sel, &mon) != FALSE;
+    VidFitRect(sel, mon);
+    VidJob* j = new VidJob{};
+    j->mon = MonitorFromRect(&mon, MONITOR_DEFAULTTONEAREST);
+    j->monRc = mon;
+    j->sel = sel;
+    j->fps = g_vidFps;
+    j->bpp = VidBitsPerPixel(g_vidQuality);
+    j->synth = VidSynthMode();
+    if (!VidLibPath(j->part, j->path)) {
+        delete j;
+        MessageBoxW(nullptr, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    j->stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_vidThread = j->stop ? CreateThread(nullptr, 0, VidThread, j, 0, nullptr) : nullptr;
+    if (!g_vidThread) {
+        if (j->stop) CloseHandle(j->stop);
+        delete j;
+        MessageBoxW(nullptr, S(Str::VidErrScreen), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    g_vidJob = j;
+    g_vidStartMs = GetTickCount64();
+    if (!fullMon) VidFrameShow(sel, mon);
+    VidTraySet(true);
+}
+
+void VidStop()
+{
+    if (g_vidJob) SetEvent(g_vidJob->stop);   // результат прийде через WMAPP_VIDDONE
+}
+
+void VidToggle()
+{
+    if (VidRecording()) VidStop();
+    else VidStart();
+}
+
+void VidReleaseJob()
+{
+    if (g_vidThread) { WaitForSingleObject(g_vidThread, 15000); CloseHandle(g_vidThread); }
+    g_vidThread = nullptr;
+    if (g_vidJob) { if (g_vidJob->stop) CloseHandle(g_vidJob->stop); delete g_vidJob; }
+    g_vidJob = nullptr;
+    VidFrameHide();
+    VidTraySet(false);
+}
+
+void VidDone(VidResult* r)
+{
+    VidReleaseJob();
+    if (!r) return;
+    if (SUCCEEDED(r->hr) && r->frames > 0) {
+        VidToastShow(r->path);
+    } else if (FAILED(r->hr)) {
+        wchar_t msg[512];
+        swprintf(msg, 512, L"%s\n\n0x%08lX", S(r->err), (unsigned long)r->hr);
+        MessageBoxW(nullptr, msg, kAppName, MB_OK | MB_ICONWARNING);
+    }
+    delete r;
+}
+
+// Вихід програми посеред запису: дописати файл, а не лишити MP4 без індексу.
+void VidStopSync()
+{
+    if (!g_vidThread) return;
+    InterlockedExchange(&g_vidExiting, 1);
+    if (g_vidJob) SetEvent(g_vidJob->stop);
+    VidReleaseJob();
+}
+
 void ShowTrayMenu(HWND hwnd)
 {
     POINT pt;
@@ -19942,6 +21118,11 @@ void ShowTrayMenu(HWND hwnd)
         AppendMenuW(menu, MF_STRING, IDM_UPDATE_NOW, item);
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     }
+    // CAPS-73: іде запис — зупинка першим пунктом, щоб її не шукати.
+    if (VidRecording()) {
+        AppendMenuW(menu, MF_STRING, IDM_VIDSTOP, S(Str::VidMenuStop));
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    }
     AppendMenuW(menu, MF_STRING, IDM_SETTINGS, S(Str::MenuSettings));
     // Знімки — окремим підменю: у головному списку вони перекривали решту
     // програми, хоч це лише одна з її функцій.
@@ -19951,6 +21132,8 @@ void ShowTrayMenu(HWND hwnd)
     AppendMenuW(shots, MF_STRING, IDM_CAPREGION, S(Str::EdCapRegion));
     AppendMenuW(shots, MF_STRING, IDM_CAPCLIP, S(Str::EdCapClip));
     AppendMenuW(shots, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(shots, MF_STRING, VidRecording() ? IDM_VIDSTOP : IDM_VIDREC,
+                S(VidRecording() ? Str::VidMenuStop : Str::VidMenuStart));   // CAPS-73
     AppendMenuW(shots, MF_STRING, IDM_EDITOR, S(Str::EdMenu));
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)shots, S(Str::TabShots));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -19981,6 +21164,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case kHkIdRegion: CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Region,    nullptr); return 0;
         case kHkIdScreen: CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Screen,    nullptr); return 0;
         case kHkIdEditor: EdOpenBlank(GetModuleHandleW(nullptr)); return 0;   // CAPS-59
+        case kHkIdVideo:  VidToggle(); return 0;                               // CAPS-73
         default: break;
         }
         SwitchLayout();   // запасний режим розкладки (HOTKEY_ID)
@@ -19992,6 +21176,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WMAPP_OPENEDITOR:   // CAPS-59: --editor від другого екземпляра або зі старту
         EdOpenBlank(GetModuleHandleW(nullptr));
+        return 0;
+
+    case WMAPP_VIDDONE:      // CAPS-73: потік запису дописав файл
+        VidDone((VidResult*)lp);
         return 0;
 
     case WMAPP_QUICKSAVE: {  // CAPS-57: знімок повз редактор — у бібліотеку
@@ -20025,6 +21213,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         else if (wp == TIMER_UPDREMIND) {   // CAPS-63
             UpdMaybeRemind();
+        }
+        else if (wp == TIMER_VIDTIP) {      // CAPS-73
+            VidTipTick();
         }
         return 0;
 
@@ -20435,6 +21626,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_CAPCLIP:
             CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Clipboard, nullptr);
             break;
+        case IDM_VIDREC:             // CAPS-73
+            VidStart();
+            break;
+        case IDM_VIDSTOP:
+            VidStop();
+            break;
+        case IDC_VID_FPS30:
+        case IDC_VID_FPS60:
+            g_vidFps = LOWORD(wp) == IDC_VID_FPS60 ? 60 : 30;
+            RegSaveInt(kRegVidFps, g_vidFps);
+            break;
+        case IDC_VID_QLOW:
+        case IDC_VID_QLOW + 1:
+        case IDC_VID_QLOW + 2:
+            g_vidQuality = LOWORD(wp) - IDC_VID_QLOW;
+            RegSaveInt(kRegVidQuality, g_vidQuality);
+            break;
+        case IDC_VID_SHOWLIB:
+            if (const wchar_t* d = EdLibDir()) ShellExecuteW(nullptr, L"open", L"explorer.exe", d, nullptr, SW_SHOWNORMAL);
+            break;
         case IDM_UPDATE_NOW:         // CAPS-63
             if (g_updState == UpdState::Available) { UpdLog(L"встановлення з меню трею"); StartUpdate(true, true); }
             break;
@@ -20506,10 +21717,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_ENDSESSION:
-        if (wp) MagnifyRestore();  // логаут/вимкнення — не лишати великий курсор
+        if (wp) {
+            VidStopSync();         // CAPS-73: дописати відео, поки система ще чекає
+            MagnifyRestore();      // логаут/вимкнення — не лишати великий курсор
+        }
         return 0;
 
     case WM_DESTROY:
+        VidStopSync();      // CAPS-73: вихід чи оновлення посеред запису
         PeekClose();        // CAPS-16
         MagnifyRestore();
         Shell_NotifyIconW(NIM_DELETE, &g_nid);
@@ -20685,7 +21900,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
                            hwnd, (HMENU)(INT_PTR)IDC_TABS, hInst, nullptr);
     SendMessageW(g_tabs, WM_SETFONT, (WPARAM)font, TRUE);
     SetWindowSubclass(g_tabs, TabSubclassProc, 1, 0);   // полотно сторінки — див. TabSubclassProc
-    SendMessageW(g_tabs, TCM_SETPADDING, 0, MAKELPARAM(sc(10), sc(5)));   // повітря в заголовках
+    // CAPS-73: сьома вкладка («Відео») — відступ 10 → 6, інакше «Налаштування» ховались за стрілками
+    SendMessageW(g_tabs, TCM_SETPADDING, 0, MAKELPARAM(sc(6), sc(5)));    // повітря в заголовках
     {
         TCITEMW tab = {};
         tab.mask = TCIF_TEXT;
@@ -20703,6 +21919,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     auto addS  = [&](HWND c) { return AddTo(g_pageSettings, g_pageSettingsN, c); };
     auto addP  = [&](HWND c) { return AddTo(g_pagePeek,     g_pagePeekN,     c); };   // CAPS-16
     auto addK  = [&](HWND c) { return AddTo(g_pageShots,    g_pageShotsN,    c); };   // CAPS-21
+    auto addV  = [&](HWND c) { return AddTo(g_pageVideo,    g_pageVideoN,    c); };   // CAPS-73
 
     // Сітка сторінки: y біжить згори вниз, кожен помічник сам відступає під себе.
     int y = PY;
@@ -20876,10 +22093,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     y = PY;
     sec(addK, Str::CapSecHotkeys);
     {
-        const Str names[kHkCount] = { Str::CapHkClipL, Str::EdCapRegion, Str::EdCapScreen, Str::CapHkEditorL };
+        const Str names[kHkShots] = { Str::CapHkClipL, Str::EdCapRegion, Str::EdCapScreen, Str::CapHkEditorL };
         // ⚠ IDC_CAP_HK1+3 — це IDC_CAP_HKRESET; четвертому полю свій номер.
-        const int ids[kHkCount] = { IDC_CAP_HK1, IDC_CAP_HK1 + 1, IDC_CAP_HK1 + 2, IDC_CAP_HK4 };
-        for (int i = 0; i < kHkCount; ++i) {
+        const int ids[kHkShots] = { IDC_CAP_HK1, IDC_CAP_HK1 + 1, IDC_CAP_HK1 + 2, IDC_CAP_HK4 };
+        for (int i = 0; i < kHkShots; ++i) {
             addK(mkS(L"STATIC", names[i], 0, PX, y + 5, 186, 20, 0));
             g_capHkEdit[i] = addK(mk(L"EDIT", L"", ES_CENTER | ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP,
                                      PX + 192, y, 224, 26, ids[i]));
@@ -20945,6 +22162,46 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         LibRefreshNow();
         y += 34;
     }
+
+    // ---- вкладка «Відео» (CAPS-73) ----
+    // Окрема вкладка, а не секція «Знімків»: та вже повна до низу, а сюди ж
+    // приїдуть звук, курсор і режим запису вікна (CAPS-75..77).
+    y = PY;
+    sec(addV, Str::VidSecRec);
+    addV(mkS(L"STATIC", Str::VidHkLabel, 0, PX, y + 5, 186, 20, 0));
+    g_capHkEdit[4] = addV(mk(L"EDIT", L"", ES_CENTER | ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP,
+                             PX + 192, y, 224, 26, IDC_VID_HK));
+    SetWindowSubclass(g_capHkEdit[4], CapHkSubclass, (UINT_PTR)4, 0);
+    y += 30;
+    g_vidHkStatus = addV(mkS(L"STATIC", Str::Empty, 0, PX + 192, y, 224, 18, IDC_HINT_GRAY));
+    y += 22;
+    hint(addV, Str::VidHkHint, 3);
+    y += 4;
+    sec(addV, Str::VidSecQuality);
+    addV(mkS(L"STATIC", Str::VidFpsL, 0, PX, y + 3, 150, 20, 0));
+    radio(addV, Str::VidFps30, PX + 160, 70, IDC_VID_FPS30, true);
+    radio(addV, Str::VidFps60, PX + 240, 70, IDC_VID_FPS60, false);
+    CheckRadioButton(hwnd, IDC_VID_FPS30, IDC_VID_FPS60, g_vidFps == 60 ? IDC_VID_FPS60 : IDC_VID_FPS30);
+    y += 28;
+    addV(mkS(L"STATIC", Str::VidQualL, 0, PX, y + 3, 150, 20, 0));
+    radio(addV, Str::VidQLow,    PX + 160, 110, IDC_VID_QLOW,     true);
+    radio(addV, Str::VidQNormal, PX + 160, 110, IDC_VID_QLOW + 1, false);
+    radio(addV, Str::VidQHigh,   PX + 160, 110, IDC_VID_QLOW + 2, false);
+    {
+        // три варіанти стовпчиком: у рядок «Менший файл» і «Звичайна» не влазять
+        const int ys[3] = { 0, 24, 48 };
+        for (int i = 0; i < 3; ++i)
+            if (HWND b = GetDlgItem(hwnd, IDC_VID_QLOW + i))
+                SetWindowPos(b, nullptr, sc(PX + 160), sc(y + ys[i]), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    CheckRadioButton(hwnd, IDC_VID_QLOW, IDC_VID_QLOW + 2, IDC_VID_QLOW + g_vidQuality);
+    y += 76;
+    hint(addV, Str::VidQualHint, 2);
+    y += 4;
+    sec(addV, Str::VidSecWhere);
+    text(addV, Str::VidWhereText, 3, 0, 8);
+    button(addV, Str::CapLibShow, PX, 150, IDC_VID_SHOWLIB);
+    y += 38;
 
     // ---- вкладка «Налаштування» (CAPS-9) ----
     y = PY;
@@ -21042,6 +22299,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     g_edLastAction  = RegLoadInt(kRegEdLast, 0, 0, 1);
     g_edKeepTool    = RegLoadInt(kRegEdKeepTool, 1, 0, 1) != 0;
     CapLoadHotkeys();
+    VidLoadSettings(); // CAPS-73
     CapLoadActs();     // CAPS-57: жест × дія, бібліотека для швидких знімків, Esc оверлея
     CapActRefresh();
     if (!CapApplyHotkeys(hwnd)) TrayBalloon(kAppName, S(Str::CapHkBusy));
