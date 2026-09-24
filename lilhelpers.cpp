@@ -8712,6 +8712,11 @@ void EdCropReset();
 std::vector<EdSnap> g_edUndo, g_edRedo;
 
 EdTool   g_edTool  = EdTool::Select;
+// CAPS-66: редактор відкривається з прямокутником (рішення власника 24.09):
+// на свіжому знімку вибирати нічого, і «Вибір» щоразу коштував зайвий клік, а
+// прямокутник — найчастіший інструмент. Для Esc це такий самий «базовий» шар,
+// як і «Вибір»: перший Esc не перемикає інструмент, а робить те, що й раніше.
+constexpr EdTool kEdStartTool = EdTool::Rect;
 COLORREF g_edColor = RGB(232, 17, 35);   // типовий колір нових позначок
 int      g_edThick = 4;
 int      g_edAlpha = 100;
@@ -11049,22 +11054,31 @@ void EdCornerSample(Gdiplus::Graphics& g, const RECT& r, int level, const Gdiplu
 Gdiplus::Bitmap* EdCheckerTile();
 COLORREF EdOnColor(COLORREF c);
 
+// CAPS-66: зразок — ЗАВЖДИ скруглений квадратик, як клітинки палітри:
+// кружки в кнопках і квадрати в палітрі читались як дві різні речі
+// (зауваження власника 24.09). Роль кольору каже не форма, а її наповнення.
 void EdSwatchPath(Gdiplus::GraphicsPath& p, const Gdiplus::RectF& r, int shape)
 {
-    if (shape == 2) EdRoundRectPathF(p, r.X, r.Y, r.Width, r.Height, r.Width * 0.24f);
-    else            p.AddEllipse(r);
+    (void)shape;
+    EdRoundRectPathF(p, r.X, r.Y, r.Width, r.Height, r.Width * 0.22f);
 }
 
-// Зразок: 0 — кільце (колір контуру), 1 — кружок, 2 — квадратик (заливка).
-// Напівпрозорий колір лягає на шахівницю: прозорість видно, не розкриваючи
-// палітру. Тонка облямівка — щоб білий не зникав на світлій темі.
+// Зразок: 0 — рамка (колір контуру: квадратик із діркою), 2 — суцільний
+// квадратик (заливка й колір самої позначки). Напівпрозорий колір лягає на
+// шахівницю: прозорість видно, не розкриваючи палітру. Тонка облямівка — щоб
+// білий не зникав на світлій темі.
 void EdSwatchShape(Gdiplus::Graphics& g, const Gdiplus::RectF& r, int shape, COLORREF c, int alpha)
 {
     Gdiplus::GraphicsPath p;
     EdSwatchPath(p, r, shape);
     if (shape == 0) {
-        const float th = r.Width * 0.26f;
-        p.AddEllipse(r.X + th, r.Y + th, r.Width - th * 2, r.Height - th * 2);   // дірка
+        const float th = r.Width * 0.28f;
+        // ⚠ Дірку — ОКРЕМИМ шляхом: EdRoundRectPathF починає з Reset і стер би
+        // зовнішній квадрат, лишивши від рамки маленький суцільний квадратик.
+        Gdiplus::GraphicsPath hole;
+        EdRoundRectPathF(hole, r.X + th, r.Y + th, r.Width - th * 2, r.Height - th * 2,
+                         r.Width * 0.08f);
+        p.AddPath(&hole, FALSE);
     }
     if (alpha < 100)
         if (Gdiplus::Bitmap* tile = EdCheckerTile()) {
@@ -11112,10 +11126,10 @@ void EdSwatchAuto(Gdiplus::Graphics& g, const Gdiplus::RectF& r)
     g.DrawPath(&bd, &p);
 }
 
-// Кнопка кольору в смузі. Форма зразка каже, ЩО це за колір: кільце — контур,
-// кружок — колір самої позначки, квадратик — заливка, кружок в ореолі —
-// обводка напису, кружок із цифрою — цифра лічильника. Так дві кнопки поруч
-// не бувають однакові (урок CAPS-64).
+// Кнопка кольору в смузі. Усі зразки — квадратики (CAPS-66), а наповнення
+// каже, ЩО це за колір: рамка — контур, суцільний — заливка чи колір самої
+// позначки, квадратик у «ореолі» — обводка напису, квадратик із цифрою — цифра
+// лічильника. Так дві кнопки поруч не бувають однакові (урок CAPS-64).
 void EdPaintChip(HDC dc, Gdiplus::Graphics& g, const RECT& inner, int gi, const EdTheme& t)
 {
     const EdKind k = EdStripKind();
@@ -11129,23 +11143,23 @@ void EdPaintChip(HDC dc, Gdiplus::Graphics& g, const RECT& inner, int gi, const 
         return;
     }
     if (gi == kEdPickPaint) {
-        const int shape = EdMainIsStroke(k) ? 0 : 1;
+        const int shape = EdMainIsStroke(k) ? 0 : 2;
         if (p.off1) EdSwatchNone(g, r, shape, t, false);
         else        EdSwatchShape(g, r, shape, p.c1, p.a1);
         return;
     }
     if (k == EdKind::Counter) {
-        EdSwatchShape(g, r, 1, p.c1, 100);
+        EdSwatchShape(g, r, 2, p.c1, 100);
         RECT tr = { (int)r.X, (int)r.Y, (int)(r.X + d), (int)(r.Y + d) + 1 };
         EdDrawText(dc, tr, L"1", g_edFontBold, p.on2 ? p.c2 : EdOnColor(p.c1),
                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         return;
     }
     if (k == EdKind::Text) {
-        if (!p.on2) { EdSwatchNone(g, r, 1, t, false); return; }
-        EdSwatchShape(g, r, 1, p.c2, p.a2);
+        if (!p.on2) { EdSwatchNone(g, r, 2, t, false); return; }
+        EdSwatchShape(g, r, 2, p.c2, p.a2);
         const float di = d * 0.46f;
-        EdSwatchShape(g, Gdiplus::RectF(cx - di / 2, cy - di / 2, di, di), 1, p.c1, 100);
+        EdSwatchShape(g, Gdiplus::RectF(cx - di / 2, cy - di / 2, di, di), 2, p.c1, 100);
         return;
     }
     if (!p.on2) EdSwatchNone(g, r, 2, t, false);
@@ -17286,7 +17300,8 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (wp == VK_RETURN || (wp == 'C' && ovCtrl)) { EdOverlayCopy(hwnd); return 0; }
             if (wp == 'S' && ovCtrl) { EdOverlayStore(hwnd); return 0; }
             if (wp == 'C' || wp == 'O') return 0;
-            if (wp == VK_ESCAPE && g_edPickOpen < 0 && g_edSel < 0 && g_edTool == EdTool::Select) {
+            if (wp == VK_ESCAPE && g_edPickOpen < 0 && g_edSel < 0 &&
+                (g_edTool == EdTool::Select || g_edTool == kEdStartTool)) {
                 EdOverlayEsc(hwnd);
                 return 0;
             }
@@ -17435,7 +17450,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             if (g_edCropping) { EdCropFinish(false); return 0; }
             if (g_edSel >= 0) { g_edSel = -1; InvalidateRect(hwnd, nullptr, FALSE); }
-            else if (g_edTool != EdTool::Select) { g_edTool = EdTool::Select; InvalidateRect(hwnd, nullptr, FALSE); }
+            else if (g_edTool != EdTool::Select && g_edTool != kEdStartTool) { g_edTool = EdTool::Select; InvalidateRect(hwnd, nullptr, FALSE); }
             else if (EdConfirmClose()) DestroyWindow(hwnd);
             return 0;
         case VK_F1:
@@ -17555,7 +17570,7 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edRedo.clear();
     EdSelClear();
     g_edNextGrp = 1;
-    g_edTool = EdTool::Select;
+    g_edTool = kEdStartTool;            // CAPS-66
     g_edZoom = 1.0f;
     g_edPanX = g_edPanY = 0;
     g_edPanelOpen = true;
@@ -18602,7 +18617,10 @@ void EdDocApply(EdDoc& d, const wchar_t* path)
     g_edUndo.clear();
     g_edRedo.clear();
     EdSelClear();
-    g_edTool = EdTool::Select;
+    // CAPS-66: збережений документ із позначками відкривається на «Виборі» —
+    // його зазвичай відкривають, щоб поправити вже намальоване; без позначок
+    // — як свіжий знімок, із прямокутником.
+    g_edTool = g_edObjs.empty() ? kEdStartTool : EdTool::Select;
     g_edZoom = 1.0f;
     g_edPanX = g_edPanY = 0;
     g_edSaved = true;                   // щойно з файлу — змін ще немає
@@ -19599,7 +19617,7 @@ void EdOpenOverlay(HINSTANCE hInst, CapShot& whole, const RECT& monRc, const REC
     if (c.bottom > g_edImgH) c.bottom = g_edImgH;
     if (c.right - c.left < 4 || c.bottom - c.top < 4) c = RECT{ 0, 0, g_edImgW, g_edImgH };
     g_edCrop = c;
-    g_edTool = EdTool::Select;
+    g_edTool = kEdStartTool;            // CAPS-66
     EdLayout(g_edWnd);
     InvalidateRect(g_edWnd, nullptr, FALSE);
     SetForegroundWindow(g_edWnd);
