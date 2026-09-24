@@ -644,7 +644,23 @@ X(EdAspectFree,       L"Вільно",                        L"Free")          
 X(EdFmtOutside,       L"Поза кадром: %d",               L"Outside the frame: %d")                      \
 X(EdTipAspect,        L"Пропорції кадру",               L"Frame proportions")                          \
 X(EdOutline,          L"Контур",                        L"Outline")                                    \
-X(EdFilled,           L"Заливка",                       L"Filled")                                     \
+X(EdFilled,           L"Заливка",                       L"Fill")                                       \
+X(EdPaintColor,       L"Колір",                         L"Colour")                                     \
+X(EdPaintHalo,        L"Обводка",                       L"Outline")                                    \
+X(EdPaintDigit,       L"Цифра",                         L"Number")                                     \
+X(EdPaintNone,        L"Немає",                         L"None")                                       \
+X(EdPaintAuto,        L"Авто: чорна чи біла, що краще читається",                                      \
+                      L"Auto: black or white, whichever reads better")                                 \
+X(EdTipPaintStroke,   L"Колір і прозорість контуру",    L"Outline colour and opacity")                 \
+X(EdTipPaintMain,     L"Колір і прозорість",            L"Colour and opacity")                         \
+X(EdTipPaintFill,     L"Заливка: колір і прозорість",   L"Fill colour and opacity")                    \
+X(EdTipPaintHalo,     L"Обводка напису",                L"Text outline")                               \
+X(EdTipPaintDigit,    L"Колір цифри",                   L"Number colour")                              \
+X(EdTipNoStroke,      L"Без контуру — лише заливка",    L"No outline — fill only")                     \
+X(EdTipNoFill,        L"Без заливки",                   L"No fill")                                    \
+X(EdTipNoHalo,        L"Без обводки",                   L"No outline")                                 \
+X(EdTipDigitGroup,    L"Колір цифри · подвійний клік — на всю групу",                                  \
+                      L"Number colour · double-click applies to the whole group")                      \
 X(CapKeepTool,        L"Лишати інструмент активним після малювання",                                   \
                       L"Keep the tool active after drawing")                                           \
 X(EdToolRect,         L"Прямокутник",                   L"Rectangle")                                  \
@@ -718,9 +734,6 @@ X(EdTipItalic,        L"Курсив",                        L"Italic")        
 X(EdTipAlignL,        L"Рядки ліворуч",                 L"Align left")                                 \
 X(EdTipAlignC,        L"Рядки по центру",               L"Align centre")                               \
 X(EdTipAlignR,        L"Рядки праворуч",                L"Align right")                                \
-X(EdTipStroke0,       L"Без обводки",                   L"No outline")                                 \
-X(EdTipStroke1,       L"Світла обводка",                L"Light outline")                              \
-X(EdTipStroke2,       L"Темна обводка",                 L"Dark outline")                               \
 X(EdTipAlpha,         L"Прозорість",                    L"Opacity")                                    \
 X(EdTipFront,         L"На передній план",              L"Bring to front")                             \
 X(EdTipBack,          L"На задній план",                L"Send to back")                               \
@@ -773,6 +786,8 @@ X(EdHelpBody,         L"Інструменти: V вибір, R прямокут
                       L"Shift під час малювання — квадрат, коло, кут через 45°\n"                       \
                       L"Текст: Enter — готово, Shift+Enter — новий рядок,\n"                            \
                       L"подвійний клік по напису — відкрити на правку\n"                                \
+                      L"1–8 — колір, Shift+1–8 — заливка, обводка чи цифра,\n"                         \
+                      L"Shift+0 — прибрати заливку чи обводку\n"                                       \
                       L"Стрілки — посунути вибране, з Shift — на 10 точок\n"                                  \
                       L"Delete — видалити вибране\nCtrl+Z, Ctrl+Y — скасувати й повторити\n"           \
                       L"Ctrl+O — відкрити, Ctrl+C — копіювати, Ctrl+S — зберегти\n"                                        \
@@ -784,6 +799,8 @@ X(EdHelpBody,         L"Інструменти: V вибір, R прямокут
                       L"Shift while drawing — square, circle, 45° steps\n"                              \
                       L"Text: Enter finishes, Shift+Enter adds a line,\n"                               \
                       L"double click a caption to edit it again\n"                                      \
+                      L"1–8 — colour, Shift+1–8 — fill, outline or number,\n"                          \
+                      L"Shift+0 — remove the fill or outline\n"                                        \
                       L"Arrows nudge the selection, with Shift by 10 points\n"                                \
                       L"Delete — remove the selection\nCtrl+Z, Ctrl+Y — undo and redo\n"               \
                       L"Ctrl+C — copy, Ctrl+S — save\n"                                                 \
@@ -8210,7 +8227,16 @@ struct EdObj {
     COLORREF color;
     int      thick;           // товщина в пікселях ЗНІМКА, не екрана
     int      alpha;           // 10..100 %
-    bool     filled;          // лише Rect і Ellipse
+    // CAPS-49: другий колір — у кожного виду свій смисл: у прямокутника й еліпса
+    // заливка, у напису обводка, у лічильника цифра. on2 = 0 — «немає» (у цифри
+    // «авто»: чорна чи біла за контрастом). Нульові поля = жодного другого
+    // кольору, тобто поведінка до CAPS-49 для всього, що створено не з палітри.
+    // noMain — у прямокутника й еліпса вимкнено сам контур: суцільна плашка,
+    // якою була колишня «Заливка».
+    bool     noMain;
+    int      on2;
+    COLORREF color2;
+    int      alpha2;          // 10..100 %; у цифри лічильника не діє
     std::vector<POINT> pts;   // лише Pen: сам слід, у координатах зображення
     // Далі — лише Text. Кегль, як і товщина, у пікселях ЗНІМКА: обраний розмір
     // завжди дає однаковий напис у файлі, байдуже, який масштаб на екрані.
@@ -8218,7 +8244,6 @@ struct EdObj {
     int      size;
     bool     bold, italic;
     int      align;           // 0 ліворуч, 1 по центру, 2 праворуч
-    int      outline;         // 0 без обводки, 1 світла, 2 темна
     // Ширина блока в пікселях знімка. 0 = блок сам по тексту, і тоді
     // вирівнювати немає відносно чого: рядок дорівнює блоку. Розтягнута
     // ручкою ширина вмикає переноси, і аж тоді вирівнювання щось означає.
@@ -8686,8 +8711,19 @@ std::vector<EdSnap> g_edUndo, g_edRedo;
 EdTool   g_edTool  = EdTool::Select;
 COLORREF g_edColor = RGB(232, 17, 35);   // типовий колір нових позначок
 int      g_edThick = 4;
-bool     g_edFill  = false;   // типово контур: заливка ховає те, що позначають
 int      g_edAlpha = 100;
+// CAPS-49: типові другі кольори — окремо для кожного смислу, бо «заливка»,
+// «обводка» й «цифра» — різні речі, і вибір одного не має міняти інших.
+// Типово без заливки: вона ховає те, що позначають.
+bool     g_edNoMain     = false;
+int      g_edFillOn     = 0;
+COLORREF g_edFillColor  = RGB(255, 212, 0);
+int      g_edFillAlpha  = 100;
+int      g_edHaloOn     = 1;
+COLORREF g_edHaloColor  = RGB(255, 255, 255);
+int      g_edHaloAlpha  = 100;
+int      g_edDigitOn    = 0;
+COLORREF g_edDigitColor = RGB(255, 255, 255);
 // Типово напис із світлою обводкою: критерій готовності етапу — щоб текст
 // читався і на світлому, і на темному тлі, а червоне без обводки на темному
 // тлі не читається зовсім.
@@ -8695,7 +8731,6 @@ int      g_edSize    = 32;
 bool     g_edBold    = true;
 bool     g_edItalic  = false;
 int      g_edAlign   = 0;
-int      g_edOutline = 1;
 // Типова сила приховування навмисно висока: інструмент існує, щоб під ним
 // нічого не читалося. Ослабити її користувач може свідомо, посиливши — ні.
 int      g_edHideMode = 1;        // типово пікселі: вони чесніші за розмиття
@@ -8721,6 +8756,48 @@ double   g_edShotScale = 1.0;
 double   g_capNextScale = 1.0;           // для наступного EdOpenBitmap (ставить CapTake)
 constexpr int kEdPickEnds = 4;           // CAPS-64: панель «Кінці» (початок, кінець, розмір)
 constexpr int kEdPickCorners = 5;        // CAPS-58: «Кути»
+// CAPS-41/49: палітри теж випадні — основний колір, другий колір і окрема
+// «Прозорість» для позначок без кольору (зображення, емодзі, розмиття).
+constexpr int kEdPickPaint  = 6;
+constexpr int kEdPickPaint2 = 7;
+constexpr int kEdPickAlpha  = 8;
+constexpr int kEdPaintNone  = 8;         // клітинка «Немає»/«Авто» у палітрі
+
+// Другий колір є у прямокутника, еліпса, напису й лічильника; власна
+// прозорість — у всіх, крім цифри: цифра — частина кружечка.
+bool EdHas2(EdKind k)
+{
+    return k == EdKind::Rect || k == EdKind::Ellipse || k == EdKind::Text || k == EdKind::Counter;
+}
+bool EdHas2Alpha(EdKind k) { return EdHas2(k) && k != EdKind::Counter; }
+// Контур — лінія, що обводить: у цих видів основний колір малюється кільцем,
+// у решти (напис, кружечок, штамп, маркер) — суцільним кружком.
+bool EdMainIsStroke(EdKind k)
+{
+    return k == EdKind::Rect || k == EdKind::Ellipse || k == EdKind::Line || k == EdKind::Pen;
+}
+
+struct EdDef2 { int* on; COLORREF* col; int* alpha; };
+EdDef2 EdDefaults2(EdKind k)
+{
+    if (k == EdKind::Text)    return { &g_edHaloOn, &g_edHaloColor, &g_edHaloAlpha };
+    if (k == EdKind::Counter) return { &g_edDigitOn, &g_edDigitColor, nullptr };
+    return { &g_edFillOn, &g_edFillColor, &g_edFillAlpha };
+}
+
+// Нова позначка бере другий колір із типових свого виду.
+void EdInit2(EdObj& o)
+{
+    o.on2 = 0; o.color2 = RGB(255, 255, 255); o.alpha2 = 100;
+    o.noMain = false;
+    if (!EdHas2(o.kind)) return;
+    const EdDef2 d = EdDefaults2(o.kind);
+    o.on2 = *d.on;
+    o.color2 = *d.col;
+    o.alpha2 = d.alpha ? *d.alpha : 100;
+    // Фігури без контуру й без заливки не буває: її не було б видно.
+    o.noMain = (o.kind == EdKind::Rect || o.kind == EdKind::Ellipse) && g_edNoMain && o.on2;
+}
 
 int EdCornerPx(int level)
 {
@@ -9834,6 +9911,8 @@ int EdPickCount(int group);           // селект наконечника д�
 // CAPS-64: розкладка розкритого селекта — нижче, разом зі зразками.
 int EdPickLayout(int group, const RECT& btn, const RECT& client, RECT out[16]);
 extern RECT g_edPickBox;
+extern RECT g_edPickSlider;
+extern int  g_edPickSliderSlot;
 
 // ---- CAPS-33: панелі оверлея біля рамки -------------------------------------
 // Правило власника: рейка й смуга стоять на звичних місцях відносно рамки —
@@ -10145,16 +10224,25 @@ void EdLayout(HWND hwnd)
                 ((hasSel ? g_edObjs[g_edSel].stamp : g_edStamp) >= kEdEmojiBase);
             const bool showPal = ((kk != EdKind::Hide) || (curMode == 2)) && !emojiStamp &&
                                  !cropMode && kk != EdKind::Image;
+            // CAPS-41/49: колір — кнопкою-зразком із випадною палітрою, а не
+            // вісьмома зразками в рядок. Друга кнопка — другий колір виду
+            // (заливка, обводка, цифра). Без кольору — лише «Прозорість».
             if (showPal) {
-                const int sw = EdPx(22), sg = EdPx(5);
-                for (int i = 0; i < npal; ++i) {
-                    RECT r = EdPill(x, cy, sw, sw);
-                    EdAdd(r, EdHit::Swatch, i);
-                    x = r.right + sg;
+                RECT a = EdPill(x, cy, EdPx(44), EdPx(28));
+                EdAdd(a, EdHit::Pick, kEdPickPaint);
+                x = a.right + EdPx(4);
+                if (EdHas2(kk)) {
+                    RECT b2 = EdPill(x, cy, EdPx(44), EdPx(28));
+                    EdAdd(b2, EdHit::Pick, kEdPickPaint2);
+                    x = b2.right + EdPx(4);
                 }
-                x += gap - sg;
+                x += gap - EdPx(4);
+            } else if (!cropMode) {
+                RECT a = EdPill(x, cy, EdPx(44), EdPx(28));
+                EdAdd(a, EdHit::Pick, kEdPickAlpha);
+                x = a.right + gap;
             }
-            (void)pal;
+            (void)pal; (void)npal;
 
             if (EdHasThick(kk) && !cropMode) {
                 for (int i = 0; i < 3; ++i) {
@@ -10206,32 +10294,9 @@ void EdLayout(HWND hwnd)
                     x = r.right + EdPx(2);
                 }
                 x += EdPx(8);
-                for (int i = 0; i < 3; ++i) {
-                    RECT r = EdPill(x, cy, EdPx(28), EdPx(26));
-                    EdAdd(r, EdHit::Stroke, i);
-                    x = r.right + EdPx(2);
-                }
-                x += EdPx(10);
+                // CAPS-49: три кнопки обводки (без/світла/темна) замінила кнопка
+                // «Обводка» з палітрою — вона стоїть поруч із кольором.
             }
-
-            // Заливка має сенс лише для замкнених фігур: у лінії заливати нічого.
-            // Кадр — узагалі не фігура, хоч його вид і рахується прямокутником.
-            if (EdCanFill(kk) && !cropMode) {
-                const int w1 = EdTextWidth(dc, S(Str::EdOutline), g_edFont) + EdPx(24);
-                const int w2 = EdTextWidth(dc, S(Str::EdFilled), g_edFont) + EdPx(24);
-                RECT a = EdPill(x, cy, w1, EdPx(28)); EdAdd(a, EdHit::Fill, 0);
-                // Проміжок такий самий, як між товщинами: злиті кнопки читалися
-                // як один перемикач із двох половин, а це два різні стани.
-                RECT b2 = EdPill(a.right + EdPx(4), cy, w2, EdPx(28)); EdAdd(b2, EdHit::Fill, 1);
-                x = b2.right + gap;
-            }
-
-            RECT ic = EdPill(x, cy, cropMode ? 0 : EdPx(18), EdPx(18));
-            if (!cropMode) EdAdd(ic, EdHit::None, 0);
-            x = ic.right + (cropMode ? 0 : EdPx(8));
-            RECT sl = EdPill(x, cy, cropMode ? 0 : EdPx(76), EdPx(20));
-            if (!cropMode) EdAdd(sl, EdHit::Opacity, 0);
-            x = sl.right + EdPx(8) + EdPx(44) + gap;
 
             if (kk == EdKind::Counter) {
                 RECT rb = EdPill(x, cy, EdPx(32), EdPx(28));
@@ -10341,7 +10406,8 @@ void EdLayout(HWND hwnd)
             // Тло панелі — теж ділянка: клік між клітинками не має закривати її
             // й не має падати на полотно під нею.
             EdAdd(g_edPickBox, EdHit::PickItem, -1);
-            for (int i = 0; i < n; ++i) EdAdd(cells[i], EdHit::PickItem, i);
+            for (int i = 0; i < n; ++i) if (!IsRectEmpty(&cells[i])) EdAdd(cells[i], EdHit::PickItem, i);
+            if (!IsRectEmpty(&g_edPickSlider)) EdAdd(g_edPickSlider, EdHit::Opacity, g_edPickSliderSlot);
         }
     }
 
@@ -10729,6 +10795,81 @@ int EdPickValue(int group)
     }
 }
 
+// ---- CAPS-41/49: палітри ----------------------------------------------------
+
+EdKind EdStripKind()
+{
+    if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) return g_edObjs[g_edSel].kind;
+    return EdToolKind(g_edTool);
+}
+
+// Чи є в позначки основний колір: у зображення, емодзі, розмиття й пікселів
+// його немає — там лише прозорість.
+bool EdStripPaintable()
+{
+    const bool sel = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size());
+    const EdKind k = EdStripKind();
+    if (g_edTool == EdTool::Crop || k == EdKind::Image) return false;
+    if (k == EdKind::Hide && (sel ? g_edObjs[g_edSel].mode : g_edHideMode) != 2) return false;
+    if (k == EdKind::Stamp && (sel ? g_edObjs[g_edSel].stamp : g_edStamp) >= kEdEmojiBase) return false;
+    return true;
+}
+
+// Обидва кольори зараз — у вибраної позначки або типові для наступної.
+struct EdPaintState { COLORREF c1; int a1; bool off1; int on2; COLORREF c2; int a2; };
+EdPaintState EdPaintNow()
+{
+    const EdKind k = EdStripKind();
+    EdPaintState p = {};
+    if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) {
+        const EdObj& o = g_edObjs[g_edSel];
+        p.c1 = o.color; p.a1 = o.alpha; p.off1 = o.noMain;
+        p.on2 = o.on2;  p.c2 = o.color2; p.a2 = o.alpha2;
+        return p;
+    }
+    p.c1 = (k == EdKind::Mark) ? g_edMarkColor : g_edColor;
+    p.a1 = g_edAlpha;
+    const EdDef2 d = EdDefaults2(k);
+    p.on2 = EdHas2(k) ? *d.on : 0;
+    p.c2 = *d.col;
+    p.a2 = d.alpha ? *d.alpha : 100;
+    p.off1 = EdCanFill(k) && g_edNoMain && p.on2;
+    return p;
+}
+
+// Скільки кольорів у палітрі. У маркера — свої чотири, решта — спільні вісім.
+int EdPaintSwatches(int group, const COLORREF** pal)
+{
+    *pal = nullptr;
+    if (group == kEdPickAlpha) return 0;
+    int n = 8;
+    *pal = (group == kEdPickPaint) ? EdPaletteFor(EdStripKind(), n) : kEdPalette;
+    return n;
+}
+
+// «Немає» є в контуру фігури й у будь-якого другого кольору (у цифри — «Авто»).
+bool EdPaintHasNone(int group)
+{
+    if (group == kEdPickPaint) return EdCanFill(EdStripKind());
+    return group == kEdPickPaint2;
+}
+
+// Номер повзунка в палітрі: 0 — основна прозорість, 1 — другого кольору, -1 — нема.
+int EdPaintSliderSlot(int group)
+{
+    if (group == kEdPickPaint2) return EdHas2Alpha(EdStripKind()) ? 1 : -1;
+    return 0;
+}
+
+// «Немає» недоступне, коли друга половина фігури вже вимкнена: фігура без
+// контуру й без заливки просто зникла б з полотна.
+bool EdPaintNoneBlocked(int group)
+{
+    if (!EdCanFill(EdStripKind())) return false;
+    const EdPaintState p = EdPaintNow();
+    return (group == kEdPickPaint) ? !p.on2 : p.off1;
+}
+
 // CAPS-64: лінія з обома кінцями, як вона ляже на знімок. -1 — кінець не
 // показуємо зовсім (рядок панелі про інший кінець), 0 — «без наконечника»:
 // маленька риска-упор, щоб кнопка не зливалась зі «Стилем» (обидві інакше —
@@ -10782,16 +10923,153 @@ void EdCornerSample(Gdiplus::Graphics& g, const RECT& r, int level, const Gdiplu
     g.SetClip(&oldClip);
 }
 
+// ---- CAPS-41/49: зразки кольору -------------------------------------------
+
+Gdiplus::Bitmap* EdCheckerTile();
+COLORREF EdOnColor(COLORREF c);
+
+void EdSwatchPath(Gdiplus::GraphicsPath& p, const Gdiplus::RectF& r, int shape)
+{
+    if (shape == 2) EdRoundRectPathF(p, r.X, r.Y, r.Width, r.Height, r.Width * 0.24f);
+    else            p.AddEllipse(r);
+}
+
+// Зразок: 0 — кільце (колір контуру), 1 — кружок, 2 — квадратик (заливка).
+// Напівпрозорий колір лягає на шахівницю: прозорість видно, не розкриваючи
+// палітру. Тонка облямівка — щоб білий не зникав на світлій темі.
+void EdSwatchShape(Gdiplus::Graphics& g, const Gdiplus::RectF& r, int shape, COLORREF c, int alpha)
+{
+    Gdiplus::GraphicsPath p;
+    EdSwatchPath(p, r, shape);
+    if (shape == 0) {
+        const float th = r.Width * 0.26f;
+        p.AddEllipse(r.X + th, r.Y + th, r.Width - th * 2, r.Height - th * 2);   // дірка
+    }
+    if (alpha < 100)
+        if (Gdiplus::Bitmap* tile = EdCheckerTile()) {
+            Gdiplus::TextureBrush tb(tile);
+            tb.ScaleTransform(0.5f, 0.5f);
+            g.FillPath(&tb, &p);
+        }
+    Gdiplus::SolidBrush b(EdC(c, alpha * 255 / 100));
+    g.FillPath(&b, &p);
+    Gdiplus::Pen bd(EdC(g_edDark ? RGB(120, 120, 128) : RGB(170, 170, 176)), 1.0f);
+    g.DrawPath(&bd, &p);
+}
+
+// «Немає»: порожня форма, перекреслена червоним — загальноприйнятий знак.
+void EdSwatchNone(Gdiplus::Graphics& g, const Gdiplus::RectF& r, int shape, const EdTheme& t, bool dim)
+{
+    Gdiplus::GraphicsPath p;
+    EdSwatchPath(p, r, shape);
+    Gdiplus::SolidBrush bg(EdC(g_edDark ? RGB(44, 44, 48) : RGB(255, 255, 255), dim ? 90 : 255));
+    g.FillPath(&bg, &p);
+    Gdiplus::Pen bd(EdC(t.text2, dim ? 70 : 200), 1.0f);
+    g.DrawPath(&bd, &p);
+    Gdiplus::Region old; g.GetClip(&old);
+    g.SetClip(&p, Gdiplus::CombineModeIntersect);
+    Gdiplus::Pen red(EdC(RGB(232, 17, 35), dim ? 80 : 255), (float)EdPx(2));
+    g.DrawLine(&red, r.X, r.Y + r.Height, r.X + r.Width, r.Y);
+    g.SetClip(&old);
+}
+
+// «Авто» для цифри: квадратик навпіл чорний і білий — «котрий краще читається».
+void EdSwatchAuto(Gdiplus::Graphics& g, const Gdiplus::RectF& r)
+{
+    Gdiplus::GraphicsPath p;
+    EdSwatchPath(p, r, 2);
+    Gdiplus::Region old; g.GetClip(&old);
+    g.SetClip(&p, Gdiplus::CombineModeIntersect);
+    Gdiplus::SolidBrush w(EdC(RGB(255, 255, 255))), k(EdC(RGB(24, 24, 28)));
+    g.FillRectangle(&w, r);
+    Gdiplus::PointF tri[3] = { Gdiplus::PointF(r.X + r.Width, r.Y),
+                               Gdiplus::PointF(r.X + r.Width, r.Y + r.Height),
+                               Gdiplus::PointF(r.X, r.Y + r.Height) };
+    g.FillPolygon(&k, tri, 3);
+    g.SetClip(&old);
+    Gdiplus::Pen bd(EdC(g_edDark ? RGB(120, 120, 128) : RGB(170, 170, 176)), 1.0f);
+    g.DrawPath(&bd, &p);
+}
+
+// Кнопка кольору в смузі. Форма зразка каже, ЩО це за колір: кільце — контур,
+// кружок — колір самої позначки, квадратик — заливка, кружок в ореолі —
+// обводка напису, кружок із цифрою — цифра лічильника. Так дві кнопки поруч
+// не бувають однакові (урок CAPS-64).
+void EdPaintChip(HDC dc, Gdiplus::Graphics& g, const RECT& inner, int gi, const EdTheme& t)
+{
+    const EdKind k = EdStripKind();
+    const EdPaintState p = EdPaintNow();
+    const float d = (float)EdPx(18);
+    const float cx = (inner.left + inner.right) / 2.0f + EdPx(2), cy = (inner.top + inner.bottom) / 2.0f;
+    const Gdiplus::RectF r(cx - d / 2, cy - d / 2, d, d);
+    if (gi == kEdPickAlpha) {
+        RECT ib = { (int)r.X, (int)r.Y, (int)(r.X + d), (int)(r.Y + d) };
+        EdIcon(g, IcoOpacity, ib, EdC(t.text), 1.6f);
+        return;
+    }
+    if (gi == kEdPickPaint) {
+        const int shape = EdMainIsStroke(k) ? 0 : 1;
+        if (p.off1) EdSwatchNone(g, r, shape, t, false);
+        else        EdSwatchShape(g, r, shape, p.c1, p.a1);
+        return;
+    }
+    if (k == EdKind::Counter) {
+        EdSwatchShape(g, r, 1, p.c1, 100);
+        RECT tr = { (int)r.X, (int)r.Y, (int)(r.X + d), (int)(r.Y + d) + 1 };
+        EdDrawText(dc, tr, L"1", g_edFontBold, p.on2 ? p.c2 : EdOnColor(p.c1),
+                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        return;
+    }
+    if (k == EdKind::Text) {
+        if (!p.on2) { EdSwatchNone(g, r, 1, t, false); return; }
+        EdSwatchShape(g, r, 1, p.c2, p.a2);
+        const float di = d * 0.46f;
+        EdSwatchShape(g, Gdiplus::RectF(cx - di / 2, cy - di / 2, di, di), 1, p.c1, 100);
+        return;
+    }
+    if (!p.on2) EdSwatchNone(g, r, 2, t, false);
+    else        EdSwatchShape(g, r, 2, p.c2, p.a2);
+}
+
 // CAPS-64: розкладка розкритого селекта. Звичайні — стовпчик під кнопкою; «Кінці»
 // — три рядки з підписами (початок, кінець, розмір); «Кути» — стовпчик із
 // підписами. Панель не вилазить за вікно: не вміщається внизу — розкривається
 // вгору, за правий край — зсувається ліворуч.
 RECT g_edPickBox = {};
+RECT g_edPickSlider = {};                // CAPS-49: повзунок прозорості в палітрі
+int  g_edPickSliderSlot = -1;
 int EdPickLayout(int group, const RECT& btn, const RECT& client, RECT out[16])
 {
     int n = 0, w = 0, h = 0;
     const int ih = EdPx(32);
-    if (group == kEdPickEnds) {
+    g_edPickSlider = RECT{};
+    g_edPickSliderSlot = -1;
+    if (group >= kEdPickPaint) {
+        // CAPS-41/49: заголовок, рядок кольорів (і «Немає» після проміжку —
+        // клітинка номер kEdPaintNone), під ним — власна прозорість.
+        const COLORREF* pal = nullptr;
+        const int np = EdPaintSwatches(group, &pal);
+        const int pad = EdPx(12), sw = EdPx(24), sg = EdPx(6), top = EdPx(32);
+        int cx = pad;
+        for (int i = 0; i < np; ++i) { out[n++] = RECT{ cx, top, cx + sw, top + sw }; cx += sw + sg; }
+        if (EdPaintHasNone(group)) {
+            while (n < kEdPaintNone) out[n++] = RECT{};   // номер клітинки = kEdPaintNone
+            cx += EdPx(8);
+            out[n++] = RECT{ cx, top, cx + sw, top + sw };
+            cx += sw + sg;
+        }
+        w = cx - sg + pad;
+        if (w < EdPx(240)) w = EdPx(240);
+        h = np ? top + sw : EdPx(28);
+        const int slot = EdPaintSliderSlot(group);
+        if (slot >= 0) {
+            const int sy = h + EdPx(14);
+            g_edPickSlider = RECT{ pad + EdPx(26), sy, w - pad - EdPx(46), sy + EdPx(20) };
+            g_edPickSliderSlot = slot;
+            h = sy + EdPx(20);
+        }
+        h += pad;
+    } else if (group == kEdPickEnds) {
         const int lab = EdPx(78), iw = EdPx(52);
         for (int row = 0; row < 3; ++row) {
             const int cnt = (row == 2) ? 3 : 4;
@@ -10814,7 +11092,8 @@ int EdPickLayout(int group, const RECT& btn, const RECT& client, RECT out[16])
     if (top + h > client.bottom - EdPx(6)) top = btn.top - EdPx(6) - h;
     if (left + w > client.right - EdPx(6)) left = client.right - EdPx(6) - w;
     if (left < client.left + EdPx(6)) left = client.left + EdPx(6);
-    for (int i = 0; i < n; ++i) OffsetRect(&out[i], left, top);
+    for (int i = 0; i < n; ++i) if (!IsRectEmpty(&out[i])) OffsetRect(&out[i], left, top);
+    if (!IsRectEmpty(&g_edPickSlider)) OffsetRect(&g_edPickSlider, left, top);
     g_edPickBox = RECT{ left, top, left + w, top + h };
     return n;
 }
@@ -10908,22 +11187,8 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 
     const EdKind kkp = hasSel ? g_edObjs[g_edSel].kind : EdToolKind(g_edTool);
-    int npalp = 8;
-    const COLORREF* palp = EdPaletteFor(kkp, npalp);
-    const COLORREF cur = hasSel ? g_edObjs[g_edSel].color
-                                : (kkp == EdKind::Mark ? g_edMarkColor : g_edColor);
-    for (int i = 0; i < npalp; ++i) {
-        const RECT* r = EdRegionRect(EdHit::Swatch, i);
-        if (!r) break;
-        Gdiplus::Color f = EdC(palp[i]);
-        Gdiplus::Color bd = EdC(g_edDark ? RGB(90, 90, 96) : RGB(201, 201, 204));
-        EdFillRound(g, *r, (float)EdPx(5), &f, &bd);
-        if (palp[i] == cur) {
-            RECT ring = { r->left - EdPx(3), r->top - EdPx(3), r->right + EdPx(3), r->bottom + EdPx(3) };
-            Gdiplus::Color ac = EdC(t.accent);
-            EdFillRound(g, ring, (float)EdPx(7), nullptr, &ac, (float)EdPx(2));
-        }
-    }
+    // CAPS-49: контур вимкнено — товщина ні на що не впливає, і кнопки це кажуть.
+    const bool thickIdle = EdCanFill(kkp) && EdPaintNow().off1;
 
     {
         const int* tset = EdThickSet(kkp);
@@ -10952,21 +11217,9 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
             if (kkp == EdKind::Mark) bh = EdPx(tset[i]) / 3;
             RECT bar = { r->left + EdPx(8), (r->top + r->bottom) / 2 - bh / 2,
                          r->right - EdPx(8), (r->top + r->bottom) / 2 - bh / 2 + (bh < 2 ? 2 : bh) };
-            Gdiplus::Color bc = EdC(on ? t.accent : t.text);
+            Gdiplus::Color bc = EdC(thickIdle ? t.text2 : on ? t.accent : t.text, thickIdle ? 110 : 255);
             EdFillRound(g, bar, (float)(bh / 2.0), &bc, nullptr);
             (void)tset;
-        }
-    }
-    {
-        const bool fl = hasSel ? g_edObjs[g_edSel].filled : g_edFill;
-        const Str lab[2] = { Str::EdOutline, Str::EdFilled };
-        for (int i = 0; i < 2; ++i) {
-            const RECT* r = EdRegionRect(EdHit::Fill, i);
-            if (!r) continue;
-            const bool on = (i == (fl ? 1 : 0));
-            EdPaintButton(g, *r, t, on, g_edHotWhat == EdHit::Fill && g_edHotIdx == i, false);
-            EdDrawText(dc, *r, S(lab[i]), on ? g_edFontBold : g_edFont, on ? t.accent : t.text,
-                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
     }
 
@@ -10978,7 +11231,6 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         const bool vBold    = selText ? g_edObjs[g_edSel].bold    : g_edBold;
         const bool vItalic  = selText ? g_edObjs[g_edSel].italic  : g_edItalic;
         const int  vAlign   = selText ? g_edObjs[g_edSel].align   : g_edAlign;
-        const int  vOutline = selText ? g_edObjs[g_edSel].outline : g_edOutline;
 
         for (int i = 0; i < 2; ++i) {
             const RECT* r = EdRegionRect(EdHit::Size, i);
@@ -11014,14 +11266,6 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
             EdPaintButton(g, *r, t, on, g_edHotWhat == EdHit::Align && g_edHotIdx == i, false);
             EdIcon(g, IcoAlignL + i, EdIconBox(*r), EdC(on ? t.accent : t.text), 1.5f);
         }
-
-        for (int i = 0; i < 3; ++i) {
-            const RECT* r = EdRegionRect(EdHit::Stroke, i);
-            if (!r) break;
-            const bool on = (i == vOutline);
-            EdPaintButton(g, *r, t, on, g_edHotWhat == EdHit::Stroke && g_edHotIdx == i, false);
-            EdIcon(g, IcoStroke0 + i, EdIconBox(*r), EdC(on ? t.accent : t.text), 1.5f);
-        }
     }
     // CAPS-35: смуга кількох вибраних.
     {
@@ -11043,13 +11287,15 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 
     // CAPS-34: кнопки випадних селектів. Кожна показує поточний вибір.
-    for (int gi = 0; gi <= kEdPickCorners; ++gi) {
+    for (int gi = 0; gi <= kEdPickAlpha; ++gi) {
         const RECT* r = EdRegionRect(EdHit::Pick, gi);
         if (!r) continue;
         const bool open = (g_edPickOpen == gi);
         EdPaintButton(g, *r, t, open, g_edHotWhat == EdHit::Pick && g_edHotIdx == gi, false);
         RECT inner = { r->left, r->top, r->right - EdPx(8), r->bottom };
-        if (gi == kEdPickEnds)
+        if (gi >= kEdPickPaint)
+            EdPaintChip(dc, g, inner, gi, t);
+        else if (gi == kEdPickEnds)
             EdEndsSample(g, inner, EdPickValue(2), EdPickValue(1), EdPickValue(3), EdC(t.text));
         else if (gi == kEdPickCorners)
             EdCornerSample(g, inner, EdPickValue(kEdPickCorners), EdC(t.text));
@@ -11187,17 +11433,7 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         }
     }
 
-    if (const RECT* sl = EdRegionRect(EdHit::Opacity, 0)) {
-        const int a = hasSel ? g_edObjs[g_edSel].alpha : g_edAlpha;
-        RECT ic = { sl->left - EdPx(8) - EdPx(18), (sl->top + sl->bottom) / 2 - EdPx(9),
-                    sl->left - EdPx(8), (sl->top + sl->bottom) / 2 + EdPx(9) };
-        EdIcon(g, IcoOpacity, ic, EdC(t.text2), 1.6f);
-        EdPaintSlider(g, *sl, t, a);
-        wchar_t buf[32];
-        wsprintfW(buf, L"%d %%", a);
-        RECT tv = { sl->right + EdPx(8), g_edRcStrip.top, sl->right + EdPx(8) + EdPx(44), g_edRcStrip.bottom };
-        EdDrawText(dc, tv, buf, g_edFont, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    }
+    // Прозорість переїхала в палітри (CAPS-49): у кожного кольору — своя.
 
     RestoreDC(dc, savedDc);
     g.Restore(clipState);
@@ -11365,7 +11601,7 @@ void EdTextMeasure(EdObj& o)
 // колись знадобиться товста обводка — міняти саме тут.
 float EdStrokeRadius(const EdObj& o, double s)
 {
-    if (o.outline == 0) return 0.0f;
+    if (o.on2 == 0) return 0.0f;
     float r = (float)(o.size * s / 11.0);
     if (r < 1.0f) r = 1.0f;
     if (r > 8.0f) r = 8.0f;
@@ -11593,10 +11829,10 @@ void EdToneReset()
 
 std::wstring EdTileKey(const EdObj& o, double s)
 {
-    wchar_t head[96];
-    wsprintfW(head, L"%d|%d|%d%d|%d|%d|%d|%d|%08X|", (int)(s * 1000 + 0.5), o.size,
-              o.bold ? 1 : 0, o.italic ? 1 : 0, o.align, o.outline, o.alpha, o.boxw,
-              (unsigned)o.color);
+    wchar_t head[128];
+    wsprintfW(head, L"%d|%d|%d%d|%d|%d|%08X|%d|%d|%d|%08X|", (int)(s * 1000 + 0.5), o.size,
+              o.bold ? 1 : 0, o.italic ? 1 : 0, o.align, o.on2, (unsigned)o.color2, o.alpha2,
+              o.alpha, o.boxw, (unsigned)o.color);
     return std::wstring(head) + o.text;
 }
 
@@ -11641,8 +11877,9 @@ const EdTile* EdTextTile(const EdObj& o, double s)
             const D2D1_COLOR_F fc = D2D1::ColorF(GetRValue(o.color) / 255.0f,
                                                  GetGValue(o.color) / 255.0f,
                                                  GetBValue(o.color) / 255.0f, 1.0f);
-            const float hv = (o.outline == 1) ? 1.0f : 0.0f;
-            const D2D1_COLOR_F hc = D2D1::ColorF(hv, hv, hv, 1.0f);
+            const D2D1_COLOR_F hc = D2D1::ColorF(GetRValue(o.color2) / 255.0f,
+                                                 GetGValue(o.color2) / 255.0f,
+                                                 GetBValue(o.color2) / 255.0f, 1.0f);
             rt->CreateSolidColorBrush(fc, &fill);
             rt->CreateSolidColorBrush(hc, &halo);
         }
@@ -11650,6 +11887,16 @@ const EdTile* EdTextTile(const EdObj& o, double s)
             rt->BeginDraw();
             rt->Clear(D2D1::ColorF(0, 0.0f));
             if (rad > 0.0f) {
+                // CAPS-49: прозорість обводки — шаром на всі дванадцять відбитків
+                // разом: напівпрозорий пензель темнішав би там, де вони
+                // перекриваються. Літери лягають поверх шару й лишаються щільні.
+                ID2D1Layer* layer = nullptr;
+                const bool soft = o.alpha2 < 100 && SUCCEEDED(rt->CreateLayer(nullptr, &layer)) && layer;
+                if (soft)
+                    rt->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), nullptr,
+                                                        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                                        D2D1::IdentityMatrix(), o.alpha2 / 100.0f),
+                                  layer);
                 for (int i = 0; i < 12; ++i) {
                     const double a = i * 3.14159265358979 / 6.0;
                     // Обводка завжди одноколірна: кольорові емодзі в ній
@@ -11658,6 +11905,8 @@ const EdTile* EdTextTile(const EdObj& o, double s)
                                                      (float)(pad + sin(a) * rad)),
                                        lay, halo, D2D1_DRAW_TEXT_OPTIONS_NONE);
                 }
+                if (soft) rt->PopLayer();
+                if (layer) layer->Release();
             }
             rt->DrawTextLayout(D2D1::Point2F((float)pad, (float)pad), lay, fill,
                                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
@@ -11817,8 +12066,8 @@ unsigned long long EdObjHash(const EdObj& o)
 {
     unsigned long long h = 1469598103934665603ULL;
     const int f[] = { (int)o.kind, o.x, o.y, o.w, o.h, (int)o.color, o.thick, o.alpha,
-                      o.filled ? 1 : 0, o.size, o.bold ? 1 : 0, o.italic ? 1 : 0,
-                      o.align, o.outline, o.boxw, o.mode, o.strength, o.seq, o.group,
+                      o.noMain ? 1 : 0, o.on2, (int)o.color2, o.alpha2,
+                      o.size, o.bold ? 1 : 0, o.italic ? 1 : 0, o.align, o.boxw, o.mode, o.strength, o.seq, o.group,
                       o.start, o.stamp, o.dash, o.headFront, o.headBack, o.headSize,
                       o.img, o.rot, o.grp };
     for (size_t i = 0; i < sizeof(f) / sizeof(f[0]); ++i) h = EdMix(h, f[i]);
@@ -12107,7 +12356,7 @@ bool EdCounterKind()
     return EdToolKind(g_edTool) == EdKind::Counter;
 }
 
-// Правка всієї групи. Поле: 0 колір, 1 розмір, 2 прозорість — рівно те, що
+// Правка всієї групи. Поле: 0 колір, 1 розмір, 2 прозорість, 3 колір цифри — рівно те, що
 // «зовнішнє» в кружечку. Номер, порядок і початок групи це не чіпає: вони
 // рахуються з порядку, і міняти їх пачкою означало б ламати нумерацію.
 bool EdGroupWould(int field, int value)
@@ -12118,6 +12367,7 @@ bool EdGroupWould(int field, int value)
         if (o.kind != EdKind::Counter || o.group != grp) continue;
         if (field == 0)      { if (o.color != (COLORREF)value) return true; }
         else if (field == 1) { if (o.thick != value)           return true; }
+        else if (field == 3) { if ((o.on2 ? (int)o.color2 : -1) != value) return true; }
         else                 { if (o.alpha != value)           return true; }
     }
     return false;
@@ -12140,6 +12390,10 @@ bool EdGroupSet(int field, int value)
             o.y += (o.h - value) / 2;
             o.w = o.h = value;
             o.thick = value;
+        }
+        else if (field == 3) {             // CAPS-49: колір цифри, -1 — «авто»
+            o.on2 = (value >= 0) ? 1 : 0;
+            if (value >= 0) o.color2 = (COLORREF)value;
         }
         else o.alpha = value;
     }
@@ -12210,7 +12464,7 @@ EdObj EdGlyphObj(const EdObj& o, const wchar_t* glyph, int size, COLORREF col)
     t.bold    = false;
     t.italic  = false;
     t.align   = 0;
-    t.outline = 0;
+    t.on2     = 0;
     t.boxw    = 0;
     t.color   = col;
     t.alpha   = o.alpha;
@@ -12301,29 +12555,42 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
     }
 
     switch (o.kind) {
-    case EdKind::Rect:
+    // CAPS-49: заливка й контур незалежні. Заливка сягає середини лінії контуру
+    // (як у SVG), а без контуру — самого краю: так колишня «Заливка» (контур
+    // вимкнено) малюється піксель у піксель як раніше.
+    case EdKind::Rect: {
+        const bool fill = o.on2 != 0, stroke = !o.noMain;
+        Gdiplus::SolidBrush fb(EdC(o.color2, o.alpha2 * 255 / 100));
+        const float in = stroke ? half : 0.0f;
         if (o.crpx > 0) {
             // CAPS-58: GDI+ не має скругленого прямокутника — шлях із чотирьох дуг.
             // Контур іде по середині лінії, тож і радіус для нього менший на пів товщини.
             const float rad = (float)(o.crpx * s);
-            Gdiplus::GraphicsPath gp;
-            if (o.filled) {
-                EdRoundRectPathF(gp, x, y, w, h, rad);
-                g.FillPath(&brush, &gp);
-            } else {
+            if (fill) {
+                Gdiplus::GraphicsPath gp;
+                EdRoundRectPathF(gp, x + in, y + in, w - in * 2, h - in * 2, rad - in);
+                g.FillPath(&fb, &gp);
+            }
+            if (stroke) {
+                Gdiplus::GraphicsPath gp;
                 EdApplyDash(pen, o.dash);
                 EdRoundRectPathF(gp, x + half, y + half, w - pw, h - pw, rad - half);
                 g.DrawPath(&pen, &gp);
             }
             break;
         }
-        if (o.filled) g.FillRectangle(&brush, x, y, w, h);
-        else { EdApplyDash(pen, o.dash); g.DrawRectangle(&pen, x + half, y + half, w - pw, h - pw); }
+        if (fill) g.FillRectangle(&fb, x + in, y + in, w - in * 2, h - in * 2);
+        if (stroke) { EdApplyDash(pen, o.dash); g.DrawRectangle(&pen, x + half, y + half, w - pw, h - pw); }
         break;
-    case EdKind::Ellipse:
-        if (o.filled) g.FillEllipse(&brush, x, y, w, h);
-        else { EdApplyDash(pen, o.dash); g.DrawEllipse(&pen, x + half, y + half, w - pw, h - pw); }
+    }
+    case EdKind::Ellipse: {
+        const bool fill = o.on2 != 0, stroke = !o.noMain;
+        Gdiplus::SolidBrush fb(EdC(o.color2, o.alpha2 * 255 / 100));
+        const float in = stroke ? half : 0.0f;
+        if (fill) g.FillEllipse(&fb, x + in, y + in, w - in * 2, h - in * 2);
+        if (stroke) { EdApplyDash(pen, o.dash); g.DrawEllipse(&pen, x + half, y + half, w - pw, h - pw); }
         break;
+    }
 
     case EdKind::Line: {
         // Наконечники малюємо самі — див. EdDrawHead. AdjustableArrowCap мав
@@ -12415,7 +12682,7 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
                       w - (float)(w / 16.0), h - (float)(h / 16.0));
         wchar_t nb[16];
         wsprintfW(nb, L"%d", EdCounterNumber(o));
-        EdObj t = EdGlyphObj(o, nb, o.thick * 52 / 100, EdOnColor(o.color));
+        EdObj t = EdGlyphObj(o, nb, o.thick * 52 / 100, o.on2 ? o.color2 : EdOnColor(o.color));
         t.bold = true;
         const EdTile* tile = EdTextTile(t, s);
         if (tile && tile->bmp) {
@@ -13149,12 +13416,80 @@ void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 }
 
+// CAPS-41/49: розкрита палітра. Заголовок каже, ЯКИЙ колір міняємо (контур,
+// заливка, обводка, цифра) — дві палітри поруч інакше не відрізнити.
+void EdPaintPalette(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
+{
+    const int grp = g_edPickOpen;
+    const EdKind k = EdStripKind();
+    const EdPaintState p = EdPaintNow();
+    Str title = Str::EdTipAlpha;
+    if (grp == kEdPickPaint)
+        title = EdCanFill(k) ? Str::EdOutline : Str::EdPaintColor;
+    else if (grp == kEdPickPaint2)
+        title = (k == EdKind::Text) ? Str::EdPaintHalo : (k == EdKind::Counter) ? Str::EdPaintDigit
+                                                                                : Str::EdFilled;
+    RECT tr = { g_edPickBox.left + EdPx(12), g_edPickBox.top + EdPx(4),
+                g_edPickBox.right - EdPx(12), g_edPickBox.top + EdPx(28) };
+    EdDrawText(dc, tr, S(title), g_edFontBold, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    const COLORREF* pal = nullptr;
+    const int np = EdPaintSwatches(grp, &pal);
+    const bool curNone = (grp == kEdPickPaint) ? p.off1 : !p.on2;
+    const COLORREF cur = (grp == kEdPickPaint) ? p.c1 : p.c2;
+    auto ring = [&](const RECT& r, COLORREF c, float w) {
+        RECT rr = { r.left - EdPx(3), r.top - EdPx(3), r.right + EdPx(3), r.bottom + EdPx(3) };
+        Gdiplus::Color ac = EdC(c);
+        EdFillRound(g, rr, (float)EdPx(8), nullptr, &ac, w);
+    };
+    for (int i = 0; i < np; ++i) {
+        const RECT* r = EdRegionRect(EdHit::PickItem, i);
+        if (!r) break;
+        Gdiplus::Color f = EdC(pal[i]);
+        Gdiplus::Color bdc = EdC(g_edDark ? RGB(90, 90, 96) : RGB(201, 201, 204));
+        EdFillRound(g, *r, (float)EdPx(5), &f, &bdc);
+        if (!curNone && pal[i] == cur) ring(*r, t.accent, (float)EdPx(2));
+        else if (g_edHotWhat == EdHit::PickItem && g_edHotIdx == i) ring(*r, t.text2, 1.0f);
+    }
+    if (const RECT* r = EdRegionRect(EdHit::PickItem, kEdPaintNone)) {
+        const Gdiplus::RectF rf((float)r->left, (float)r->top, (float)(r->right - r->left),
+                                (float)(r->bottom - r->top));
+        const bool blocked = EdPaintNoneBlocked(grp);
+        if (grp == kEdPickPaint2 && k == EdKind::Counter) EdSwatchAuto(g, rf);
+        else EdSwatchNone(g, rf, 2, t, blocked);
+        if (curNone) ring(*r, t.accent, (float)EdPx(2));
+        else if (!blocked && g_edHotWhat == EdHit::PickItem && g_edHotIdx == kEdPaintNone)
+            ring(*r, t.text2, 1.0f);
+        // Роздільник: «Немає» — не ще один колір, а вимикач.
+        const RECT* r7 = EdRegionRect(EdHit::PickItem, np - 1);
+        if (r7) {
+            const int sx = (r7->right + r->left) / 2;
+            RECT sep = { sx, r->top + EdPx(3), sx + 1, r->bottom - EdPx(3) };
+            HBRUSH sb = CreateSolidBrush(t.border);
+            FillRect(dc, &sep, sb);
+            DeleteObject(sb);
+        }
+    }
+    if (!IsRectEmpty(&g_edPickSlider)) {
+        const RECT& sl = g_edPickSlider;
+        const int a = (g_edPickSliderSlot == 1) ? p.a2 : p.a1;
+        RECT ic = { sl.left - EdPx(8) - EdPx(18), (sl.top + sl.bottom) / 2 - EdPx(9),
+                    sl.left - EdPx(8), (sl.top + sl.bottom) / 2 + EdPx(9) };
+        EdIcon(g, IcoOpacity, ic, EdC(t.text2), 1.6f);
+        EdPaintSlider(g, sl, t, a);
+        wchar_t buf[32];
+        wsprintfW(buf, L"%d %%", a);
+        RECT tv = { sl.right + EdPx(8), sl.top - EdPx(4), sl.right + EdPx(8) + EdPx(44), sl.bottom + EdPx(4) };
+        EdDrawText(dc, tv, buf, g_edFont, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
 // Розкритий список малюється ОСТАННІМ у всьому вікні — інакше його накриє
 // полотно, поверх якого він висить.
 void EdPaintPick(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     if (g_edPickOpen < 0) return;
-    if (!EdRegionRect(EdHit::PickItem, 0)) return;
+    if (!EdRegionRect(EdHit::PickItem, -1)) return;
     RECT box = g_edPickBox;
     InflateRect(&box, EdPx(4), EdPx(4));
     Gdiplus::Color shadow(60, 0, 0, 0);
@@ -13163,6 +13498,7 @@ void EdPaintPick(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     EdFillRound(g, sh, (float)EdPx(8), &shadow, nullptr);
     Gdiplus::Color fill = EdC(t.chrome), bd = EdC(t.border);
     EdFillRound(g, box, (float)EdPx(8), &fill, &bd);
+    if (g_edPickOpen >= kEdPickPaint) { EdPaintPalette(dc, g, t); return; }
     const int n = EdPickCount(g_edPickOpen);
     const bool ends = (g_edPickOpen == kEdPickEnds), corners = (g_edPickOpen == kEdPickCorners);
     if (ends) {
@@ -13402,6 +13738,75 @@ void EdPickApply(int group, int value)
     case 2:  g_edHeadBack = value; break;
     default: g_edHeadSize = value; break;
     }
+}
+
+// CAPS-41/49: вибір у палітрі. idx 0..7 — колір, kEdPaintNone — «Немає»/«Авто».
+// Вибраній позначці — одним кроком скасування; типові — завжди, щоб наступна
+// позначка того ж виду успадкувала вибір. Повертає, чи щось змінилось.
+void EdSetColor(COLORREF c);
+bool EdPaintApply(int group, int idx)
+{
+    const bool sel = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size());
+    const EdKind k = EdStripKind();
+    const COLORREF* pal = nullptr;
+    const int np = EdPaintSwatches(group, &pal);
+    if (idx != kEdPaintNone && (idx < 0 || idx >= np)) return false;
+    if (idx == kEdPaintNone && (!EdPaintHasNone(group) || EdPaintNoneBlocked(group))) return false;
+
+    if (group == kEdPickPaint) {
+        if (idx == kEdPaintNone) {                      // лише контур фігури
+            if (sel && !g_edObjs[g_edSel].noMain) { EdPushUndo(); g_edObjs[g_edSel].noMain = true; }
+            g_edNoMain = true;
+            return true;
+        }
+        const COLORREF c = pal[idx];
+        // ⚠ У маркера ВЛАСНА палітра, і його колір не має ставати типовим
+        // для решти: інакше після маркера малювався б яскраво-салатовий
+        // прямокутник, якого в палітрі прямокутника немає (зауваження власника).
+        if (k == EdKind::Mark) {
+            g_edMarkColor = c;
+            if (sel && g_edObjs[g_edSel].kind == EdKind::Mark && g_edObjs[g_edSel].color != c) {
+                EdPushUndo();
+                g_edObjs[g_edSel].color = c;
+            }
+            return true;
+        }
+        // Тогл увімкнено — колір іде всій групі, і вибраний кружечок у ній
+        // теж. Робити і те, і те означало б два кроки скасування на один клік.
+        if (k == EdKind::Counter && g_edGroupEdit) {
+            EdGroupApply(0, (int)c);
+            g_edColor = c;
+            return true;
+        }
+        if (sel && g_edObjs[g_edSel].noMain) {          // колір контуру вмикає контур
+            EdPushUndo();
+            g_edObjs[g_edSel].noMain = false;
+            g_edObjs[g_edSel].color = c;
+            g_edColor = c;
+        } else {
+            EdSetColor(c);
+        }
+        if (EdCanFill(k)) g_edNoMain = false;
+        return true;
+    }
+    if (group != kEdPickPaint2 || !EdHas2(k)) return false;
+    const int on = (idx == kEdPaintNone) ? 0 : 1;
+    const COLORREF c = on ? pal[idx] : 0;
+    if (k == EdKind::Counter && g_edGroupEdit) {
+        EdGroupApply(3, on ? (int)c : -1);
+    } else if (sel && EdHas2(g_edObjs[g_edSel].kind)) {
+        EdObj& o = g_edObjs[g_edSel];
+        if (o.on2 != on || (on && o.color2 != c)) {
+            EdPushUndo();
+            o.on2 = on;
+            if (on) o.color2 = c;
+            if (o.kind == EdKind::Text) EdTextMeasure(o);   // обводка міняє плитку
+        }
+    }
+    const EdDef2 d = EdDefaults2(k);
+    *d.on = on;
+    if (on) *d.col = c;
+    return true;
 }
 
 void EdSetColor(COLORREF c)
@@ -13766,15 +14171,33 @@ void EdRaise(bool front)
     InvalidateRect(g_edWnd, nullptr, FALSE);
 }
 
+int g_edAlphaSlot = 0;       // CAPS-49: котрий повзунок тягнуть — основний чи другого кольору
+// Останній клік у палітрі: другий клік подвійного прилітає вже ПІСЛЯ того, як
+// палітра закрилась, — туди, де вона щойно була.
+int   g_edPaintClickGroup = -1, g_edPaintClickIdx = -1;
+DWORD g_edPaintClickTick  = 0;
+
 void EdSetAlphaAt(int mouseX)
 {
-    const RECT* sl = EdRegionRect(EdHit::Opacity, 0);
+    const RECT* sl = EdRegionRect(EdHit::Opacity, g_edAlphaSlot);
     if (!sl) return;
     const int w = sl->right - sl->left;
     if (w <= 0) return;
     int p = 10 + (int)((mouseX - sl->left) * 90.0 / w + 0.5);
     if (p < 10) p = 10;
     if (p > 100) p = 100;
+    if (g_edAlphaSlot == 1) {
+        const EdKind k = EdStripKind();
+        // Як і основна прозорість: вибраному — його власна, типова не міняється.
+        if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) {
+            if (EdHas2Alpha(g_edObjs[g_edSel].kind)) g_edObjs[g_edSel].alpha2 = p;
+        } else {
+            const EdDef2 d = EdDefaults2(k);
+            if (d.alpha && EdHas2Alpha(k)) *d.alpha = p;
+        }
+        InvalidateRect(g_edWnd, nullptr, FALSE);
+        return;
+    }
     // Тогл «Редагування групи» перехоплює повзунок: інакше довелося б пояснювати,
     // чому колір і розмір ідуть усій групі, а прозорість — ні.
     if (g_edGroupEdit && EdCounterKind()) { EdGroupSet(2, p); g_edAlpha = p; }
@@ -14585,7 +15008,26 @@ Str EdTipFor(EdHit what, int idx)
         default: return Str::EdToolCrop;
         }
     case EdHit::Swatch:  return EdCounterKind() ? Str::EdTipColorGroup : Str::EdTipColor;
+    case EdHit::PickItem:
+        // CAPS-49: у палітрі підказка лише там, де зразок сам не каже, що він.
+        if (g_edPickOpen < kEdPickPaint) return Str::Empty;
+        if (idx == kEdPaintNone) {
+            const EdKind k = EdStripKind();
+            if (g_edPickOpen == kEdPickPaint) return Str::EdTipNoStroke;
+            return k == EdKind::Counter ? Str::EdPaintAuto : k == EdKind::Text ? Str::EdTipNoHalo
+                                                                               : Str::EdTipNoFill;
+        }
+        if (!EdCounterKind()) return Str::Empty;
+        return g_edPickOpen == kEdPickPaint ? Str::EdTipColorGroup : Str::EdTipDigitGroup;
     case EdHit::Pick:
+        if (idx == kEdPickPaint)                                  // CAPS-41/49
+            return EdCanFill(EdStripKind()) ? Str::EdTipPaintStroke : Str::EdTipPaintMain;
+        if (idx == kEdPickPaint2) {
+            const EdKind k = EdStripKind();
+            return k == EdKind::Text ? Str::EdTipPaintHalo : k == EdKind::Counter ? Str::EdTipPaintDigit
+                                                                                  : Str::EdTipPaintFill;
+        }
+        if (idx == kEdPickAlpha) return Str::EdTipAlpha;
         if (idx == kEdPickEnds) return Str::EdTipEnds;          // CAPS-64
         if (idx == kEdPickCorners) return Str::EdTipCorners;    // CAPS-58
         return idx == 0 ? Str::EdTipDash : idx == 1 ? Str::EdTipHeadFront
@@ -14633,7 +15075,6 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::Bold:    return Str::EdTipBold;
     case EdHit::Italic:  return Str::EdTipItalic;
     case EdHit::Align:   return idx == 1 ? Str::EdTipAlignC : idx == 2 ? Str::EdTipAlignR : Str::EdTipAlignL;
-    case EdHit::Stroke:  return idx == 1 ? Str::EdTipStroke1 : idx == 2 ? Str::EdTipStroke2 : Str::EdTipStroke0;
     case EdHit::Opacity: return Str::EdTipAlpha;
     case EdHit::Front:   return Str::EdTipFront;
     case EdHit::Back:    return Str::EdTipBack;
@@ -14672,6 +15113,8 @@ void EdTipText(EdHit what, int idx, wchar_t* out, int cch)
     if (st == Str::Empty) return;
     const wchar_t* key = nullptr;
     if (what == EdHit::Tool && idx >= 0 && idx < 11) key = kEdToolKeys[idx];
+    else if (what == EdHit::Pick && idx == kEdPickPaint)  key = L"1–8";
+    else if (what == EdHit::Pick && idx == kEdPickPaint2) key = L"Shift+1–8";
     else if (what == EdHit::Copy) key = L"Ctrl+C";
     else if (what == EdHit::Store) key = L"Ctrl+S";
     if (key) {
@@ -15000,7 +15443,7 @@ void EdTextBegin(HWND hwnd, POINT img, int idx)
         o.bold    = g_edBold;
         o.italic  = g_edItalic;
         o.align   = g_edAlign;
-        o.outline = g_edOutline;
+        EdInit2(o);                   // CAPS-49: обводка — другий колір напису
         o.w = o.h = 0;
     }
     g_edEditObj = o;
@@ -15912,7 +16355,8 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // інакше той самий клік, яким список згортають, ще й малював би позначку.
         if (g_edPickOpen >= 0) {
             const EdRegion* pr = EdFind(pt);
-            if (!pr || (pr->what != EdHit::Pick && pr->what != EdHit::PickItem)) {
+            if (!pr || (pr->what != EdHit::Pick && pr->what != EdHit::PickItem &&
+                        pr->what != EdHit::Opacity)) {
                 g_edPickOpen = -1;
                 EdLayout(hwnd);
                 InvalidateRect(hwnd, nullptr, FALSE);
@@ -15966,38 +16410,6 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (g_edTool != EdTool::Select) g_edSel = -1;
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
-        case EdHit::Swatch: {
-            const EdKind kk = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())
-                                  ? g_edObjs[g_edSel].kind : EdToolKind(g_edTool);
-            int np = 8;
-            const COLORREF* pl = EdPaletteFor(kk, np);
-            if (r->idx < 0 || r->idx >= np) return 0;
-            // ⚠ У маркера ВЛАСНА палітра, і його колір не має ставати типовим
-            // для решти: інакше після маркера малювався б яскраво-салатовий
-            // прямокутник, якого в палітрі прямокутника немає (зауваження
-            // власника). Тому для маркера — лише його змінна, і вихід.
-            if (kk == EdKind::Mark) {
-                g_edMarkColor = pl[r->idx];
-                if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
-                    g_edObjs[g_edSel].kind == EdKind::Mark &&
-                    g_edObjs[g_edSel].color != pl[r->idx]) {
-                    EdPushUndo();
-                    g_edObjs[g_edSel].color = pl[r->idx];
-                }
-                InvalidateRect(hwnd, nullptr, FALSE);
-                return 0;
-            }
-            // Тогл увімкнено — колір іде всій групі, і вибраний кружечок у ній
-            // теж. Робити і те, і те означало б два кроки скасування на один клік.
-            if (kk == EdKind::Counter && g_edGroupEdit) {
-                EdGroupApply(0, (int)pl[r->idx]);
-                g_edColor = pl[r->idx];
-                InvalidateRect(hwnd, nullptr, FALSE);
-            } else {
-                EdSetColor(pl[r->idx]);
-            }
-            return 0;
-        }
         case EdHit::StampPick: {
             const int id = (r->idx < kEdVectorStamps)
                                ? r->idx : kEdEmojiBase + (r->idx - kEdVectorStamps);
@@ -16121,19 +16533,8 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
-        case EdHit::Fill: {
-            const bool want = (r->idx == 1);
-            if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
-                EdCanFill(g_edObjs[g_edSel].kind) && g_edObjs[g_edSel].filled != want) {
-                EdPushUndo();
-                g_edObjs[g_edSel].filled = want;
-            }
-            g_edFill = want;
-            InvalidateRect(hwnd, nullptr, FALSE);
-            return 0;
-        }
         case EdHit::Size: case EdHit::Bold: case EdHit::Italic:
-        case EdHit::Align: case EdHit::Stroke: {
+        case EdHit::Align: {
             const bool selText = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
                                   g_edObjs[g_edSel].kind == EdKind::Text);
             // Спершу рахуємо НОВЕ значення і лише тоді, якщо воно справді інше,
@@ -16143,35 +16544,34 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             bool nBold    = selText ? g_edObjs[g_edSel].bold    : g_edBold;
             bool nItalic  = selText ? g_edObjs[g_edSel].italic  : g_edItalic;
             int  nAlign   = selText ? g_edObjs[g_edSel].align   : g_edAlign;
-            int  nOutline = selText ? g_edObjs[g_edSel].outline : g_edOutline;
             switch (r->what) {
             case EdHit::Size:   nSize   = EdSizeStep(nSize, r->idx ? 1 : -1); break;
             case EdHit::Bold:   nBold   = !nBold;   break;
             case EdHit::Italic: nItalic = !nItalic; break;
-            case EdHit::Align:  nAlign  = r->idx;   break;
-            default:            nOutline = r->idx;  break;
+            default:            nAlign  = r->idx;   break;
             }
             if (selText) {
                 const EdObj& cur = g_edObjs[g_edSel];
                 if (cur.size != nSize || cur.bold != nBold || cur.italic != nItalic ||
-                    cur.align != nAlign || cur.outline != nOutline) {
+                    cur.align != nAlign) {
                     EdPushUndo();
                     EdObj& o = g_edObjs[g_edSel];
                     o.size = nSize; o.bold = nBold; o.italic = nItalic;
-                    o.align = nAlign; o.outline = nOutline;
+                    o.align = nAlign;
                     EdTextMeasure(o);   // кегль і накреслення міняють габарити
                 }
             }
             // Типові значення йдуть слідом за вибраним — як і в товщині: те, що
             // щойно налаштували, дістається наступному напису.
             g_edSize = nSize; g_edBold = nBold; g_edItalic = nItalic;
-            g_edAlign = nAlign; g_edOutline = nOutline;
+            g_edAlign = nAlign;
             EdLayout(hwnd);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         case EdHit::Opacity:
-            if ((g_edGroupEdit && EdCounterKind()) ||
+            g_edAlphaSlot = (r->idx == 1) ? 1 : 0;
+            if ((g_edGroupEdit && EdCounterKind() && g_edAlphaSlot == 0) ||
                 (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())) EdPushUndo();
             g_edDrag = EdDrag::Slider;
             SetCapture(hwnd);
@@ -16190,6 +16590,18 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case EdHit::PickItem:
             if (r->idx < 0) return 0;          // тло панелі між клітинками
+            if (g_edPickOpen >= kEdPickPaint) {
+                // Колір вибрано — палітра закривається: далі людина малює, і
+                // зайвий клік «закрити» перед першим мазком дратував би.
+                if (!EdPaintApply(g_edPickOpen, r->idx)) return 0;
+                g_edPaintClickGroup = g_edPickOpen;
+                g_edPaintClickIdx   = r->idx;
+                g_edPaintClickTick  = GetTickCount();
+                g_edPickOpen = -1;
+                EdLayout(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             EdPickApply(g_edPickOpen, r->idx);
             // «Кінці» лишаються відкритими: там три властивості, і людина
             // зазвичай ставить і початок, і кінець. Закриває клік повз панель.
@@ -16380,6 +16792,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             o.color = g_edColor;
             o.alpha = g_edAlpha;
             o.stamp = g_edStamp;
+            EdInit2(o);                   // CAPS-49: у лічильника — колір цифри
             if (o.kind == EdKind::Counter) {
                 o.group = EdCurGroup();
                 o.start = EdGroupStart(o.group);
@@ -16402,7 +16815,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_edNew.color = g_edColor;
             g_edNew.thick = g_edThick;
             g_edNew.alpha = g_edAlpha;
-            g_edNew.filled = EdCanFill(g_edNew.kind) ? g_edFill : false;
+            EdInit2(g_edNew);             // CAPS-49: заливка й контур — окремо
             g_edNew.mode = g_edHideMode;
             g_edNew.strength = g_edStrength;
             g_edNew.dash = g_edDash;
@@ -16545,18 +16958,29 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (lr && lr->what == EdHit::LibCard) { EdLibSelect(hwnd, lr->idx); EdLibOpenSel(hwnd); }
             return 0;
         }
+        // Подвійний клік по кольору в палітрі — на ВСЮ групу лічильника. Перший
+        // клік пари вже застосувався до одного кружечка й закрив палітру, тож
+        // другий приходить туди, де вона була, — навіть на полотно. Його ніщо
+        // інше не має отримати: інакше він вписав би знімок у вікно.
+        if (g_edPaintClickGroup >= 0 && GetTickCount() - g_edPaintClickTick <= GetDoubleClickTime()) {
+            const int grp = g_edPaintClickGroup, idx = g_edPaintClickIdx;
+            g_edPaintClickGroup = -1;
+            if (EdCounterKind()) {
+                if (grp == kEdPickPaint2)
+                    EdGroupApply(3, idx == kEdPaintNone ? -1 : (int)kEdPalette[idx]);
+                else if (grp == kEdPickPaint && idx >= 0 && idx < 8)
+                    EdGroupApply(0, (int)kEdPalette[idx]);
+            }
+            return 0;
+        }
         if (!PtInRect(&g_edRcCanvas, pt)) {
-            // Подвійний клік по кольору чи розміру — на ВСЮ групу лічильника.
+            // Подвійний клік по розміру — на ВСЮ групу лічильника.
             // Перший клік із пари вже застосувався до одного кружечка, тож цей
             // лише добирає решту; окремий крок скасування для нього не потрібен,
             // бо EdGroupApply кладе знімок сам і лише коли є що міняти.
             const EdRegion* dr = EdFind(pt);
             if (dr && EdCounterKind()) {
-                if (dr->what == EdHit::Swatch) {
-                    int np = 8;
-                    const COLORREF* pl = EdPaletteFor(EdKind::Counter, np);
-                    if (dr->idx >= 0 && dr->idx < np) EdGroupApply(0, (int)pl[dr->idx]);
-                } else if (dr->what == EdHit::Thick && dr->idx >= 0 && dr->idx < 3) {
+                if (dr->what == EdHit::Thick && dr->idx >= 0 && dr->idx < 3) {
                     EdGroupApply(1, EdThickSet(EdKind::Counter)[dr->idx]);
                 }
             }
@@ -16757,6 +17181,24 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
+        // CAPS-41/49: клавіатурний шлях до кольору. Цифри — номер у палітрі
+        // зліва направо; Shift — другий колір (заливка, обводка, цифра),
+        // Shift+0 — прибрати його. Поки набирають напис, цифри йдуть у поле,
+        // а не сюди: фокус тоді в полі введення.
+        case '0': case '1': case '2': case '3': case '4':
+        case '5': case '6': case '7': case '8': {
+            if (ctrl || g_edCropping) return 0;
+            const bool sh = GetKeyState(VK_SHIFT) < 0 || (lp & 0x0200);
+            bool changed = false;
+            if (sh) changed = EdPaintApply(kEdPickPaint2, wp == '0' ? kEdPaintNone : (int)wp - '1');
+            else if (wp != '0' && EdStripPaintable()) changed = EdPaintApply(kEdPickPaint, (int)wp - '1');
+            if (changed) {
+                g_edPickOpen = -1;
+                EdLayout(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
         case VK_DELETE: EdDeleteSel(); return 0;
         case VK_ESCAPE:
             // Esc знімає рівно один шар за раз: спершу розкритий селект, потім
@@ -17522,7 +17964,15 @@ void EdWriteObj(EdWr& w, const EdObj& o)
     fi("colr", (int)o.color);
     fi("thck", o.thick);
     fi("alph", o.alpha);
-    fb("fill", o.filled);
+    // CAPS-49: старе поле «fill» пишемо й далі — так старша збірка побачить
+    // суцільну плашку там, де контур вимкнено; нові поля вона просто пропустить.
+    fb("fill", o.noMain && o.on2);
+    if (EdHas2(o.kind)) {
+        fb("nomn", o.noMain);
+        fi("on2 ", o.on2);
+        fi("col2", (int)o.color2);
+        fi("alp2", o.alpha2);
+    }
     fi("rot ", o.rot);
     fi("grp ", o.grp);
 
@@ -17538,7 +17988,9 @@ void EdWriteObj(EdWr& w, const EdObj& o)
         fb("bold", o.bold);
         fb("ital", o.italic);
         fi("algn", o.align);
-        fi("outl", o.outline);
+        // Для старших збірок: обводка в них — лише світла (1) чи темна (2).
+        fi("outl", !o.on2 ? 0 : (GetRValue(o.color2) * 299 + GetGValue(o.color2) * 587 +
+                                 GetBValue(o.color2) * 114) / 1000 > 127 ? 1 : 2);
         fi("boxw", o.boxw);
     }
     if (o.kind == EdKind::Hide) { fi("mode", o.mode); fi("strn", o.strength); }
@@ -17728,6 +18180,12 @@ bool EdWrCommit(const wchar_t* path, const EdWr& w)
 
 void EdReadObj(EdRd& r, size_t end, EdObj& o)
 {
+    // CAPS-49: файл без нових полів — давніший; тоді другий колір виводимо зі
+    // старих «fill» і «outl», щоб позначка виглядала рівно як тоді.
+    bool legacyFill = false, have2 = false;
+    int  legacyOutl = 0;
+    o.alpha2 = 100;
+    o.color2 = RGB(255, 255, 255);
     while (!r.bad && r.at + 8 <= end) {
         char t[4];
         r.raw(t, 4);
@@ -17739,14 +18197,18 @@ void EdReadObj(EdRd& r, size_t end, EdObj& o)
         else if (!memcmp(t, "colr", 4)) o.color = (COLORREF)r.i32v();
         else if (!memcmp(t, "thck", 4)) o.thick = r.i32v();
         else if (!memcmp(t, "alph", 4)) o.alpha = r.i32v();
-        else if (!memcmp(t, "fill", 4)) o.filled = r.u8v() != 0;
+        else if (!memcmp(t, "fill", 4)) legacyFill = r.u8v() != 0;
+        else if (!memcmp(t, "nomn", 4)) { o.noMain = r.u8v() != 0; have2 = true; }
+        else if (!memcmp(t, "on2 ", 4)) { o.on2 = r.i32v(); have2 = true; }
+        else if (!memcmp(t, "col2", 4)) o.color2 = (COLORREF)r.i32v();
+        else if (!memcmp(t, "alp2", 4)) o.alpha2 = r.i32v();
         else if (!memcmp(t, "rot ", 4)) o.rot = r.i32v();
         else if (!memcmp(t, "grp ", 4)) o.grp = r.i32v();
         else if (!memcmp(t, "size", 4)) o.size = r.i32v();
         else if (!memcmp(t, "bold", 4)) o.bold = r.u8v() != 0;
         else if (!memcmp(t, "ital", 4)) o.italic = r.u8v() != 0;
         else if (!memcmp(t, "algn", 4)) o.align = r.i32v();
-        else if (!memcmp(t, "outl", 4)) o.outline = r.i32v();
+        else if (!memcmp(t, "outl", 4)) legacyOutl = r.i32v();
         else if (!memcmp(t, "boxw", 4)) o.boxw = r.i32v();
         else if (!memcmp(t, "mode", 4)) o.mode = r.i32v();
         else if (!memcmp(t, "strn", 4)) o.strength = r.i32v();
@@ -17769,6 +18231,15 @@ void EdReadObj(EdRd& r, size_t end, EdObj& o)
             for (DWORD i = 0; i < n && !r.bad; ++i) { o.pts[i].x = r.i32v(); o.pts[i].y = r.i32v(); }
         }
         r.at = next;                       // невідоме поле просто пропускаємо
+    }
+    if (!have2) {
+        if (legacyFill && (o.kind == EdKind::Rect || o.kind == EdKind::Ellipse)) {
+            o.noMain = true; o.on2 = 1; o.color2 = o.color; o.alpha2 = o.alpha;
+        }
+        if (o.kind == EdKind::Text && legacyOutl > 0) {
+            o.on2 = 1;
+            o.color2 = (legacyOutl == 1) ? RGB(255, 255, 255) : RGB(0, 0, 0);
+        }
     }
 }
 
