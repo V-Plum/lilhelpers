@@ -85,7 +85,9 @@
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
-#include <mfmediaengine.h>   // CAPS-78: відтворення в редакторі
+#include <mfmediaengine.h>
+#include <mmdeviceapi.h>      // CAPS-77: звук запису (WASAPI)
+#include <audioclient.h>   // CAPS-78: відтворення в редакторі
 // CAPS-16: docx — читаємо пакет системним OPC, а не власним розпакувальником zip.
 #include <msopc.h>
 // CAPS-16: PDF — вбудований Windows.Data.Pdf (WinRT). Заголовка windows.data.pdf.h
@@ -201,6 +203,11 @@ constexpr int  IDC_VID_ENABLE    = 225;
 constexpr int  IDC_VID_CURSOR    = 226;   // CAPS-76: курсор у записі
 constexpr int  IDC_VID_CLICKS    = 227;   //          підсвічування кліків
 constexpr int  IDC_VID_CLR0      = 228;   //          228..230 = колір кліку
+constexpr int  IDC_VID_AUDSYS    = 231;   // CAPS-77: системний звук
+constexpr int  IDC_VID_AUDSYSDEV = 232;   //          його пристрій (кнопка зі списком)
+constexpr int  IDC_VID_AUDMIC    = 233;   //          мікрофон
+constexpr int  IDC_VID_AUDMICDEV = 234;
+constexpr int  IDC_VID_MICMETER  = 235;   //          рівень мікрофона
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -220,6 +227,7 @@ constexpr UINT TIMER_UPDATE     = 4;   // CAPS-10: хвилина після с�
 constexpr UINT TIMER_TRAY       = 5;   // CAPS-17: повтор додавання іконки, поки панель не готова
 constexpr UINT TIMER_UPDREMIND  = 6;   // CAPS-63: щохвилини — чи можна вже нагадати про оновлення
 constexpr UINT TIMER_VIDTIP     = 7;   // CAPS-73: тривалість запису в підказці трею
+constexpr UINT TIMER_VIDMETER   = 8;   // CAPS-77: рівень мікрофона на вкладці «Відео»
 
 const wchar_t* kAppName  = L"Little Helpers";   // заголовки вікна/повідомлень, трей
 const wchar_t* kWndClass = L"lilhelpers";
@@ -546,6 +554,18 @@ X(VidClickClrL,       L"Колір кліку",                   L"Click colour
 X(VidClrYellow,       L"Жовтий",                        L"Yellow")                                     \
 X(VidClrRed,          L"Червоний",                      L"Red")                                        \
 X(VidClrBlue,         L"Синій",                         L"Blue")                                       \
+X(VidSecAudio,        L"Звук",                          L"Sound")                                      \
+X(VidAudSys,          L"Системний звук",                L"System sound")                               \
+X(VidAudMic,          L"Мікрофон",                      L"Microphone")                                 \
+X(VidAudDefault,      L"Типовий пристрій",              L"Default device")                             \
+X(VidAudHint,         L"Обидва — однією доріжкою. Смужка під мікрофоном показує, що він чує.",       \
+                      L"Both go into one track. The bar under the microphone shows what it hears.")  \
+X(VidWarnMicDenied,   L"Мікрофон заборонено в параметрах конфіденційності Windows — запис іде без нього.", \
+                      L"The microphone is blocked in Windows privacy settings — recording without it.") \
+X(VidWarnAudBusy,     L"Звуковий пристрій зайнятий іншою програмою — запис іде без нього.",           \
+                      L"The sound device is used exclusively by another app — recording without it.") \
+X(VidWarnAudNone,     L"Звуковий пристрій недоступний — запис іде без нього.",                        \
+                      L"The sound device is unavailable — recording without it.")                     \
 X(VidSecWhere,        L"Де записи",                     L"Where recordings go")                        \
 X(VidWhereText,       L"Записи лежать у бібліотеці знімків, поруч зі знімками. HDR-екран записується з тією самою компенсацією, що й знімки.", \
                       L"Recordings are kept in the shot library next to your shots. An HDR screen is recorded with the same compensation as shots.") \
@@ -649,8 +669,8 @@ X(EdLibEmptyVidBody,  L"Alt+Shift+5 — і тягніть рамку: ділян
                       L"Alt+Shift+5, then drag a frame: an area, click for a window, Space for the whole " \
                       L"screen. The same key stops recording, and the video lands here.")             \
 X(VidLibLimitL,       L"Відео в бібліотеці — не більше", L"Keep videos in the library up to")          \
-X(VidLibLimitHint,    L"Понад межу найстаріші записи йдуть у кошик. На знімки ця межа не впливає.",    \
-                      L"Above the limit the oldest recordings go to the Recycle Bin. Shots are not affected.") \
+X(VidLibLimitHint,    L"Понад межу найстаріші записи — у кошик; знімків це не стосується.",           \
+                      L"Above the limit the oldest go to the Recycle Bin; shots are not affected.")  \
 X(EdLibShowBtn,       L"Показати в Провіднику",         L"Show in Explorer")                           \
 X(EdLibDelBtn,        L"Видалити",                      L"Delete")                                     \
 X(EdLibRenameTip,     L"Перейменувати (F2)",            L"Rename (F2)")                                \
@@ -1011,7 +1031,7 @@ HWND  g_layoutCheckbox = nullptr;
 HWND  g_pageSettings[32] = {};  int g_pageSettingsN = 0;
 HWND  g_pagePeek[24]     = {};  int g_pagePeekN = 0;   // CAPS-16
 HWND  g_pageShots[64]    = {};  int g_pageShotsN = 0;  // CAPS-21; CAPS-57: матриця жестів — ще двадцять
-HWND  g_pageVideo[32]    = {};  int g_pageVideoN = 0;  // CAPS-73
+HWND  g_pageVideo[48]    = {};  int g_pageVideoN = 0;  // CAPS-73; 48 — звук і курсор (CAPS-76/77)
 
 // ---------- CAPS-8: тема самого вікна ----------
 //
@@ -23082,6 +23102,7 @@ const wchar_t* kRegVidQuality = L"VideoQuality";
 int g_vidFps = 30;        // 30 або 60
 int g_vidQuality = 1;     // 0 — менший файл, 1 — звичайна, 2 — висока
 
+void VidAudLoadSettings();   // CAPS-77, нижче
 // CAPS-76: курсор і кліки — з наступного запису.
 const wchar_t* kRegVidCursor   = L"VideoCursor";
 const wchar_t* kRegVidClicks   = L"VideoClicks";
@@ -23097,6 +23118,7 @@ void VidLoadSettings()
     g_vidCursor = RegLoadInt(kRegVidCursor, 1, 0, 1) != 0;
     g_vidClicks = RegLoadInt(kRegVidClicks, 1, 0, 1) != 0;
     g_vidClickClr = RegLoadInt(kRegVidClickClr, 0, 0, 2);
+    VidAudLoadSettings();                            // CAPS-77
 }
 
 // Бітів на піксель на кадр. Екранний вміст здебільшого нерухомий, тож навіть
@@ -23216,6 +23238,9 @@ struct VidJob {
     float bpp;
     int synth;
     bool cursor, clicks;           // CAPS-76
+    bool audSys, audMic;           // CAPS-77
+    int audSynth;                  //         тестова збірка
+    wchar_t audSysDev[256], audMicDev[256];
     COLORREF clickClr;
     float scale;                   // DPI монітора: товщина кілець
     wchar_t part[MAX_PATH], path[MAX_PATH];
@@ -23225,6 +23250,7 @@ struct VidJob {
 struct VidResult {
     HRESULT hr;
     Str err;
+    Str warn;                      // CAPS-77: записано, але без якоїсь доріжки звуку
     LONGLONG frames;
     bool gdi, cpu;
     wchar_t path[MAX_PATH];
@@ -23540,6 +23566,7 @@ struct VidEnc {
     UINT w = 0, h = 0;
     int fps = 30;
     LONGLONG written = 0;
+    DWORD astream = MAXDWORD;                  // CAPS-77: доріжка звуку, якщо є
 };
 
 // ---- CAPS-76: курсор і кліки ----
@@ -23809,6 +23836,287 @@ struct VidOverlay {
     }
 };
 
+// ---- CAPS-77: звук ----
+// Системний звук — WASAPI loopback пристрою виводу, мікрофон — WASAPI capture.
+// Обидва в спільному режимі з AUTOCONVERTPCM: система сама віддає float 48 кГц
+// стерео, свого ресемплера не треба. Кожен пакет кладеться на спільну шкалу за
+// ЙОГО міткою QPC (не за кількістю семплів), тож паузи loopback — коли нічого не
+// грає, пакетів немає зовсім — самі стають тишею, а дрейф годинника звукової
+// карти вбирається пересинхронізацією (стрибок > 10 мс — ставимо пакет туди,
+// де він справді є). Змішуємо в одну доріжку: більшість програвачів і
+// месенджерів грають лише першу.
+
+const GUID kClsidMMDevEnum  = { 0xBCDE0395, 0xE52F, 0x467C, { 0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E } };
+const GUID kIidMMDevEnum    = { 0xA95664D2, 0x9614, 0x4F35, { 0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6 } };
+const GUID kIidAudioClient  = { 0x1CB9AD4C, 0xDBFA, 0x4C32, { 0xB1, 0x78, 0xC2, 0xF5, 0x68, 0xA7, 0x03, 0xB2 } };
+const GUID kIidAudioCapture = { 0xC8ADBD64, 0xE71E, 0x48A0, { 0xA4, 0xDE, 0x18, 0x5C, 0x39, 0x5C, 0xD3, 0x17 } };
+const PROPERTYKEY kPkeyDevFriendlyName = { { 0xa45c254e, 0xdf1c, 0x4efd, { 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0 } }, 14 };
+constexpr UINT32 kVidAudRate = 48000;
+constexpr LONGLONG kVidAudLag = kVidAudRate * 3 / 10;   // пишемо звук на 300 мс позаду: пакети запізнюються
+
+// Налаштування (рішення власника 25.09: за замовчуванням без звуку).
+const wchar_t* kRegVidAudSys    = L"VideoAudioSystem";
+const wchar_t* kRegVidAudSysDev = L"VideoAudioSystemDevice";
+const wchar_t* kRegVidAudMic    = L"VideoAudioMic";
+const wchar_t* kRegVidAudMicDev = L"VideoAudioMicDevice";
+bool    g_vidAudSys = false, g_vidAudMic = false;
+wchar_t g_vidAudSysDev[256] = {}, g_vidAudMicDev[256] = {};   // порожньо — типовий пристрій
+
+void VidAudLoadSettings()
+{
+    g_vidAudSys = RegLoadInt(kRegVidAudSys, 0, 0, 1) != 0;
+    g_vidAudMic = RegLoadInt(kRegVidAudMic, 0, 0, 1) != 0;
+    if (!RegLoadStr(kRegVidAudSysDev, g_vidAudSysDev, 256)) g_vidAudSysDev[0] = 0;
+    if (!RegLoadStr(kRegVidAudMicDev, g_vidAudMicDev, 256)) g_vidAudMicDev[0] = 0;
+}
+
+// Тестова збірка підміняє: 1 — синтетичний «системний» звук (гучність = номер кадру),
+// 2 — синтетичний мікрофон (тихий тон), 3 — обидва.
+int VidAudSynthMode() { return 0; }
+LONGLONG VidAudSynthLose() { return -1; }   // тест: мс, коли «витягли навушники»
+
+LONGLONG VidQpcTo100(LONGLONG q, LONGLONG f) { return (q / f) * 10000000LL + (q % f) * 10000000LL / f; }
+
+IMMDeviceEnumerator* VidAudEnum()
+{
+    IMMDeviceEnumerator* e = nullptr;
+    CoCreateInstance(kClsidMMDevEnum, nullptr, CLSCTX_ALL, kIidMMDevEnum, (void**)&e);
+    return e;
+}
+
+struct VidAudDev { std::wstring id, name; };
+
+std::vector<VidAudDev> VidAudList(bool capture)
+{
+    std::vector<VidAudDev> v;
+    IMMDeviceEnumerator* e = VidAudEnum();
+    if (!e) return v;
+    IMMDeviceCollection* col = nullptr;
+    if (SUCCEEDED(e->EnumAudioEndpoints(capture ? eCapture : eRender, DEVICE_STATE_ACTIVE, &col)) && col) {
+        UINT n = 0;
+        col->GetCount(&n);
+        for (UINT i = 0; i < n; ++i) {
+            IMMDevice* d = nullptr;
+            if (FAILED(col->Item(i, &d)) || !d) continue;
+            VidAudDev x;
+            LPWSTR id = nullptr;
+            if (SUCCEEDED(d->GetId(&id)) && id) { x.id = id; CoTaskMemFree(id); }
+            IPropertyStore* ps = nullptr;
+            if (SUCCEEDED(d->OpenPropertyStore(STGM_READ, &ps)) && ps) {
+                PROPVARIANT pv;
+                PropVariantInit(&pv);
+                if (SUCCEEDED(ps->GetValue(kPkeyDevFriendlyName, &pv)) && pv.vt == VT_LPWSTR && pv.pwszVal) x.name = pv.pwszVal;
+                PropVariantClear(&pv);
+                ps->Release();
+            }
+            if (!x.id.empty()) v.push_back(x);
+            d->Release();
+        }
+        col->Release();
+    }
+    e->Release();
+    return v;
+}
+
+IMMDevice* VidAudDevice(bool capture, const wchar_t* id)
+{
+    IMMDeviceEnumerator* e = VidAudEnum();
+    if (!e) return nullptr;
+    IMMDevice* d = nullptr;
+    if (id && id[0]) e->GetDevice(id, &d);
+    if (!d) e->GetDefaultAudioEndpoint(capture ? eCapture : eRender, eConsole, &d);   // зник — тоді типовий
+    e->Release();
+    return d;
+}
+
+// Одне джерело: loopback або мікрофон.
+struct VidAudSrc {
+    bool capture = false;
+    std::wstring id;
+    IAudioClient* ac = nullptr;
+    IAudioCaptureClient* cc = nullptr;
+    LONGLONG next = LLONG_MIN;        // куди ляже наступний пакет, якщо мітки не стрибнули
+    HRESULT err = S_OK;
+    ULONGLONG retryAt = 0;
+    int synth = 0;                    // тестова збірка: 1 — «системний», 2 — мікрофон
+    LONGLONG synthLoseAt = -1;        // тест: мс від нуля, коли «витягли навушники»
+};
+
+HRESULT VidAudOpen(VidAudSrc& s)
+{
+    if (s.synth) { s.next = LLONG_MIN; return S_OK; }
+    IMMDevice* d = VidAudDevice(s.capture, s.id.c_str());
+    if (!d) return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+    HRESULT hr = d->Activate(kIidAudioClient, CLSCTX_ALL, nullptr, (void**)&s.ac);
+    d->Release();
+    if (FAILED(hr)) return hr;
+    WAVEFORMATEX wf = {};
+    wf.wFormatTag = 3;                // WAVE_FORMAT_IEEE_FLOAT
+    wf.nChannels = 2;
+    wf.nSamplesPerSec = kVidAudRate;
+    wf.wBitsPerSample = 32;
+    wf.nBlockAlign = 8;
+    wf.nAvgBytesPerSec = kVidAudRate * 8;
+    const DWORD fl = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY |
+                     (s.capture ? 0 : AUDCLNT_STREAMFLAGS_LOOPBACK);
+    hr = s.ac->Initialize(AUDCLNT_SHAREMODE_SHARED, fl, 2000000, 0, &wf, nullptr);   // буфер 200 мс
+    if (SUCCEEDED(hr)) hr = s.ac->GetService(kIidAudioCapture, (void**)&s.cc);
+    if (SUCCEEDED(hr)) hr = s.ac->Start();
+    if (FAILED(hr)) {
+        if (s.cc) { s.cc->Release(); s.cc = nullptr; }
+        s.ac->Release();
+        s.ac = nullptr;
+    }
+    s.next = LLONG_MIN;
+    return hr;
+}
+
+void VidAudClose(VidAudSrc& s)
+{
+    if (s.ac) s.ac->Stop();
+    if (s.cc) { s.cc->Release(); s.cc = nullptr; }
+    if (s.ac) { s.ac->Release(); s.ac = nullptr; }
+}
+
+// Шкала: індекс аудіокадру від «якоря» (QPC старту звуку). Джерела додають у
+// буфер (сума), запис забирає вже дозріле — те, що далі за kVidAudLag від «зараз».
+struct VidAudMix {
+    SRWLOCK lock = SRWLOCK_INIT;
+    LONGLONG base = 0;                // індекс першого кадру в buf
+    std::vector<float> buf;           // стерео
+
+    void Add(LONGLONG idx, const float* p, UINT32 n)
+    {
+        AcquireSRWLockExclusive(&lock);
+        LONGLONG from = idx, skip = 0;
+        if (from < base) { skip = base - from; from = base; }          // запізніле — те, що вже записано, не чіпаємо
+        if ((LONGLONG)n > skip) {
+            const size_t need = (size_t)((from - base + (LONGLONG)n - skip) * 2);
+            if (buf.size() < need && need < (size_t)kVidAudRate * 2 * 120) buf.resize(need, 0.0f);
+            if (buf.size() >= need && p)
+                for (LONGLONG i = skip; i < (LONGLONG)n; ++i) {
+                    float* q = &buf[(size_t)((from - base + i - skip) * 2)];
+                    q[0] += p[i * 2];
+                    q[1] += p[i * 2 + 1];
+                }
+        }
+        ReleaseSRWLockExclusive(&lock);
+    }
+
+    // [base, upto) → PCM 16 біт з м'яким обмежувачем (дві доріжки в сумі можуть вийти за 1).
+    void Take(LONGLONG upto, std::vector<short>& out)
+    {
+        AcquireSRWLockExclusive(&lock);
+        const LONGLONG n = upto - base;
+        out.assign(n > 0 ? (size_t)n * 2 : 0, 0);
+        for (LONGLONG i = 0; i < n * 2; ++i) {
+            float x = (size_t)i < buf.size() ? buf[(size_t)i] : 0.0f;
+            const float ax = x < 0 ? -x : x;
+            if (ax > 0.8f) x = (x < 0 ? -1.0f : 1.0f) * (0.8f + 0.2f * tanhf((ax - 0.8f) / 0.2f));
+            out[(size_t)i] = (short)(x * 32767.0f);
+        }
+        if (n > 0) {
+            const size_t drop = (size_t)n * 2 < buf.size() ? (size_t)n * 2 : buf.size();
+            buf.erase(buf.begin(), buf.begin() + drop);
+            base = upto;
+        }
+        ReleaseSRWLockExclusive(&lock);
+    }
+};
+
+struct VidAudJob {
+    VidAudSrc src[2];
+    int n = 0;
+    VidAudMix mix;
+    LONGLONG anchor100 = 0;           // 100 нс QPC нуля шкали
+    LONGLONG qf = 1;
+    HANDLE stop = nullptr;
+    volatile LONG t0Idx = -1;         // індекс першого кадру відео на шкалі (для синтетики)
+    int fps = 30;
+};
+
+// Синтетика (лише тестова збірка): «системний» — 1 кГц, гучність = (номер кадру % 8 + 1) / 8,
+// як у evprobe gen; мікрофон — тихий тон 440 Гц. Пакети по 10 мс, мітки — справжній годинник.
+void VidAudSynthPoll(VidAudJob& j, VidAudSrc& s, LONGLONG nowIdx)
+{
+    const LONG t0 = InterlockedCompareExchange(&j.t0Idx, 0, 0);
+    if (t0 < 0) return;
+    if (s.next == LLONG_MIN) s.next = nowIdx - 480;
+    // «витягли навушники»: 500 мс без пакетів, далі — з нової позиції (перепідключення)
+    if (s.synthLoseAt >= 0) {
+        const LONGLONG loseIdx = t0 + s.synthLoseAt * kVidAudRate / 1000;
+        if (s.next >= loseIdx && s.next < loseIdx + kVidAudRate / 2) { s.next = loseIdx + kVidAudRate / 2; return; }
+    }
+    float pk[480 * 2];
+    while (s.next + 480 <= nowIdx - 480) {
+        for (int i = 0; i < 480; ++i) {
+            const LONGLONG a = s.next + i;
+            float v;
+            if (s.synth == 1) {
+                const LONGLONG fr = (a - t0) * j.fps / kVidAudRate;
+                const float amp = fr >= 0 ? 3000.0f * (float)((fr % 8) + 1) / 32768.0f : 0.0f;
+                v = amp * sinf(2.0f * 3.14159265f * 1000.0f * (float)(a % kVidAudRate) / kVidAudRate);
+            } else {
+                v = 0.05f * sinf(2.0f * 3.14159265f * 440.0f * (float)(a % kVidAudRate) / kVidAudRate);
+            }
+            pk[i * 2] = pk[i * 2 + 1] = v;
+        }
+        j.mix.Add(s.next, pk, 480);
+        s.next += 480;
+    }
+}
+
+void VidAudPoll(VidAudJob& j, VidAudSrc& s)
+{
+    LARGE_INTEGER q;
+    QueryPerformanceCounter(&q);
+    const LONGLONG nowIdx = (VidQpcTo100(q.QuadPart, j.qf) - j.anchor100) * kVidAudRate / 10000000LL;
+    if (s.synth) { VidAudSynthPoll(j, s, nowIdx); return; }
+    if (!s.cc) {
+        // Пристрій зник (витягли навушники, відпав Bluetooth) — пробуємо знову раз на пів секунди;
+        // для «типового» це вже новий типовий. Доти доріжка — тиша.
+        if (GetTickCount64() >= s.retryAt) {
+            s.retryAt = GetTickCount64() + 500;
+            VidAudOpen(s);
+        }
+        return;
+    }
+    for (;;) {
+        UINT32 pk = 0;
+        HRESULT hr = s.cc->GetNextPacketSize(&pk);
+        if (FAILED(hr)) { VidAudClose(s); s.retryAt = GetTickCount64() + 500; return; }
+        if (!pk) return;
+        BYTE* data = nullptr;
+        UINT32 n = 0;
+        DWORD fl = 0;
+        UINT64 devPos = 0, qpc100 = 0;
+        hr = s.cc->GetBuffer(&data, &n, &fl, &devPos, &qpc100);
+        if (FAILED(hr)) { VidAudClose(s); s.retryAt = GetTickCount64() + 500; return; }
+        const LONGLONG idx = ((LONGLONG)qpc100 - j.anchor100) * kVidAudRate / 10000000LL;
+        if (s.next == LLONG_MIN || idx - s.next > 480 || s.next - idx > 480) s.next = idx;   // розрив або дрейф > 10 мс
+        if (!(fl & AUDCLNT_BUFFERFLAGS_SILENT)) j.mix.Add(s.next, (const float*)data, n);
+        s.next += n;
+        s.cc->ReleaseBuffer(n);
+    }
+}
+
+DWORD WINAPI VidAudThread(LPVOID p)
+{
+    VidAudJob* j = (VidAudJob*)p;
+    const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+    while (WaitForSingleObject(j->stop, 10) == WAIT_TIMEOUT)
+        for (int i = 0; i < j->n; ++i) VidAudPoll(*j, j->src[i]);
+    for (int i = 0; i < j->n; ++i) VidAudPoll(*j, j->src[i]);     // останнє, що встигло прийти
+    if (com) CoUninitialize();
+    return 0;
+}
+
+// Рівень мікрофона для вкладки «Відео»: окремий захоплювач на головному потоці,
+// лише поки вкладку видно й мікрофон увімкнено.
+VidAudSrc g_vidMeter;
+bool      g_vidMeterOpen = false;
+float     g_vidMeterLevel = 0;
+
 void VidEncClose(VidEnc& e)
 {
     if (e.sw) e.sw->Release();
@@ -23825,7 +24133,7 @@ void VidEncClose(VidEnc& e)
 // gpu = true: текстури йдуть енкодеру напряму (апаратний шлях). Якщо так не
 // вийшло (немає апаратного H.264 — віртуалка, RDP), викликаємо ще раз із
 // gpu = false: MF бере програмний енкодер, а кадр читаємо в пам'ять.
-HRESULT VidEncOpen(VidEnc& e, VidSrc& s, const wchar_t* path, UINT w, UINT h, int fps, float bpp, bool gpu)
+HRESULT VidEncOpen(VidEnc& e, VidSrc& s, const wchar_t* path, UINT w, UINT h, int fps, float bpp, bool gpu, bool audio)
 {
     e.w = w; e.h = h; e.fps = fps; e.cpu = !gpu;
     HRESULT hr = s.dev->CreateVertexShader(g_vidVsBlob->GetBufferPointer(), g_vidVsBlob->GetBufferSize(), nullptr, &e.vs);
@@ -23895,6 +24203,35 @@ HRESULT VidEncOpen(VidEnc& e, VidSrc& s, const wchar_t* path, UINT w, UINT h, in
     if (ep) ep->SetUINT32(kVidCodecBCount, 0);
     hr = e.sw->SetInputMediaType(e.stream, it, ep);
     if (ep) ep->Release();
+    if (SUCCEEDED(hr) && audio) {
+        // CAPS-77: AAC-LC 48 кГц стерео 160 кбіт/с із PCM 16 біт — той самий SinkWriter.
+        IMFMediaType* ao = nullptr;
+        IMFMediaType* ai = nullptr;
+        hr = MFCreateMediaType(&ao);
+        if (SUCCEEDED(hr)) {
+            ao->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+            ao->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC);
+            ao->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+            ao->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, kVidAudRate);
+            ao->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, 2);
+            ao->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 20000);
+            hr = e.sw->AddStream(ao, &e.astream);
+            ao->Release();
+        }
+        if (SUCCEEDED(hr)) hr = MFCreateMediaType(&ai);
+        if (SUCCEEDED(hr)) {
+            ai->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+            ai->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
+            ai->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+            ai->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, kVidAudRate);
+            ai->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, 2);
+            ai->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, 4);
+            ai->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, kVidAudRate * 4);
+            hr = e.sw->SetInputMediaType(e.astream, ai, nullptr);
+            ai->Release();
+        }
+        if (FAILED(hr)) e.astream = MAXDWORD;   // зверху спробують ще раз — уже без звуку
+    }
     if (SUCCEEDED(hr) && gpu) {
         // Енкодер тримає текстуру асинхронно — малювати в ту саму не можна.
         // Пул семплів знає, які з них уже звільнені.
@@ -23956,6 +24293,31 @@ void VidDraw(VidEnc& e, VidSrc& s, ID3D11Texture2D* target, const VidCb* over)
 
 // Один семпл на слот k тривалістю n слотів (n > 1 — ми відстали, і пропущені
 // слоти покриває цей самий кадр; див. пункт 1 угорі).
+// CAPS-77: шматок звуку з позиції idx (аудіокадри від першого кадру відео).
+HRESULT VidEmitAudio(VidEnc& e, const std::vector<short>& pcm, LONGLONG idx)
+{
+    if (e.astream == MAXDWORD || pcm.empty()) return S_OK;
+    const DWORD bytes = (DWORD)(pcm.size() * sizeof(short));
+    IMFMediaBuffer* b = nullptr;
+    HRESULT hr = MFCreateMemoryBuffer(bytes, &b);
+    BYTE* p = nullptr;
+    if (SUCCEEDED(hr)) hr = b->Lock(&p, nullptr, nullptr);
+    if (SUCCEEDED(hr)) { memcpy(p, pcm.data(), bytes); b->Unlock(); b->SetCurrentLength(bytes); }
+    IMFSample* smp = nullptr;
+    if (SUCCEEDED(hr)) hr = MFCreateSample(&smp);
+    if (SUCCEEDED(hr)) hr = smp->AddBuffer(b);
+    if (SUCCEEDED(hr)) {
+        const LONGLONG n = (LONGLONG)pcm.size() / 2;
+        const LONGLONG t0 = idx * 10000000LL / kVidAudRate, t1 = (idx + n) * 10000000LL / kVidAudRate;
+        smp->SetSampleTime(t0);
+        smp->SetSampleDuration(t1 - t0);
+        hr = e.sw->WriteSample(e.astream, smp);
+    }
+    if (smp) smp->Release();
+    if (b) b->Release();
+    return hr;
+}
+
 HRESULT VidEmit(VidEnc& e, VidSrc& s, LONGLONG k, LONGLONG n, const VidCb* over)
 {
     IMFSample* smp = nullptr;
@@ -24026,15 +24388,75 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
     if (FAILED(hr)) { r->err = Str::VidErrScreen; VidSrcClose(s); return hr; }
     if (!VidShaders()) { r->err = Str::VidErrEncoder; VidSrcClose(s); return E_NOINTERFACE; }
     const UINT w = (UINT)(j->sel.right - j->sel.left), h = (UINT)(j->sel.bottom - j->sel.top);
-    hr = VidEncOpen(e, s, j->part, w, h, j->fps, j->bpp, true);
+    // CAPS-77: звук — джерела відкриваємо ДО енкодера: доріжку додаємо, лише якщо є що писати.
+    VidAudJob* aj = nullptr;
+    if (j->audSys || j->audMic || j->audSynth) {
+        aj = new VidAudJob;
+        LARGE_INTEGER aq, af;
+        QueryPerformanceFrequency(&af);
+        QueryPerformanceCounter(&aq);
+        aj->qf = af.QuadPart;
+        aj->anchor100 = VidQpcTo100(aq.QuadPart, af.QuadPart);
+        aj->fps = j->fps;
+        auto addSrc = [&](bool cap, const wchar_t* id, int synth) {
+            VidAudSrc& a = aj->src[aj->n];
+            a.capture = cap;
+            a.id = id;
+            a.synth = synth;
+            if (synth == 1) a.synthLoseAt = VidAudSynthLose();
+            const HRESULT ah = VidAudOpen(a);
+            if (FAILED(ah)) {
+                r->warn = (cap && ah == E_ACCESSDENIED) ? Str::VidWarnMicDenied
+                        : ah == AUDCLNT_E_DEVICE_IN_USE ? Str::VidWarnAudBusy : Str::VidWarnAudNone;
+                return;
+            }
+            ++aj->n;
+        };
+        if (j->audSys || (j->audSynth & 1)) addSrc(false, j->audSysDev, (j->audSynth & 1) ? 1 : 0);
+        if (j->audMic || (j->audSynth & 2)) addSrc(true, j->audMicDev, (j->audSynth & 2) ? 2 : 0);
+        if (!aj->n) { delete aj; aj = nullptr; }
+    }
+    bool audio = aj != nullptr;
+    hr = VidEncOpen(e, s, j->part, w, h, j->fps, j->bpp, true, audio);
     if (FAILED(hr)) {
         VidEncClose(e);
         DeleteFileW(j->part);
-        hr = VidEncOpen(e, s, j->part, w, h, j->fps, j->bpp, false);
+        hr = VidEncOpen(e, s, j->part, w, h, j->fps, j->bpp, false, audio);
     }
+    if (FAILED(hr) && audio) {            // без звуку — краще, ніж жодного запису
+        VidEncClose(e);
+        DeleteFileW(j->part);
+        audio = false;
+        r->warn = Str::VidWarnAudNone;
+        hr = VidEncOpen(e, s, j->part, w, h, j->fps, j->bpp, true, false);
+        if (FAILED(hr)) {
+            VidEncClose(e);
+            DeleteFileW(j->part);
+            hr = VidEncOpen(e, s, j->part, w, h, j->fps, j->bpp, false, false);
+        }
+    }
+    HANDLE ath = nullptr;
+    if (aj && !audio) { for (int i = 0; i < aj->n; ++i) VidAudClose(aj->src[i]); delete aj; aj = nullptr; }
+    if (aj) {
+        aj->stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        ath = aj->stop ? CreateThread(nullptr, 0, VidAudThread, aj, 0, nullptr) : nullptr;
+    }
+    LONGLONG aIdx0 = 0, aw = 0;           // шкала звуку: перший кадр відео і скільки вже записано
+    std::vector<short> pcm;
     r->cpu = e.cpu;
+    // Зупинити потік звуку й закрити джерела — на будь-якому виході.
+    auto audEnd = [&]() {
+        if (!aj) return;
+        if (aj->stop) SetEvent(aj->stop);
+        if (ath) { WaitForSingleObject(ath, 5000); CloseHandle(ath); ath = nullptr; }
+        for (int i = 0; i < aj->n; ++i) VidAudClose(aj->src[i]);
+        if (aj->stop) CloseHandle(aj->stop);
+        delete aj;
+        aj = nullptr;
+    };
     if (FAILED(hr)) {
         r->err = Str::VidErrEncoder;
+        audEnd();
         VidEncClose(e);
         VidSrcClose(s);
         DeleteFileW(j->part);
@@ -24053,7 +24475,16 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
             if (s.synth) VidSynthFill(s, j->sel, 0);
             else if (s.gdi) VidGdiGrab(s, j->sel);
             else VidPull(s, 50);
-            if (s.have) { QueryPerformanceCounter(&q); t0 = q.QuadPart; }
+            if (s.have) {
+                QueryPerformanceCounter(&q);
+                t0 = q.QuadPart;
+                if (aj) {                    // CAPS-77: нуль звуку = перший кадр; усе раніше — геть
+                    aIdx0 = (VidQpcTo100(t0, f) - aj->anchor100) * kVidAudRate / 10000000LL;
+                    InterlockedExchange(&aj->t0Idx, (LONG)aIdx0);
+                    aj->mix.Take(aIdx0, pcm);
+                    aw = aIdx0;
+                }
+            }
             else if (s.gdi) Sleep(20);
             continue;
         }
@@ -24074,6 +24505,25 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
         hr = VidEmit(e, s, k, n, &cb);
         if (FAILED(hr)) { r->err = Str::VidErrWrite; break; }
         k += n;
+        if (aj) {                            // CAPS-77: дозрілий звук — у ту саму доріжку часу
+            QueryPerformanceCounter(&q);
+            const LONGLONG upto = (VidQpcTo100(q.QuadPart, f) - aj->anchor100) * kVidAudRate / 10000000LL - kVidAudLag;
+            if (upto > aw + 480) {
+                aj->mix.Take(upto, pcm);
+                VidEmitAudio(e, pcm, aw - aIdx0);
+                aw = upto;
+            }
+        }
+    }
+    if (aj) {                                // хвіст звуку — рівно до кінця відео
+        const LONGLONG end = aIdx0 + k * kVidAudRate / fps;
+        SetEvent(aj->stop);
+        if (ath) { WaitForSingleObject(ath, 5000); CloseHandle(ath); ath = nullptr; }
+        if (t0 && end > aw && e.written > 0) {
+            aj->mix.Take(end, pcm);
+            VidEmitAudio(e, pcm, aw - aIdx0);
+        }
+        audEnd();
     }
     r->frames = e.written;
     // Навіть після помилки пробуємо дописати файл: записане до неї лишається цілим.
@@ -24108,6 +24558,7 @@ DWORD WINAPI VidThread(LPVOID p)
     VidJob* j = (VidJob*)p;
     VidResult* r = new VidResult{};
     r->err = Str::VidErrWrite;
+    r->warn = Str::Empty;
     lstrcpynW(r->path, j->path, MAX_PATH);
     // Координати ділянки — фізичні пікселі; BitBlt у запасному шляху має
     // бачити їх так само.
@@ -24430,6 +24881,11 @@ void VidStart()
     j->clicks = g_vidClicks;
     j->clickClr = kVidClickColors[g_vidClickClr];
     j->scale = (float)CapMonitorScale(j->mon);
+    j->audSys = g_vidAudSys;                       // CAPS-77
+    j->audMic = g_vidAudMic;
+    j->audSynth = VidAudSynthMode();
+    lstrcpynW(j->audSysDev, g_vidAudSysDev, 256);
+    lstrcpynW(j->audMicDev, g_vidAudMicDev, 256);
     if (!VidLibPath(j->part, j->path)) {
         delete j;
         MessageBoxW(nullptr, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
@@ -24453,6 +24909,111 @@ void VidStart()
 // CAPS-73/87: сторінки налаштувань будуються РАНІШЕ, ніж читається реєстр, тож
 // збережене показуємо окремим кроком — так само, як CapActRefresh для жестів.
 // Без цього після перезапуску стояли б типові 30 fps і «увімкнено».
+// ---- CAPS-77: секція «Звук» на вкладці «Відео» ----
+// Пристрій — кнопкою зі списком-меню, а не комбобоксом: кнопки темна тема вже
+// малює, а комбобокс у темній темі — окрема історія.
+std::wstring VidAudDevName(bool mic)
+{
+    const wchar_t* id = mic ? g_vidAudMicDev : g_vidAudSysDev;
+    std::wstring name = S(Str::VidAudDefault);
+    if (id[0]) {
+        for (const VidAudDev& d : VidAudList(mic))
+            if (d.id == id) { name = d.name; break; }
+    }
+    if (name.size() > 34) { name.resize(33); name += L"…"; }
+    return name + L"  ▾";
+}
+
+void VidAudRefresh(HWND hwnd)
+{
+    auto set = [hwnd](int id, bool on) {
+        if (HWND b = GetDlgItem(hwnd, id)) SendMessageW(b, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+    };
+    set(IDC_VID_AUDSYS, g_vidAudSys);
+    set(IDC_VID_AUDMIC, g_vidAudMic);
+    if (HWND b = GetDlgItem(hwnd, IDC_VID_AUDSYSDEV)) { SetWindowTextW(b, VidAudDevName(false).c_str()); EnableWindow(b, g_vidAudSys); }
+    if (HWND b = GetDlgItem(hwnd, IDC_VID_AUDMICDEV)) { SetWindowTextW(b, VidAudDevName(true).c_str()); EnableWindow(b, g_vidAudMic); }
+    if (HWND m = GetDlgItem(hwnd, IDC_VID_MICMETER)) InvalidateRect(m, nullptr, FALSE);
+    SetTimer(hwnd, TIMER_VIDMETER, 60, nullptr);
+}
+
+void VidAudPickDevice(HWND hwnd, bool mic)
+{
+    HWND btn = GetDlgItem(hwnd, mic ? IDC_VID_AUDMICDEV : IDC_VID_AUDSYSDEV);
+    if (!btn) return;
+    const std::vector<VidAudDev> list = VidAudList(mic);
+    wchar_t* cur = mic ? g_vidAudMicDev : g_vidAudSysDev;
+    HMENU m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING | (cur[0] ? 0 : MF_CHECKED), 1, S(Str::VidAudDefault));
+    if (!list.empty()) AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    for (size_t i = 0; i < list.size() && i < 60; ++i)
+        AppendMenuW(m, MF_STRING | (list[i].id == cur ? MF_CHECKED : 0), (UINT_PTR)(100 + i), list[i].name.c_str());
+    RECT r;
+    GetWindowRect(btn, &r);
+    const int cmd = (int)TrackPopupMenu(m, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RETURNCMD | TPM_NONOTIFY, r.left, r.bottom, 0, hwnd, nullptr);
+    DestroyMenu(m);
+    if (!cmd) return;
+    if (cmd == 1) cur[0] = 0;
+    else if (cmd >= 100 && (size_t)(cmd - 100) < list.size()) lstrcpynW(cur, list[(size_t)(cmd - 100)].id.c_str(), 256);
+    else return;
+    RegSaveStr(mic ? kRegVidAudMicDev : kRegVidAudSysDev, cur);
+    if (mic && g_vidMeterOpen) { VidAudClose(g_vidMeter); g_vidMeterOpen = false; }   // лічильник — на новий пристрій
+    VidAudRefresh(hwnd);
+}
+
+// Раз на 60 мс, поки вікно налаштувань видно: пік мікрофона з легким згасанням.
+void VidMeterTick(HWND hwnd)
+{
+    HWND ctl = GetDlgItem(hwnd, IDC_VID_MICMETER);
+    const bool show = ctl && IsWindowVisible(hwnd) && IsWindowVisible(ctl) && g_vidAudMic;
+    if (!show) {
+        if (g_vidMeterOpen) { VidAudClose(g_vidMeter); g_vidMeterOpen = false; }
+        if (g_vidMeterLevel != 0) { g_vidMeterLevel = 0; if (ctl) InvalidateRect(ctl, nullptr, FALSE); }
+        if (!IsWindowVisible(hwnd)) KillTimer(hwnd, TIMER_VIDMETER);
+        return;
+    }
+    if (!g_vidMeterOpen) {
+        g_vidMeter = VidAudSrc{};
+        g_vidMeter.capture = true;
+        g_vidMeter.id = g_vidAudMicDev;
+        g_vidMeterOpen = SUCCEEDED(VidAudOpen(g_vidMeter));
+        if (!g_vidMeterOpen) return;
+    }
+    float peak = 0;
+    for (;;) {
+        UINT32 pk = 0;
+        if (FAILED(g_vidMeter.cc->GetNextPacketSize(&pk))) { VidAudClose(g_vidMeter); g_vidMeterOpen = false; break; }
+        if (!pk) break;
+        BYTE* data = nullptr;
+        UINT32 n = 0;
+        DWORD fl = 0;
+        if (FAILED(g_vidMeter.cc->GetBuffer(&data, &n, &fl, nullptr, nullptr))) break;
+        if (!(fl & AUDCLNT_BUFFERFLAGS_SILENT))
+            for (UINT32 i = 0; i < n * 2; ++i) { const float v = fabsf(((const float*)data)[i]); if (v > peak) peak = v; }
+        g_vidMeter.cc->ReleaseBuffer(n);
+    }
+    const float lvl = peak > g_vidMeterLevel * 0.8f ? peak : g_vidMeterLevel * 0.8f;
+    if (fabsf(lvl - g_vidMeterLevel) > 0.005f) { g_vidMeterLevel = lvl; InvalidateRect(ctl, nullptr, FALSE); }
+}
+
+void VidMeterDraw(const DRAWITEMSTRUCT* d)
+{
+    const RECT& rc = d->rcItem;
+    HBRUSH bg = CreateSolidBrush(g_dark ? RGB(60, 60, 64) : RGB(222, 222, 226));
+    FillRect(d->hDC, &rc, bg);
+    DeleteObject(bg);
+    if (g_vidMeterLevel > 0.0005f) {
+        // шкала — корінь: тиха мова теж має бути видно, а не лише крик
+        float v = sqrtf(g_vidMeterLevel);
+        if (v > 1) v = 1;
+        RECT f = rc;
+        f.right = rc.left + (LONG)((rc.right - rc.left) * v + 0.5f);
+        HBRUSH b = CreateSolidBrush(v > 0.95f ? RGB(229, 57, 53) : RGB(67, 160, 71));
+        FillRect(d->hDC, &f, b);
+        DeleteObject(b);
+    }
+}
+
 void VidSettingsRefresh(HWND hwnd)
 {
     auto set = [hwnd](int id, bool on) {
@@ -24467,6 +25028,7 @@ void VidSettingsRefresh(HWND hwnd)
     set(IDC_VID_CLICKS, g_vidClicks);
     for (int i = 0; i < 3; ++i) set(IDC_VID_CLR0 + i, g_vidClickClr == i);
     if (HWND b = GetDlgItem(hwnd, IDC_VID_CLR0)) for (int i = 0; i < 3; ++i) EnableWindow(GetDlgItem(hwnd, IDC_VID_CLR0 + i), g_vidClicks);
+    VidAudRefresh(hwnd);                           // CAPS-77
 }
 
 void VidStop()
@@ -24504,6 +25066,7 @@ void VidDone(VidResult* r)
             InvalidateRect(g_edWnd, nullptr, TRUE);
         }
         VidToastShow(r->path);
+        if (r->warn != Str::Empty) TrayBalloon(kAppName, S(r->warn));   // CAPS-77: без якоїсь доріжки звуку
     } else if (FAILED(r->hr)) {
         wchar_t msg[512];
         swprintf(msg, 512, L"%s\n\n0x%08lX", S(r->err), (unsigned long)r->hr);
@@ -24589,7 +25152,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WMAPP_SHOWSETTINGS:
         ShowSettings(hwnd);
+        SetTimer(hwnd, TIMER_VIDMETER, 60, nullptr);   // CAPS-77: сам гасне, коли вікно сховане
         return 0;
+
+    case WM_DRAWITEM:                                  // CAPS-77: рівень мікрофона
+        if (wp == IDC_VID_MICMETER) { VidMeterDraw((const DRAWITEMSTRUCT*)lp); return TRUE; }
+        break;
 
     case WMAPP_OPENEDITOR:   // CAPS-59: --editor від другого екземпляра або зі старту
         EdOpenBlank(GetModuleHandleW(nullptr));
@@ -24633,6 +25201,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         else if (wp == TIMER_VIDTIP) {      // CAPS-73
             VidTipTick();
+        }
+        else if (wp == TIMER_VIDMETER) {    // CAPS-77
+            VidMeterTick(hwnd);
         }
         return 0;
 
@@ -25067,6 +25638,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 if (LOWORD(wp) == IDC_VID_CURSOR) { g_vidCursor = on; RegSaveInt(kRegVidCursor, on ? 1 : 0); }
                 else { g_vidClicks = on; RegSaveInt(kRegVidClicks, on ? 1 : 0); VidSettingsRefresh(hwnd); }
             }
+            break;
+        case IDC_VID_AUDSYS:         // CAPS-77
+        case IDC_VID_AUDMIC:
+            if (HIWORD(wp) == BN_CLICKED) {
+                const bool on = SendMessageW(GetDlgItem(hwnd, LOWORD(wp)), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                if (LOWORD(wp) == IDC_VID_AUDSYS) { g_vidAudSys = on; RegSaveInt(kRegVidAudSys, on ? 1 : 0); }
+                else { g_vidAudMic = on; RegSaveInt(kRegVidAudMic, on ? 1 : 0); }
+                VidAudRefresh(hwnd);
+            }
+            break;
+        case IDC_VID_AUDSYSDEV:
+        case IDC_VID_AUDMICDEV:
+            VidAudPickDevice(hwnd, LOWORD(wp) == IDC_VID_AUDMICDEV);
             break;
         case IDC_VID_CLR0:
         case IDC_VID_CLR0 + 1:
@@ -25659,6 +26243,21 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     radio(addV, Str::VidClrBlue,   PX + 336, 80, IDC_VID_CLR0 + 2, false);
     CheckRadioButton(hwnd, IDC_VID_CLR0, IDC_VID_CLR0 + 2, IDC_VID_CLR0 + g_vidClickClr);
     y += 38;
+    sec(addV, Str::VidSecAudio);                  // CAPS-77
+    {
+        HWND c1 = addV(mkS(L"BUTTON", Str::VidAudSys, BS_AUTOCHECKBOX | WS_TABSTOP, PX, y + 2, 150, 24, IDC_VID_AUDSYS));
+        SendMessageW(c1, BM_SETCHECK, g_vidAudSys ? BST_CHECKED : BST_UNCHECKED, 0);
+        addV(mk(L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP, PX + 160, y, 256, 28, IDC_VID_AUDSYSDEV));
+        y += 32;
+        HWND c2 = addV(mkS(L"BUTTON", Str::VidAudMic, BS_AUTOCHECKBOX | WS_TABSTOP, PX, y + 2, 150, 24, IDC_VID_AUDMIC));
+        SendMessageW(c2, BM_SETCHECK, g_vidAudMic ? BST_CHECKED : BST_UNCHECKED, 0);
+        addV(mk(L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP, PX + 160, y, 256, 28, IDC_VID_AUDMICDEV));
+        y += 31;
+        addV(mk(L"STATIC", L"", SS_OWNERDRAW, PX + 160, y, 256, 6, IDC_VID_MICMETER));
+        y += 12;
+    }
+    hint(addV, Str::VidAudHint, 1);
+    y += 2;
     sec(addV, Str::VidSecWhere);
     {   // CAPS-74: своя межа для відео — знімки вона не витісняє
         addV(mkS(L"STATIC", Str::VidLibLimitL, 0, PX, y + 3, 250, 20, 0));
@@ -25669,7 +26268,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         SetWindowTextW(em, v);
         y += 30;
     }
-    hint(addV, Str::VidLibLimitHint, 2);
+    hint(addV, Str::VidLibLimitHint, 1);
     button(addV, Str::CapLibShow, PX, 150, IDC_VID_SHOWLIB);
     y += 38;
 
