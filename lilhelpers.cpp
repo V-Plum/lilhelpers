@@ -20447,20 +20447,35 @@ void EvGlyph(Gdiplus::Graphics& g, int kind, const RECT& r, Gdiplus::Color c)
         g.FillPolygon(&br, p, 3);
     };
     switch (kind) {
-    case 0: g.DrawLine(&pen, cx - s, cy - s, cx - s, cy + s); tri(cx + s * 0.9f, -1, s); break;       // на початок
-    case 1: tri(cx + s * 0.4f, -1, s * 0.8f); g.DrawLine(&pen, cx - s * 0.6f, cy - s, cx - s * 0.6f, cy + s); break;  // кадр назад
+    // На початок / у кінець — риска й ДВА трикутники (⏮ ⏭): з одним вони не відрізнялись від кроку на кадр.
+    case 0: g.DrawLine(&pen, cx - s * 1.1f, cy - s * 0.8f, cx - s * 1.1f, cy + s * 0.8f); tri(cx + s * 0.1f, -1, s * 0.62f); tri(cx + s * 1.1f, -1, s * 0.62f); break;   // на початок
+    // Риска кадру — ПОРУЧ із вістрям, а не крізь трикутник (так читалось як зламане).
+    case 1: tri(cx + s * 0.6f, -1, s * 0.8f); g.DrawLine(&pen, cx - s * 0.95f, cy - s, cx - s * 0.95f, cy + s); break;  // кадр назад
     case 2: tri(cx + s * 0.8f, -1, s); break;                                                          // назад
     case 3: tri(cx - s * 0.6f, 1, s); break;                                                           // уперед
-    case 4: tri(cx - s * 0.4f, 1, s * 0.8f); g.DrawLine(&pen, cx + s * 0.6f, cy - s, cx + s * 0.6f, cy + s); break;   // кадр уперед
-    case 5: g.DrawLine(&pen, cx + s, cy - s, cx + s, cy + s); tri(cx - s * 0.9f, 1, s); break;         // у кінець
+    case 4: tri(cx - s * 0.6f, 1, s * 0.8f); g.DrawLine(&pen, cx + s * 0.95f, cy - s, cx + s * 0.95f, cy + s); break;   // кадр уперед
+    case 5: g.DrawLine(&pen, cx + s * 1.1f, cy - s * 0.8f, cx + s * 1.1f, cy + s * 0.8f); tri(cx - s * 0.1f, 1, s * 0.62f); tri(cx - s * 1.1f, 1, s * 0.62f); break;   // у кінець
     case 6: {                                                                                         // пауза
         Gdiplus::RectF a(cx - s * 0.75f, cy - s, s * 0.5f, s * 2), b(cx + s * 0.25f, cy - s, s * 0.5f, s * 2);
         g.FillRectangle(&br, a); g.FillRectangle(&br, b); break;
     }
     case 7: {                                                                                         // повтор
-        Gdiplus::Pen p2(c, (float)EdPx(2) * 0.8f);
-        g.DrawArc(&p2, cx - s, cy - s * 0.8f, s * 2, s * 1.6f, 200.0f, 300.0f);
-        tri(cx + s * 0.55f, 1, s * 0.45f);
+        // ⚠ Вістря рахуємо з КІНЦЯ дуги й дотичної в ньому: трикутник, поставлений
+        // «на око», відривався від дуги й читався як зламана іконка (зауваження власника).
+        const float r = s * 0.85f;
+        const float a0 = 20.0f, sweep = 285.0f;              // розрив угорі праворуч; кути GDI+ — за годинниковою
+        Gdiplus::Pen p2(c, (float)EdPx(2));
+        p2.SetStartCap(Gdiplus::LineCapRound);
+        g.DrawArc(&p2, cx - r, cy - r, r * 2, r * 2, a0, sweep);
+        const float th = (a0 + sweep) * 3.14159265f / 180.0f;
+        const float ex = cx + r * cosf(th), ey = cy + r * sinf(th);   // кінець дуги
+        const float dx = -sinf(th), dy = cosf(th);                    // дотична за рухом дуги
+        const float nx = cosf(th), ny = sinf(th);                     // нормаль (від центру)
+        const float hl = s * 0.75f, hw = s * 0.55f;
+        Gdiplus::PointF p[3] = { { ex + dx * hl, ey + dy * hl },
+                                 { ex + nx * hw - dx * hl * 0.15f, ey + ny * hw - dy * hl * 0.15f },
+                                 { ex - nx * hw - dx * hl * 0.15f, ey - ny * hw - dy * hl * 0.15f } };
+        g.FillPolygon(&br, p, 3);
         break;
     }
     default: {                                                                                        // звук
