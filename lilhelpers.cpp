@@ -659,6 +659,8 @@ X(EdTipPaintDigit,    L"Колір цифри",                   L"Number colou
 X(EdTipNoStroke,      L"Без контуру — лише заливка",    L"No outline — fill only")                     \
 X(EdTipNoFill,        L"Без заливки",                   L"No fill")                                    \
 X(EdTipNoHalo,        L"Без обводки",                   L"No outline")                                 X(EdTipSwap,          L"Поміняти кольори місцями",      L"Swap the colours")                           \
+X(EdTipShape,         L"Форма: кружок, прямокутник, шпилька · подвійний клік — на всю групу",          \
+                      L"Shape: circle, rectangle, pin · double-click applies to the whole group")      \
 X(EdTipDigitGroup,    L"Колір цифри · подвійний клік — на всю групу",                                  \
                       L"Number colour · double-click applies to the whole group")                      \
 X(CapKeepTool,        L"Лишати інструмент активним після малювання",                                   \
@@ -786,8 +788,8 @@ X(EdHelpBody,         L"Інструменти: V вибір, R прямокут
                       L"Shift під час малювання — квадрат, коло, кут через 45°\n"                       \
                       L"Текст: Enter — готово, Shift+Enter — новий рядок,\n"                            \
                       L"подвійний клік по напису — відкрити на правку\n"                                \
-                      L"1–8 — колір, Shift+1–8 — заливка, обводка чи цифра,\n"                         \
-                      L"Shift+0 — прибрати заливку чи обводку, X — поміняти кольори,\n"                \
+                      L"1–8 — ліва кнопка кольору (контур, обводка), Shift+1–8 — права\n"                         \
+                      L"(заливка, колір літер, цифра), 0 і Shift+0 — «Немає», X — поміняти,\n"                \
                       L"[ і ] — тонше й товще\n"                                       \
                       L"Стрілки — посунути вибране, з Shift — на 10 точок\n"                                  \
                       L"Delete — видалити вибране\nCtrl+Z, Ctrl+Y — скасувати й повторити\n"           \
@@ -800,8 +802,8 @@ X(EdHelpBody,         L"Інструменти: V вибір, R прямокут
                       L"Shift while drawing — square, circle, 45° steps\n"                              \
                       L"Text: Enter finishes, Shift+Enter adds a line,\n"                               \
                       L"double click a caption to edit it again\n"                                      \
-                      L"1–8 — colour, Shift+1–8 — fill, outline or number,\n"                          \
-                      L"Shift+0 — remove the fill or outline, X — swap the colours,\n"               \
+                      L"1–8 — left colour button (outline), Shift+1–8 — the right one\n"                          \
+                      L"(fill, text colour, number), 0 and Shift+0 — none, X — swap,\n"               \
                       L"[ and ] — thinner and thicker\n"                                        \
                       L"Arrows nudge the selection, with Shift by 10 points\n"                                \
                       L"Delete — remove the selection\nCtrl+Z, Ctrl+Y — undo and redo\n"               \
@@ -8264,6 +8266,9 @@ struct EdObj {
     int      group;   // група: у кожної своя незалежна нумерація
     int      start;   // з якого числа починає група (однакове в усіх її кружечках)
     int      stamp;
+    // CAPS-68: форма лічильника — 0 кружок, 1 скруглений прямокутник, 2 шпилька
+    // (крапелька з хвостиком; вістря — внизу рамки, повертається ручкою).
+    int      cshape;
     // CAPS-34. Стиль лінії — для всіх контурних; наконечник — лише для стрілки.
     // dash: 0 суцільна, 1 пунктир, 2 штрихпунктир.
     // headFront — наконечник у КІНЦІ (там, де відпустили мишу), headBack — на
@@ -8718,6 +8723,11 @@ EdTool   g_edTool  = EdTool::Select;
 // як і «Вибір»: перший Esc не перемикає інструмент, а робить те, що й раніше.
 constexpr EdTool kEdStartTool = EdTool::Rect;
 COLORREF g_edColor = RGB(232, 17, 35);   // типовий колір нових позначок
+// CAPS-67: напис пам'ятає СВІЙ колір і прозорість, як маркер: зміна кольору
+// прямокутника не перефарбовує наступний напис, і навпаки (власник 24.09).
+COLORREF g_edTextColor = RGB(232, 17, 35);
+int      g_edCounterShape = 0;       // CAPS-68: форма наступного лічильника
+int      g_edTextAlpha = 100;
 int      g_edThick = 4;
 int      g_edAlpha = 100;
 // CAPS-49: типові другі кольори — окремо для кожного смислу, бо «заливка»,
@@ -8772,7 +8782,25 @@ constexpr int kEdPickAlpha  = 8;
 constexpr int kEdPaintNone  = 8;         // клітинка «Немає»/«Авто» у палітрі
 // CAPS-65: товщина (висота маркера, розмір кружечка й штампа) — теж список.
 constexpr int kEdPickThick  = 9;
+constexpr int kEdPickShape  = 10;        // CAPS-68: форма лічильника
 bool EdIsPaintPick(int g) { return g >= kEdPickPaint && g <= kEdPickAlpha; }
+
+// CAPS-67: типовий основний колір і прозорість — свої в напису й маркера,
+// спільні в решти.
+COLORREF& EdColorDef(EdKind k)
+{
+    if (k == EdKind::Mark) return g_edMarkColor;
+    if (k == EdKind::Text) return g_edTextColor;
+    return g_edColor;
+}
+int& EdAlphaDef(EdKind k) { return k == EdKind::Text ? g_edTextAlpha : g_edAlpha; }
+
+// CAPS-67: порядок кнопок кольору однаковий у всіх: ліворуч — рамка (контур,
+// обводка), праворуч — суцільний (заливка, колір літер). У напису рамка — це
+// ДРУГИЙ колір (обводка), тож ліворуч стоїть він. Клавіші йдуть за місцем:
+// 1–8 — ліва кнопка, Shift+1–8 — права.
+int EdLeftPaint(EdKind k)  { return k == EdKind::Text ? kEdPickPaint2 : kEdPickPaint; }
+int EdRightPaint(EdKind k) { return k == EdKind::Text ? kEdPickPaint : kEdPickPaint2; }
 
 // Другий колір є у прямокутника, еліпса, напису й лічильника; власна
 // прозорість — у всіх, крім цифри: цифра — частина кружечка.
@@ -10255,7 +10283,7 @@ void EdLayout(HWND hwnd)
             // (заливка, обводка, цифра). Без кольору — лише «Прозорість».
             if (showPal) {
                 RECT a = EdPill(x, cy, EdPx(40), EdPx(28));
-                EdAdd(a, EdHit::Pick, kEdPickPaint);
+                EdAdd(a, EdHit::Pick, EdHas2(kk) ? EdLeftPaint(kk) : kEdPickPaint);
                 x = a.right + EdPx(2);
                 if (EdHas2(kk)) {
                     // CAPS-65: ⇄ між двома кольорами — саме там, де видно, ЩО
@@ -10264,7 +10292,7 @@ void EdLayout(HWND hwnd)
                     EdAdd(sw, EdHit::Swap, 0);
                     x = sw.right + EdPx(2);
                     RECT b2 = EdPill(x, cy, EdPx(40), EdPx(28));
-                    EdAdd(b2, EdHit::Pick, kEdPickPaint2);
+                    EdAdd(b2, EdHit::Pick, EdRightPaint(kk));
                     x = b2.right + EdPx(2);
                 }
                 x += gap - EdPx(2);
@@ -10282,6 +10310,11 @@ void EdLayout(HWND hwnd)
                 RECT r = EdPill(x, cy, EdPx(46), EdPx(28));
                 EdAdd(r, EdHit::Pick, kEdPickThick);
                 x = r.right + EdPx(4);
+                if (kk == EdKind::Counter) {                     // CAPS-68: форма
+                    RECT rf = EdPill(x, cy, EdPx(42), EdPx(28));
+                    EdAdd(rf, EdHit::Pick, kEdPickShape);
+                    x = rf.right + EdPx(4);
+                }
                 x += gap - EdPx(4);
                 sep();
             }
@@ -10843,6 +10876,7 @@ int EdPickValue(int group)
 {
     const bool sel = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size());
     const EdObj* o = sel ? &g_edObjs[g_edSel] : nullptr;
+    if (group == kEdPickShape) return o ? o->cshape : g_edCounterShape;   // CAPS-68
     if (group == kEdPickThick) {                         // CAPS-65
         const EdKind k = EdStripKind();
         const int def = (k == EdKind::Mark) ? g_edMarkH : EdIsStamped(k) ? g_edStampSize : g_edThick;
@@ -10942,8 +10976,8 @@ EdPaintState EdPaintNow()
         p.on2 = o.on2;  p.c2 = o.color2; p.a2 = o.alpha2;
         return p;
     }
-    p.c1 = (k == EdKind::Mark) ? g_edMarkColor : g_edColor;
-    p.a1 = g_edAlpha;
+    p.c1 = EdColorDef(k);
+    p.a1 = EdAlphaDef(k);
     const EdDef2 d = EdDefaults2(k);
     p.on2 = EdHas2(k) ? *d.on : 0;
     p.c2 = *d.col;
@@ -11143,6 +11177,7 @@ void EdPaintChip(HDC dc, Gdiplus::Graphics& g, const RECT& inner, int gi, const 
         return;
     }
     if (gi == kEdPickPaint) {
+        // Колір літер напису — суцільний: рамка в напису — обводка (CAPS-67).
         const int shape = EdMainIsStroke(k) ? 0 : 2;
         if (p.off1) EdSwatchNone(g, r, shape, t, false);
         else        EdSwatchShape(g, r, shape, p.c1, p.a1);
@@ -11155,11 +11190,9 @@ void EdPaintChip(HDC dc, Gdiplus::Graphics& g, const RECT& inner, int gi, const 
                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         return;
     }
-    if (k == EdKind::Text) {
-        if (!p.on2) { EdSwatchNone(g, r, 2, t, false); return; }
-        EdSwatchShape(g, r, 2, p.c2, p.a2);
-        const float di = d * 0.46f;
-        EdSwatchShape(g, Gdiplus::RectF(cx - di / 2, cy - di / 2, di, di), 2, p.c1, 100);
+    if (k == EdKind::Text) {                      // CAPS-67: обводка — рамка
+        if (!p.on2) EdSwatchNone(g, r, 2, t, false);
+        else        EdSwatchShape(g, r, 0, p.c2, p.a2);
         return;
     }
     if (!p.on2) EdSwatchNone(g, r, 2, t, false);
@@ -11233,11 +11266,45 @@ int EdPickLayout(int group, const RECT& btn, const RECT& client, RECT out[16])
     return n;
 }
 
+// CAPS-68: контур лічильника в рамці (x, y, w, h). Шпилька: голівка — коло
+// діаметром 0.74 ширини вгорі, хвостик — дотичні від вістря внизу посередині.
+// Центр цифри — центр голівки (EdCounterHead), а не рамки.
+void EdCounterPath(Gdiplus::GraphicsPath& p, float x, float y, float w, float h, int shape)
+{
+    if (shape == 1) { EdRoundRectPathF(p, x, y, w, h, w * 0.28f); return; }
+    if (shape != 2) { p.AddEllipse(x, y, w, h); return; }
+    const float R = w * 0.37f;
+    const float hx = x + w / 2, hy = y + R;
+    const float tipY = y + h;
+    const float dist = tipY - hy;
+    const float th = (float)(acos(R / dist) * 180.0 / 3.14159265358979);
+    const float a0 = 90.0f + th;                       // лівий дотик
+    const float lx = hx + R * (float)cos(a0 * 3.14159265358979 / 180.0);
+    const float ly = hy + R * (float)sin(a0 * 3.14159265358979 / 180.0);
+    p.AddLine(hx, tipY, lx, ly);
+    p.AddArc(hx - R, hy - R, R * 2, R * 2, a0, 360.0f - 2.0f * th);
+    p.CloseFigure();
+}
+Gdiplus::PointF EdCounterHead(float x, float y, float w, float h, int shape)
+{
+    if (shape == 2) return Gdiplus::PointF(x + w / 2, y + w * 0.37f);
+    return Gdiplus::PointF(x + w / 2, y + h / 2);
+}
+
 // Зразок у кнопці й у списку: та сама фігура, що буде на полотні, тільки мала.
 void EdPickSample(Gdiplus::Graphics& g, const RECT& r, int group, int value,
                   const Gdiplus::Color& c)
 {
     if (group == kEdPickThick) { EdThickSample(g, r, EdStripKind(), value, c); return; }
+    if (group == kEdPickShape) {                          // CAPS-68
+        const float d = (float)EdPx(16);
+        const float cx0 = (r.left + r.right) / 2.0f, cy0 = (r.top + r.bottom) / 2.0f;
+        Gdiplus::GraphicsPath gp;
+        EdCounterPath(gp, cx0 - d / 2, cy0 - d / 2, d, d, value);
+        Gdiplus::SolidBrush b(c);
+        g.FillPath(&b, &gp);
+        return;
+    }
     const float cy = (r.top + r.bottom) / 2.0f;
     const float x0 = (float)(r.left + EdPx(7)), x1 = (float)(r.right - EdPx(7));
     Gdiplus::Pen pen(c, 2.0f);
@@ -11416,7 +11483,7 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 
     // CAPS-34: кнопки випадних селектів. Кожна показує поточний вибір.
-    for (int gi = 0; gi <= kEdPickThick; ++gi) {
+    for (int gi = 0; gi <= kEdPickShape; ++gi) {
         const RECT* r = EdRegionRect(EdHit::Pick, gi);
         if (!r) continue;
         const bool open = (g_edPickOpen == gi);
@@ -12201,7 +12268,7 @@ unsigned long long EdObjHash(const EdObj& o)
     const int f[] = { (int)o.kind, o.x, o.y, o.w, o.h, (int)o.color, o.thick, o.alpha,
                       o.noMain ? 1 : 0, o.on2, (int)o.color2, o.alpha2,
                       o.size, o.bold ? 1 : 0, o.italic ? 1 : 0, o.align, o.boxw, o.mode, o.strength, o.seq, o.group,
-                      o.start, o.stamp, o.dash, o.headFront, o.headBack, o.headSize,
+                      o.start, o.stamp, o.cshape, o.dash, o.headFront, o.headBack, o.headSize,
                       o.img, o.rot, o.grp };
     for (size_t i = 0; i < sizeof(f) / sizeof(f[0]); ++i) h = EdMix(h, f[i]);
     for (size_t i = 0; i < o.text.size(); ++i) h = EdMix(h, (long long)o.text[i]);
@@ -12501,6 +12568,7 @@ bool EdGroupWould(int field, int value)
         if (field == 0)      { if (o.color != (COLORREF)value) return true; }
         else if (field == 1) { if (o.thick != value)           return true; }
         else if (field == 3) { if ((o.on2 ? (int)o.color2 : -1) != value) return true; }
+        else if (field == 4) { if (o.cshape != value)          return true; }
         else                 { if (o.alpha != value)           return true; }
     }
     return false;
@@ -12524,6 +12592,7 @@ bool EdGroupSet(int field, int value)
             o.w = o.h = value;
             o.thick = value;
         }
+        else if (field == 4) o.cshape = value;   // CAPS-68: форма
         else if (field == 3) {             // CAPS-49: колір цифри, -1 — «авто»
             o.on2 = (value >= 0) ? 1 : 0;
             if (value >= 0) o.color2 = (COLORREF)value;
@@ -12807,23 +12876,44 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
     case EdKind::Counter: {
         const Gdiplus::Color col = EdC(o.color, o.alpha * 255 / 100);
         Gdiplus::SolidBrush disc(col);
-        g.FillEllipse(&disc, x, y, w, h);
-        // Тонка світла облямівка: без неї кружечок губиться на позначці того ж
-        // кольору, а таке трапляється частіше, ніж здається.
-        Gdiplus::Pen ring(EdC(RGB(255, 255, 255), o.alpha * 255 / 100), (float)(w / 16.0));
-        g.DrawEllipse(&ring, x + (float)(w / 32.0), y + (float)(w / 32.0),
-                      w - (float)(w / 16.0), h - (float)(h / 16.0));
+        // CAPS-68: форма — кружок, скруглений прямокутник або шпилька.
+        // Тонка світла облямівка трохи всередині: без неї позначка губиться на
+        // позначці того ж кольору, а таке трапляється частіше, ніж здається.
+        const float bw = (float)(w / 16.0), in = bw / 2;
+        Gdiplus::GraphicsPath body, edge;
+        EdCounterPath(body, x, y, w, h, o.cshape);
+        EdCounterPath(edge, x + in, y + in, w - bw, h - bw, o.cshape);
+        g.FillPath(&disc, &body);
+        Gdiplus::Pen ring(EdC(RGB(255, 255, 255), o.alpha * 255 / 100), bw);
+        ring.SetLineJoin(Gdiplus::LineJoinRound);
+        g.DrawPath(&ring, &edge);
         wchar_t nb[16];
         wsprintfW(nb, L"%d", EdCounterNumber(o));
-        EdObj t = EdGlyphObj(o, nb, o.thick * 52 / 100, o.on2 ? o.color2 : EdOnColor(o.color));
+        const int fs = (o.cshape == 2) ? o.thick * 42 / 100 : o.thick * 52 / 100;
+        EdObj t = EdGlyphObj(o, nb, fs, o.on2 ? o.color2 : EdOnColor(o.color));
         t.bold = true;
         const EdTile* tile = EdTextTile(t, s);
         if (tile && tile->bmp) {
+            // Повертається лише форма: цифра лишається рівною. Центр голівки
+            // повертаємо разом із формою, а саму плитку — назад, у прямий кут.
+            Gdiplus::PointF hc = EdCounterHead(x, y, w, h, o.cshape);
+            Gdiplus::GraphicsState up = 0;
+            if (rotated) {
+                const double a = o.rot * 3.14159265358979 / 180.0;
+                const float cx0 = x + w / 2, cy0 = y + h / 2;
+                const float dx = hc.X - cx0, dy = hc.Y - cy0;
+                hc = Gdiplus::PointF(cx0 + (float)(dx * cos(a) - dy * sin(a)),
+                                     cy0 + (float)(dx * sin(a) + dy * cos(a)));
+                up = g.Save();
+                g.TranslateTransform(cx0, cy0);
+                g.RotateTransform((float)-o.rot);
+                g.TranslateTransform(-cx0, -cy0);
+            }
             const int tw = (int)tile->bmp->GetWidth(), th = (int)tile->bmp->GetHeight();
             g.DrawImage(tile->bmp,
-                        Gdiplus::Rect((int)(x + w / 2 - tw / 2.0f + 0.5f),
-                                      (int)(y + h / 2 - th / 2.0f + 0.5f), tw, th),
+                        Gdiplus::Rect((int)(hc.X - tw / 2.0f + 0.5f), (int)(hc.Y - th / 2.0f + 0.5f), tw, th),
                         0, 0, tw, th, Gdiplus::UnitPixel);
+            if (rotated) g.Restore(up);
         }
         break;
     }
@@ -13839,6 +13929,17 @@ void EdThickApply(int idx);
 void EdPickApply(int group, int value)
 {
     if (group == kEdPickThick) { EdThickApply(value); return; }   // CAPS-65
+    if (group == kEdPickShape) {                                   // CAPS-68
+        if (value < 0 || value > 2) return;
+        if (g_edGroupEdit && EdCounterKind()) EdGroupApply(4, value);
+        else if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() &&
+                 g_edObjs[g_edSel].kind == EdKind::Counter && g_edObjs[g_edSel].cshape != value) {
+            EdPushUndo();
+            g_edObjs[g_edSel].cshape = value;
+        }
+        g_edCounterShape = value;
+        return;
+    }
     // CAPS-64: одна панель — три властивості; номер клітинки каже, яка саме.
     if (group == kEdPickEnds) {
         if (value < 0) return;
@@ -13910,14 +14011,14 @@ bool EdPaintApply(int group, int idx)
         // теж. Робити і те, і те означало б два кроки скасування на один клік.
         if (k == EdKind::Counter && g_edGroupEdit) {
             EdGroupApply(0, (int)c);
-            g_edColor = c;
+            EdColorDef(k) = c;
             return true;
         }
         if (sel && g_edObjs[g_edSel].noMain) {          // колір контуру вмикає контур
             EdPushUndo();
             g_edObjs[g_edSel].noMain = false;
             g_edObjs[g_edSel].color = c;
-            g_edColor = c;
+            EdColorDef(k) = c;
         } else {
             EdSetColor(c);
         }
@@ -13999,17 +14100,17 @@ bool EdSwapColors()
     if (sel) t = g_edObjs[g_edSel];
     else {
         t.kind = k;
-        t.color = g_edColor; t.alpha = g_edAlpha;
+        t.color = EdColorDef(k); t.alpha = EdAlphaDef(k);
         t.noMain = EdCanFill(k) && g_edNoMain && *d.on;
         t.on2 = *d.on; t.color2 = *d.col; t.alpha2 = d.alpha ? *d.alpha : 100;
         EdSwapObj(t);
     }
-    g_edColor = t.color;
+    EdColorDef(k) = t.color;
     if (EdCanFill(k)) g_edNoMain = t.noMain;
     *d.on = t.on2;
     *d.col = t.color2;
     if (!sel) {
-        g_edAlpha = t.alpha;
+        EdAlphaDef(k) = t.alpha;
         if (d.alpha) *d.alpha = t.alpha2;
     }
     return true;
@@ -14057,7 +14158,7 @@ void EdSetColor(COLORREF c)
         EdPushUndo();
         g_edObjs[g_edSel].color = c;
     }
-    g_edColor = c;
+    EdColorDef(EdStripKind()) = c;
     InvalidateRect(g_edWnd, nullptr, FALSE);
 }
 
@@ -14441,9 +14542,9 @@ void EdSetAlphaAt(int mouseX)
     }
     // Тогл «Редагування групи» перехоплює повзунок: інакше довелося б пояснювати,
     // чому колір і розмір ідуть усій групі, а прозорість — ні.
-    if (g_edGroupEdit && EdCounterKind()) { EdGroupSet(2, p); g_edAlpha = p; }
+    if (g_edGroupEdit && EdCounterKind()) { EdGroupSet(2, p); EdAlphaDef(EdKind::Counter) = p; }
     else if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) g_edObjs[g_edSel].alpha = p;
-    else g_edAlpha = p;
+    else EdAlphaDef(EdStripKind()) = p;
     InvalidateRect(g_edWnd, nullptr, FALSE);
 }
 
@@ -15270,6 +15371,7 @@ Str EdTipFor(EdHit what, int idx)
         }
         if (idx == kEdPickAlpha) return Str::EdTipAlpha;
         if (idx == kEdPickThick) return EdTipFor(EdHit::Thick, 0);   // CAPS-65
+        if (idx == kEdPickShape) return Str::EdTipShape;             // CAPS-68
         if (idx == kEdPickEnds) return Str::EdTipEnds;          // CAPS-64
         if (idx == kEdPickCorners) return Str::EdTipCorners;    // CAPS-58
         return idx == 0 ? Str::EdTipDash : idx == 1 ? Str::EdTipHeadFront
@@ -15356,8 +15458,8 @@ void EdTipText(EdHit what, int idx, wchar_t* out, int cch)
     if (st == Str::Empty) return;
     const wchar_t* key = nullptr;
     if (what == EdHit::Tool && idx >= 0 && idx < 11) key = kEdToolKeys[idx];
-    else if (what == EdHit::Pick && idx == kEdPickPaint)  key = L"1–8";
-    else if (what == EdHit::Pick && idx == kEdPickPaint2) key = L"Shift+1–8";
+    else if (what == EdHit::Pick && (idx == kEdPickPaint || idx == kEdPickPaint2))
+        key = (idx == EdLeftPaint(EdStripKind()) || !EdHas2(EdStripKind())) ? L"1–8" : L"Shift+1–8";
     else if (what == EdHit::Pick && idx == kEdPickThick)  key = L"[ ]";
     else if (what == EdHit::Swap) key = L"X";
     else if (what == EdHit::Copy) key = L"Ctrl+C";
@@ -15681,9 +15783,9 @@ void EdTextBegin(HWND hwnd, POINT img, int idx)
         o.kind    = EdKind::Text;
         o.x       = img.x;
         o.y       = img.y;
-        o.color   = g_edColor;
+        o.color   = g_edTextColor;    // CAPS-67: свій колір напису
         o.thick   = g_edThick;
-        o.alpha   = g_edAlpha;
+        o.alpha   = g_edTextAlpha;
         o.size    = g_edSize;
         o.bold    = g_edBold;
         o.italic  = g_edItalic;
@@ -17014,6 +17116,10 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             o.stamp = g_edStamp;
             EdInit2(o);                   // CAPS-49: у лічильника — колір цифри
             if (o.kind == EdKind::Counter) {
+                o.cshape = g_edCounterShape;                       // CAPS-68
+                if (o.cshape == 2) o.y = img.y - g_edStampSize;    // вістря — у точку кліку
+            }
+            if (o.kind == EdKind::Counter) {
                 o.group = EdCurGroup();
                 o.start = EdGroupStart(o.group);
                 o.seq   = ++g_edSeq;
@@ -17192,6 +17298,8 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                     EdGroupApply(0, (int)kEdPalette[idx]);
                 else if (grp == kEdPickThick && idx >= 0 && idx < 3)
                     EdGroupApply(1, EdThickSet(EdKind::Counter)[idx]);
+                else if (grp == kEdPickShape && idx >= 0 && idx < 3)
+                    EdGroupApply(4, idx);
             }
             return 0;
         }
@@ -17413,8 +17521,12 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (ctrl || g_edCropping) return 0;
             const bool sh = GetKeyState(VK_SHIFT) < 0 || (lp & 0x0200);
             bool changed = false;
-            if (sh) changed = EdPaintApply(kEdPickPaint2, wp == '0' ? kEdPaintNone : (int)wp - '1');
-            else if (wp != '0' && EdStripPaintable()) changed = EdPaintApply(kEdPickPaint, (int)wp - '1');
+            // CAPS-67: клавіші йдуть за МІСЦЕМ кнопки — ліва (рамка) без Shift,
+            // права (суцільний) із Shift; 0 — «Немає» у відповідній.
+            const EdKind kd = EdStripKind();
+            const int grp = !EdHas2(kd) ? kEdPickPaint : sh ? EdRightPaint(kd) : EdLeftPaint(kd);
+            if (EdStripPaintable() && !(sh && !EdHas2(kd)))
+                changed = EdPaintApply(grp, wp == '0' ? kEdPaintNone : (int)wp - '1');
             if (changed) {
                 g_edPickOpen = -1;
                 EdLayout(hwnd);
@@ -18233,7 +18345,8 @@ void EdWriteObj(EdWr& w, const EdObj& o)
         fi("boxw", o.boxw);
     }
     if (o.kind == EdKind::Hide) { fi("mode", o.mode); fi("strn", o.strength); }
-    if (o.kind == EdKind::Counter) { fi("cseq", o.seq); fi("cgrp", o.group); fi("cstr", o.start); }
+    if (o.kind == EdKind::Counter) { fi("cseq", o.seq); fi("cgrp", o.group); fi("cstr", o.start);
+                                     fi("cshp", o.cshape); }
     if (o.kind == EdKind::Stamp) fi("stmp", o.stamp);
     if (EdIsSegment(o.kind) || EdHasDash(o.kind)) fi("dash", o.dash);
     if (EdIsSegment(o.kind)) { fi("hdf ", o.headFront); fi("hdb ", o.headBack); fi("hds ", o.headSize); }
@@ -18454,6 +18567,7 @@ void EdReadObj(EdRd& r, size_t end, EdObj& o)
         else if (!memcmp(t, "cseq", 4)) o.seq = r.i32v();
         else if (!memcmp(t, "cgrp", 4)) o.group = r.i32v();
         else if (!memcmp(t, "cstr", 4)) o.start = r.i32v();
+        else if (!memcmp(t, "cshp", 4)) o.cshape = r.i32v();      // CAPS-68
         else if (!memcmp(t, "stmp", 4)) o.stamp = r.i32v();
         else if (!memcmp(t, "dash", 4)) o.dash = r.i32v();
         else if (!memcmp(t, "hdf ", 4)) o.headFront = r.i32v();
