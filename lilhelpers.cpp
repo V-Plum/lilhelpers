@@ -775,6 +775,9 @@ X(EdTipTextBox,       L"Ручками з боків — ширина блока
 X(EdAskReplace,       L"Відкрити інше зображення? Позначки не збережено.",                             \
                       L"Open another image? Marks are not saved.")                                     \
 X(EdOpenFilter,       L"Знімки й зображення",           L"Snapshots and images")                       \
+X(EdInsertTitle,      L"Вставити зображення",           L"Insert an image")                            \
+X(EdInsertFilter,     L"Зображення",                    L"Images")                                     \
+X(EdTipInsertImg,     L"Вставити зображення з файлу",   L"Insert an image from a file")                \
 X(EdErrDocNew,        L"Цей знімок зроблено НОВІШОЮ версією програми — вона вміє те, чого ця ще "       \
                       L"не розуміє. Оновіть Little Helpers.",                                           \
                       L"This snapshot was made by a NEWER version of the program, which can do "        \
@@ -784,7 +787,7 @@ X(EdErrDocBad,        L"Файл знімка пошкоджено — проч�
 X(EdErrOpen,          L"Не вдалося відкрити зображення.", L"Could not open the image.")                \
 X(EdHelpTitle,        L"Редактор знімків",              L"Screenshot editor")                          \
 X(EdHelpBody,         L"Інструменти: V вибір, R прямокутник, E еліпс, L лінія,\n"                   \
-                      L"P олівець, T текст, B приховати, H маркер,\nN лічильник, S штамп, C кадр.\n\n"   \
+                      L"P олівець, T текст, B приховати, H маркер,\nN лічильник, S штамп, I зображення, C кадр.\n\n"   \
                       L"Shift під час малювання — квадрат, коло, кут через 45°\n"                       \
                       L"Текст: Enter — готово, Shift+Enter — новий рядок,\n"                            \
                       L"подвійний клік по напису — відкрити на правку\n"                                \
@@ -798,7 +801,7 @@ X(EdHelpBody,         L"Інструменти: V вибір, R прямокут
                       L"Подвійний клік — вписати у вікно\n"                                \
                       L"Пробіл або середня кнопка — рухати полотно",                                    \
                       L"Tools: V select, R rectangle, E ellipse, L line,\n"                          \
-                      L"P pencil, T text, B hide, H marker,\nN counter, S stamp, C crop.\n\n"            \
+                      L"P pencil, T text, B hide, H marker,\nN counter, S stamp, I image, C crop.\n\n"            \
                       L"Shift while drawing — square, circle, 45° steps\n"                              \
                       L"Text: Enter finishes, Shift+Enter adds a line,\n"                               \
                       L"double click a caption to edit it again\n"                                      \
@@ -8489,7 +8492,8 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    SelAlign, SelGroup, SizeImg, SizeCan, Store, SaveMenu,
                    LibArea, LibBack, LibCard, LibRename, LibOpen, LibShow, LibDel,
                    LibDelYes, LibDelNo, OvCopy, OvWindow, OvHandle,
-                   Swap, StripSep };   // CAPS-65: ⇄ кольорів і риски між групами смуги
+                   Swap, StripSep,     // CAPS-65: ⇄ кольорів і риски між групами смуги
+                   InsertImg };        // CAPS-69: «Зображення» на рейці
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -8508,7 +8512,7 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoAlL, IcoAlCx, IcoAlR, IcoAlT, IcoAlCy, IcoAlB, IcoDistX, IcoDistY,
              IcoGroup, IcoUngroup,
              IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn,
-             IcoWindow };
+             IcoWindow, IcoImage };
 
 enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength, Crop, CropMove,
                     Tone, Compare, Zoom, Rotate, ManyResize, ManyRotate, OvSel };
@@ -8999,11 +9003,21 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
         break;
     // Знак питання: дуга верхнього гачка, плавний перехід у ніжку кривою Безьє
     // і крапка окремо. Одна дуга на 230° читалась як кільце, а не як «?».
+    // CAPS-71: знак питання без кола (зауваження власника) — більший, на всю
+    // висоту значка, щоб без обідка не губився поруч зі скасуванням.
     case IcoHelp:
-        g.DrawEllipse(&pen, 2.6f, 2.6f, 14.8f, 14.8f);
-        g.DrawArc(&pen, 7.0f, 4.9f, 6.0f, 6.0f, 180.0f, 200.0f);
-        g.DrawBezier(&pen, 12.82f, 8.93f, 12.2f, 10.7f, 10.0f, 10.6f, 10.0f, 12.3f);
-        g.FillEllipse(&br, 9.15f, 13.9f, 1.7f, 1.7f);
+        g.DrawArc(&pen, 5.6f, 2.4f, 8.8f, 8.8f, 180.0f, 220.0f);
+        g.DrawBezier(&pen, 13.37f, 9.63f, 11.9f, 10.9f, 10.0f, 11.1f, 10.0f, 13.3f);
+        g.FillEllipse(&br, 9.0f, 15.4f, 2.0f, 2.0f);
+        break;
+    case IcoImage:                        // CAPS-69: рамка, гори й сонце
+        g.DrawRectangle(&pen, 2.6f, 3.6f, 14.8f, 12.8f);
+        {
+            Gdiplus::PointF m[5] = { { 3.2f, 14.8f }, { 7.6f, 9.8f }, { 10.8f, 13.0f },
+                                     { 12.8f, 11.0f }, { 16.8f, 15.0f } };
+            g.DrawLines(&pen, m, 5);
+        }
+        g.DrawEllipse(&pen, 12.0f, 5.9f, 2.6f, 2.6f);
         break;
     // IcoFront: прямокутник і стрілка вгору. IcoBack — той самий прямокутник,
     // але вище, і стрілка вниз. Дві заливки різного квадрата, як було раніше,
@@ -9959,7 +9973,7 @@ extern int  g_edPickSliderSlot;
 // протилежну грань; якщо й там ні — усередину рамки.
 int EdOvRailH()
 {
-    return EdPx(8) + EdPx(7) + kEdOvTools * (EdPx(40) + EdPx(4)) + (EdPx(12) - EdPx(4)) +
+    return EdPx(8) + EdPx(7) + (kEdOvTools + 1) * (EdPx(40) + EdPx(4)) + (EdPx(12) - EdPx(4)) +
            EdPx(40) + EdPx(4) + EdPx(40) + EdPx(8);
 }
 
@@ -10110,25 +10124,59 @@ void EdLayout(HWND hwnd)
 
     // панель інструментів
     {
-        const int b = EdPx(40), gap = EdPx(4);
+        const int b0 = EdPx(40), gap0 = EdPx(4);
+        const int ntools = g_edOverlay ? kEdOvTools : 11;
+        // CAPS-70: низ рейки однаковий у вікні й в оверлеї — «Копіювати» завжди
+        // найнижча; в оверлеї над нею ще «У вікно редактора».
+        const int nBottom = g_edOverlay ? 2 : (g_edLibOpen ? 0 : 1);
+        const int bottomH = nBottom ? EdPx(12) + nBottom * b0 + (nBottom - 1) * gap0 : 0;
+        // ⚠ На мінімальній висоті вікна (660) дванадцять інструментів і
+        // «Копіювати» не влазять — тоді кнопки інструментів стискаються, а не
+        // налазять на нижню. У оверлеї рейка й так завжди потрібної висоти.
+        int b = b0, gap = gap0;
+        if (!g_edOverlay) {
+            const int avail = (g_edRcRail.bottom - g_edRcRail.top) - EdPx(8) - EdPx(7) - bottomH - EdPx(8);
+            const int step = avail / (ntools + 1);
+            if (step < b0 + gap0) {
+                gap = step >= EdPx(34) ? EdPx(2) : EdPx(1);
+                b = step - gap;
+                if (b < EdPx(26)) b = EdPx(26);
+            }
+        }
         int y = g_edRcRail.top + EdPx(8);
         const int x = g_edRcRail.left + (rail - b) / 2;
-        const int ntools = g_edOverlay ? kEdOvTools : 11;
         for (int i = 0; i < ntools; ++i) {
             if (i == 1) y += EdPx(7);      // вказівник відділено від фігур
+            // CAPS-69: «Зображення» — одразу за штампом, перед «Кадром».
+            if (i == 10) {
+                RECT ri = { x, y, x + b, y + b };
+                EdAdd(ri, EdHit::InsertImg, 0);
+                y += b + gap;
+            }
             RECT r = { x, y, x + b, y + b };
             EdAdd(r, EdHit::Tool, i);
             y += b + gap;
         }
-        // CAPS-33: унизу рейки оверлея — «Копіювати» і «У вікно редактора»
-        // (рішення власника 22.09). Висота мусить збігатися з EdOvRailH.
+        if (g_edOverlay) {                 // у оверлеї кадру немає — «Зображення» останнє
+            RECT ri = { x, y, x + b, y + b };
+            EdAdd(ri, EdHit::InsertImg, 0);
+            y += b + gap;
+        }
+        // CAPS-33/70: унизу рейки оверлея — «У вікно редактора», під нею
+        // «Копіювати» (рішення власника 24.09). Висота мусить збігатися з EdOvRailH.
+        const int xb = g_edRcRail.left + (rail - b0) / 2;
         if (g_edOverlay) {
             y += EdPx(12) - gap;
-            RECT rc1 = { x, y, x + b, y + b };
-            EdAdd(rc1, EdHit::OvCopy, 0);
-            y += b + gap;
-            RECT rc2 = { x, y, x + b, y + b };
+            RECT rc2 = { xb, y, xb + b0, y + b0 };
             EdAdd(rc2, EdHit::OvWindow, 0);
+            y += b0 + gap0;
+            RECT rc1 = { xb, y, xb + b0, y + b0 };
+            EdAdd(rc1, EdHit::OvCopy, 0);
+        } else if (nBottom) {
+            // У вікні «Копіювати» притиснута до низу рейки — там само, де в оверлеї.
+            const int yb = g_edRcRail.bottom - EdPx(8) - b0;
+            RECT rc1 = { xb, yb, xb + b0, yb + b0 };
+            EdAdd(rc1, EdHit::Copy, 0);
         }
     }
 
@@ -10427,7 +10475,18 @@ void EdLayout(HWND hwnd)
         EdAdd(ob, EdHit::Open, 0);
         RECT om = EdPill(ob.right, cy, EdPx(24), bh);
         EdAdd(om, EdHit::OpenMenu, 0);
-        x = om.right + EdPx(12) + 1 + EdPx(12);
+        x = om.right;
+        // CAPS-70: «Зберегти» — одразу праворуч від «Відкрити»: обидві про файли,
+        // а «Копіювати» переїхала вниз рейки, до тієї самої, що й в оверлеї.
+        if (!g_edLibOpen) {
+            const int sw = ico + EdPx(8) + EdTextWidth(dc, S(Str::EdStore), g_edFont) + EdPx(22);
+            RECT rcStore = EdPill(x + EdPx(8), cy, sw, bh);
+            EdAdd(rcStore, EdHit::Store, 0);
+            RECT sm = EdPill(rcStore.right, cy, EdPx(24), bh);
+            EdAdd(sm, EdHit::SaveMenu, 0);
+            x = sm.right;
+        }
+        x += EdPx(12) + 1 + EdPx(12);
 
         x += EdTextWidth(dc, L"8888 × 8888", g_edFont) + EdPx(12) + 1 + EdPx(12);
         x += EdPx(190) + EdPx(12) + 1 + EdPx(12);   // місце під опис виділення
@@ -10442,19 +10501,7 @@ void EdLayout(HWND hwnd)
         x = h1.right + EdPx(6);
         const int fw = EdTextWidth(dc, S(Str::EdFit), g_edFont) + EdPx(20);
         RECT f = EdPill(x, cy, fw, EdPx(26)); EdAdd(f, EdHit::Fit, 0);
-
-        // Праворуч — квадратна «Копіювати» лише з іконкою, перед нею «Зберегти»
-        // (бібліотека) зі списком: експорт і «зберегти як».
-        int rx = rc.right - edge - bh;
-        RECT rcCopy = { rx, cy - bh / 2, rx + bh, cy + bh / 2 };
-        EdAdd(rcCopy, EdHit::Copy, 0);
-        rx -= EdPx(8) + EdPx(24);
-        RECT sm = { rx, cy - bh / 2, rx + EdPx(24), cy + bh / 2 };
-        EdAdd(sm, EdHit::SaveMenu, 0);
-        const int sw = ico + EdPx(8) + EdTextWidth(dc, S(Str::EdStore), g_edFont) + EdPx(22);
-        rx -= sw;
-        RECT rcStore = { rx, cy - bh / 2, rx + sw, cy + bh / 2 };
-        EdAdd(rcStore, EdHit::Store, 0);
+        (void)rc;
         }
         ReleaseDC(hwnd, dc);
     }
@@ -11686,23 +11733,42 @@ void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         EdPaintButton(g, *r, t, active, hot, !active);
         EdIcon(g, icos[i], EdIconBox(*r), EdC(active ? t.accent : t.text), 1.5f);
     }
-    if (const RECT* rc = EdRegionRect(EdHit::OvCopy, 0)) {
+    // CAPS-69: «Зображення» — не інструмент, а дія (вибрати файл), тож ніколи
+    // не буває «увімкненою».
+    if (const RECT* ri = EdRegionRect(EdHit::InsertImg, 0)) {
+        EdPaintButton(g, *ri, t, false, g_edHotWhat == EdHit::InsertImg, true);
+        EdIcon(g, IcoImage, EdIconBox(*ri), EdC(t.text), 1.5f);
+    }
+    // CAPS-70: низ рейки — риска, далі (в оверлеї) «У вікно», найнижче «Копіювати».
+    const RECT* firstBottom = g_edOverlay ? EdRegionRect(EdHit::OvWindow, 0) : EdRegionRect(EdHit::Copy, 0);
+    if (firstBottom) {
         HBRUSH sb = CreateSolidBrush(t.border);
-        RECT sep = { g_edRcRail.left + EdPx(12), rc->top - EdPx(6),
-                     g_edRcRail.right - EdPx(12), rc->top - EdPx(6) + 1 };
+        RECT sep = { g_edRcRail.left + EdPx(12), firstBottom->top - EdPx(6),
+                     g_edRcRail.right - EdPx(12), firstBottom->top - EdPx(6) + 1 };
         FillRect(dc, &sep, sb);
         DeleteObject(sb);
-        // «Копіювати» — головна дія оверлея, тож як і в рядку стану вікна — залита.
-        const bool hot = (g_edHotWhat == EdHit::OvCopy);
-        Gdiplus::Color fill = EdC(t.accent, hot ? 225 : 255), bd = EdC(t.accent);
-        EdFillRound(g, *rc, (float)EdPx(6), &fill, &bd);
-        const COLORREF fg = g_edDark ? RGB(0, 52, 79) : RGB(255, 255, 255);
-        EdIcon(g, IcoCopy, EdIconBox(*rc), EdC(fg), 1.6f);
     }
     if (const RECT* rw = EdRegionRect(EdHit::OvWindow, 0)) {
         const bool hot = (g_edHotWhat == EdHit::OvWindow);
         EdPaintButton(g, *rw, t, false, hot, true);
         EdIcon(g, IcoWindow, EdIconBox(*rw), EdC(t.text), 1.5f);
+    }
+    // «Копіювати» — головна дія, тож залита. У вікні — лише коли вона остання
+    // використана (друга головна — «Зберегти», вона ж спрацює на Enter).
+    const EdHit copyHit = g_edOverlay ? EdHit::OvCopy : EdHit::Copy;
+    if (const RECT* rc = EdRegionRect(copyHit, 0)) {
+        const bool hot = (g_edHotWhat == copyHit);
+        const bool primary = g_edOverlay || (g_edLastAction == 0);
+        if (primary) {
+            Gdiplus::Color fill = EdC(t.accent, hot ? 225 : 255), bd = EdC(t.accent);
+            EdFillRound(g, *rc, (float)EdPx(6), &fill, &bd);
+        } else {
+            EdPaintButton(g, *rc, t, false, hot, false);
+        }
+        const COLORREF fg = primary ? (g_edDark ? RGB(0, 52, 79) : RGB(255, 255, 255)) : t.text;
+        const bool tick = (g_edTickWhat == copyHit) && (int)(g_edTickUntil - GetTickCount()) > 0;
+        if (tick) EdIcon(g, IcoTick, EdIconBox(*rc), EdC(fg), 2.6f);
+        else      EdIcon(g, IcoCopy, EdIconBox(*rc), EdC(fg), 1.6f);
     }
 }
 
@@ -13817,6 +13883,7 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     wchar_t buf[128];
     int x = EdPx(8);
     if (const RECT* om = EdRegionRect(EdHit::OpenMenu, 0)) x = om->right + EdPx(12) + 1 + EdPx(12);
+    if (const RECT* smr = EdRegionRect(EdHit::SaveMenu, 0)) x = smr->right + EdPx(12) + 1 + EdPx(12);   // CAPS-70
     if (g_edLibOpen) {
         wsprintfW(buf, S(Str::EdLibStatus), (int)g_edLib.size());
         RECT rl = { x, g_edRcStatus.top, x + EdPx(400), g_edRcStatus.bottom };
@@ -13878,24 +13945,7 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     // Праворуч: «Зберегти» зі списком і квадратна «Копіювати». Підсвічена —
     // та, якою користувалися востаннє: вона ж спрацює на Enter.
     splitButton(EdHit::Store, EdHit::SaveMenu, IcoSave, Str::EdStore);
-    if (const RECT* r = EdRegionRect(EdHit::Copy, 0)) {
-        const bool hot = (g_edHotWhat == EdHit::Copy);
-        const bool primary = (g_edLastAction == 0);
-        if (primary) {
-            Gdiplus::Color fill = EdC(t.accent, hot ? 225 : 255);
-            Gdiplus::Color bd = EdC(t.accent);
-            EdFillRound(g, *r, (float)EdPx(6), &fill, &bd);
-        } else {
-            EdPaintButton(g, *r, t, false, hot, false);
-        }
-        const COLORREF fg = primary ? (g_edDark ? RGB(0, 52, 79) : RGB(255, 255, 255)) : t.text;
-        const bool tick = (g_edTickWhat == EdHit::Copy) && (int)(g_edTickUntil - GetTickCount()) > 0;
-        const int ico = EdPx(20);
-        const int cx = (r->left + r->right) / 2, cy = (r->top + r->bottom) / 2;
-        RECT ib = { cx - ico / 2, cy - ico / 2, cx + ico / 2, cy + ico / 2 };
-        if (tick) EdIcon(g, IcoTick, ib, EdC(fg), 2.6f);
-        else      EdIcon(g, IcoCopy, ib, EdC(fg), 1.6f);
-    }
+    // «Копіювати» переїхала вниз рейки (CAPS-70) — малює її EdPaintRail.
 }
 
 void EdPaint(HWND hwnd, HDC dc)
@@ -14908,7 +14958,7 @@ const GUID kCLSID_FileSaveDialog = { 0xc0b4e2f3, 0xba21, 0x4773, { 0x8d, 0xba, 0
 const GUID kIID_IFileSaveDialog  = { 0x84bccd23, 0x5fde, 0x4cdb, { 0xae, 0xa4, 0xaf, 0x64, 0xb8, 0x3d, 0x78, 0xab } };
 const GUID kIID_IShellItem       = { 0x43826d1e, 0xe718, 0x42ee, { 0xbc, 0x55, 0xa1, 0xe2, 0x61, 0xc3, 0x7b, 0xfe } };
 
-bool EdPickFile(HWND owner, wchar_t* out, size_t cch)
+bool EdPickFile(HWND owner, wchar_t* out, size_t cch, bool imagesOnly)
 {
     bool ok = false;
     IFileOpenDialog* dlg = nullptr;
@@ -14916,12 +14966,14 @@ bool EdPickFile(HWND owner, wchar_t* out, size_t cch)
                                 kIID_IFileOpenDialog, (void**)&dlg)) || !dlg)
         return false;
     COMDLG_FILTERSPEC fs[1];
-    fs[0].pszName = S(Str::EdOpenFilter);
+    fs[0].pszName = S(imagesOnly ? Str::EdInsertFilter : Str::EdOpenFilter);
     // Власний формат стоїть ПЕРШИМ у масці: у списку файлів свої знімки мають
-    // бути видні одразу, а не губитися серед чужих картинок.
-    fs[0].pszSpec = L"*.lhshot;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp";
+    // бути видні одразу, а не губитися серед чужих картинок. Для вставки
+    // (CAPS-69) документ не годиться — лише картинки.
+    fs[0].pszSpec = imagesOnly ? L"*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp"
+                               : L"*.lhshot;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp";
     dlg->SetFileTypes(1, fs);
-    dlg->SetTitle(S(Str::EdOpenTitle));
+    dlg->SetTitle(S(imagesOnly ? Str::EdInsertTitle : Str::EdOpenTitle));
     if (SUCCEEDED(dlg->Show(owner))) {
         IShellItem* item = nullptr;
         if (SUCCEEDED(dlg->GetResult(&item)) && item) {
@@ -14976,7 +15028,7 @@ void CapFlash(const wchar_t* text);
 extern bool g_libQuick;
 extern bool g_ovEscSave;
 Gdiplus::Bitmap* CapCrop(Gdiplus::Bitmap* whole, const RECT& monRc, const RECT& want);
-bool EdPickFile(HWND owner, wchar_t* out, size_t cch);
+bool EdPickFile(HWND owner, wchar_t* out, size_t cch, bool imagesOnly = false);
 bool EdIsDocFile(const wchar_t* path);
 void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
                   bool hdr, bool toneMapped, float sdrWhite);
@@ -15332,6 +15384,7 @@ Str EdTipFor(EdHit what, int idx)
     switch (what) {
     case EdHit::OvCopy:   return Str::EdTipOvCopy;
     case EdHit::OvWindow: return Str::EdTipOvWindow;
+    case EdHit::InsertImg: return Str::EdTipInsertImg;
     case EdHit::Tool:
         switch (idx) {
         case 0: return Str::EdToolSelect;
@@ -15462,6 +15515,7 @@ void EdTipText(EdHit what, int idx, wchar_t* out, int cch)
         key = (idx == EdLeftPaint(EdStripKind()) || !EdHas2(EdStripKind())) ? L"1–8" : L"Shift+1–8";
     else if (what == EdHit::Pick && idx == kEdPickThick)  key = L"[ ]";
     else if (what == EdHit::Swap) key = L"X";
+    else if (what == EdHit::InsertImg) key = L"I";
     else if (what == EdHit::Copy) key = L"Ctrl+C";
     else if (what == EdHit::Store) key = L"Ctrl+S";
     if (key) {
@@ -15690,6 +15744,31 @@ bool EdConfirmReplace()
     if (g_edSaved || (g_edObjs.empty() && EdToneDefault() && EdGeomDefault())) return true;
     return MessageBoxW(g_edWnd, S(Str::EdAskReplace), kAppName,
                        MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
+}
+
+// CAPS-69: вставити картинку з файлу окремою позначкою — те саме, що
+// перетягування, але кнопкою: в оверлей файл не перетягнеш. Кладеться в центр
+// видимого: у вікні — полотна, в оверлеї — рамки.
+bool EdInsertImagePath(const wchar_t* path)
+{
+    Gdiplus::Bitmap* b = EdBitmapFromFile(path);
+    if (!b) return false;
+    POINT at;
+    if (g_edOverlay && g_edCrop.right > g_edCrop.left)
+        at = POINT{ (g_edCrop.left + g_edCrop.right) / 2, (g_edCrop.top + g_edCrop.bottom) / 2 };
+    else
+        at = EdToImage(EdCanvasCentre());
+    EdPlaceImage(b, at);
+    return true;
+}
+
+void EdInsertImage(HWND hwnd)
+{
+    if (g_edCropping) EdCropFinish(false);
+    wchar_t path[MAX_PATH] = {};
+    if (!EdPickFile(hwnd, path, MAX_PATH, true)) return;
+    if (!EdInsertImagePath(path))
+        MessageBoxW(hwnd, S(Str::EdErrOpen), kAppName, MB_OK | MB_ICONWARNING);
 }
 
 void EdOpenFileHere(HWND hwnd)
@@ -16741,6 +16820,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         switch (r->what) {
         case EdHit::OvCopy:   EdOverlayCopy(hwnd); return 0;
         case EdHit::OvWindow: EdOverlayToWindow(hwnd); return 0;
+        case EdHit::InsertImg: EdInsertImage(hwnd); return 0;        // CAPS-69
         case EdHit::OvHandle:
             // Рамку підправляють і після того, як почали малювати. Кадр — частина
             // знімка для скасування, тож Ctrl+Z повертає й рамку.
@@ -17534,6 +17614,9 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             return 0;
         }
+        case 'I':                          // CAPS-69: вставити зображення з файлу
+            if (!ctrl) EdInsertImage(hwnd);
+            return 0;
         // CAPS-65: X — поміняти кольори місцями; [ і ] — тонше й товще.
         case 'X':
             if (ctrl || g_edCropping) return 0;
