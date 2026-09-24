@@ -20511,9 +20511,11 @@ HRESULT VidEncOpen(VidEnc& e, VidSrc& s, const wchar_t* path, UINT w, UINT h, in
     it->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     it->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
     it->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-    // ⚠ Крок рядка — ЛИШЕ для шляху через пам'ять, де рядки кладемо самі. У GPU-
-    // текстури крок свій, вирівняний (ширина 1160 px — не 4640 байт), і вказаний тут
-    // w×4 змушував конвертер читати її навскоси: кадр виходив скошеним.
+    // Крок рядка — лише для шляху через пам'ять, де рядки кладемо самі; у GPU-
+    // текстури він свій, вирівняний драйвером.
+    // ⚠ Урок перевірки: декодер теж вирівнює рядки (1160 px лежать по 4672 байти),
+    // і читач, що бере крок як ширина×4, бачить «скошений» кадр там, де його немає.
+    // Саме так тут ледь не з'явилось зайве обмеження «ширина кратна 16».
     if (!gpu) it->SetUINT32(MF_MT_DEFAULT_STRIDE, w * 4);   // згори вниз
     MFSetAttributeSize(it, MF_MT_FRAME_SIZE, w, h);
     MFSetAttributeRatio(it, MF_MT_FRAME_RATE, (UINT32)fps, 1);
@@ -20766,12 +20768,9 @@ bool VidLibPath(wchar_t* part, wchar_t* path)
 }
 
 // Ділянка — в межах монітора, не менша за 64 px (менше апаратні енкодери не
-// беруть), висота парна (вимога H.264), а ширина КРАТНА 16.
-// ⚠ Ширину виміряно пробою (24.09.2026, Intel UHD 630): 1280 і 1232 px — чистий
-// кадр, 1160 і 1234 — скошений по діагоналі, бо апаратний конвеєр RGB→NV12→H.264
-// читає поверхню з кроком, вирівняним до макроблока. Висота на це не впливає.
-// Ширину розширюємо симетрично (з вибраного нічого не губиться, довкола ≤15 px),
-// а звужуємо лише тоді, коли розширяти вже нікуди — скажімо, монітор 1366 px.
+// беруть) і з парними сторонами (вимога H.264 для 4:2:0). Кратності 16 НЕ треба:
+// 1160 і 1234 px енкодер пише чисто (перевірено декодуванням 24.09.2026 — див.
+// урок про крок рядка нижче, у VidEncOpen).
 void VidFitRect(RECT& r, const RECT& mon)
 {
     IntersectRect(&r, &r, &mon);
@@ -20785,12 +20784,7 @@ void VidFitRect(RECT& r, const RECT& mon)
     };
     grow(r.left, r.right, mon.left, mon.right, 64);
     grow(r.top, r.bottom, mon.top, mon.bottom, 64);
-    LONG w = r.right - r.left;
-    if (w % 16) {
-        grow(r.left, r.right, mon.left, mon.right, (w + 15) / 16 * 16);
-        w = r.right - r.left;
-        if (w % 16) r.right -= w % 16;     // розширяти нікуди — звужуємо
-    }
+    if ((r.right - r.left) & 1) --r.right;
     if ((r.bottom - r.top) & 1) --r.bottom;
 }
 
