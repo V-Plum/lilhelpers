@@ -195,6 +195,8 @@ constexpr int  IDC_VID_FPS60     = 218;
 constexpr int  IDC_VID_QLOW      = 219;   // 219..221 = якість 0..2
 constexpr int  IDC_VID_SHOWLIB   = 222;
 constexpr int  IDC_VID_LIBMB     = 223;   // CAPS-74: межа обсягу відео в бібліотеці
+constexpr int  IDC_CAP_ENABLE    = 224;   // CAPS-87: прапорці активності
+constexpr int  IDC_VID_ENABLE    = 225;
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -485,6 +487,10 @@ X(CapHkBusy,          L"Частину гарячих клавіш тримає 
                       L"Another program holds some hotkeys; those shortcuts will not work.")           \
 X(TabShots,           L"Знімки",                        L"Shots")                                      \
 X(TabVideo,           L"Відео",                         L"Video")                                      \
+X(CapEnable,          L"Захоплювати знімки гарячими клавішами",                                        \
+                      L"Capture shots with hotkeys")                                                   \
+X(VidEnable,          L"Записувати відео з екрана гарячою клавішею",                                   \
+                      L"Record screen video with a hotkey")                                            \
 X(CapSecHotkeys,      L"Гарячі клавіші",                L"Hotkeys")                                    \
 X(CapHkClipL,         L"Зображення з буфера",           L"From clipboard")                             \
 X(CapHkEditorL,       L"Порожній редактор",             L"Blank editor")                               \
@@ -19951,6 +19957,12 @@ constexpr int kHkCount = 5;
 constexpr int kHkShots = 4;    // перші чотири живуть на вкладці «Знімки», п'ята — на «Відео»
 int  g_hk[kHkCount]   = { kHkDefClip, kHkDefRegion, kHkDefScreen, kHkDefEditor, kHkDefVideo };
 bool g_hkOk[kHkCount] = { false, false, false, false, false };
+// CAPS-87: вимкнена функція ЗВІЛЬНЯЄ свої клавіші (їх може взяти інша програма),
+// але комбінації лишаються в реєстрі й повертаються при ввімкненні.
+const wchar_t* kRegCapOn = L"CaptureEnabled";
+const wchar_t* kRegVidOn = L"VideoEnabled";
+bool g_capOn = true, g_vidOn = true;
+bool CapSlotOn(int i) { return i < kHkShots ? g_capOn : g_vidOn; }
 
 void CapLoadHotkeys()
 {
@@ -19959,6 +19971,8 @@ void CapLoadHotkeys()
     g_hk[2] = RegLoadInt(kRegHkScreen, kHkDefScreen, 0, 0x7FFFFFFF);
     g_hk[3] = RegLoadInt(kRegHkEditor, kHkDefEditor, 0, 0x7FFFFFFF);
     g_hk[4] = RegLoadInt(kRegHkVideo,  kHkDefVideo,  0, 0x7FFFFFFF);
+    g_capOn = RegLoadInt(kRegCapOn, 1, 0, 1) != 0;   // CAPS-87
+    g_vidOn = RegLoadInt(kRegVidOn, 1, 0, 1) != 0;
 }
 
 void CapSaveHotkeys()
@@ -19980,7 +19994,7 @@ bool CapApplyHotkeys(HWND hwnd)
     for (int i = 0; i < kHkCount; ++i) {
         UnregisterHotKey(hwnd, ids[i]);
         g_hkOk[i] = false;
-        if (!g_hk[i]) continue;
+        if (!g_hk[i] || !CapSlotOn(i)) continue;     // CAPS-87: вимкнена функція клавіш не тримає
         const UINT mods = (UINT)(((unsigned)g_hk[i] >> 16) & 0xFFFF) | MOD_NOREPEAT;
         const UINT vk   = (UINT)(g_hk[i] & 0xFFFF);
         g_hkOk[i] = RegisterHotKey(hwnd, ids[i], mods, vk) != 0;
@@ -20076,7 +20090,7 @@ void CapHkRefresh()
     }
     // CAPS-73: клавіша відео — на своїй вкладці й зі своїм рядком стану.
     if (g_vidHkStatus) {
-        const wchar_t* what = !g_hk[4] ? S(Str::CapHkOff) : (!g_hkOk[4] ? S(Str::CapHkTaken) : L"");
+        const wchar_t* what = !g_vidOn ? L"" : (!g_hk[4] ? S(Str::CapHkOff) : (!g_hkOk[4] ? S(Str::CapHkTaken) : L""));
         SetWindowTextW(g_vidHkStatus, what);
     }
     if (!g_capHkStatus) return;
@@ -20084,7 +20098,7 @@ void CapHkRefresh()
     // під кожним полем не вміщає жодного осмисленого тексту.
     wchar_t line[512] = {};
     const Str names[kHkShots] = { Str::CapHkClipL, Str::EdCapRegion, Str::EdCapScreen, Str::CapHkEditorL };
-    for (int i = 0; i < kHkShots; ++i) {
+    for (int i = 0; i < kHkShots && g_capOn; ++i) {        // CAPS-87: вимкнено — не скаржимось
         const wchar_t* what = nullptr;
         if (!g_hk[i])         what = S(Str::CapHkOff);
         else if (!g_hkOk[i])  what = S(Str::CapHkTaken);
@@ -20120,7 +20134,9 @@ void CapHkSet(int slot, int packed)
     if (packed == prev) { CapHkRefresh(); return; }
     g_hk[slot] = packed;
     CapApplyHotkeys(g_mainWnd);
-    if (packed && !g_hkOk[slot]) {       // не далась — вертаємо як було
+    // CAPS-87: функцію вимкнено — клавішу не тримаємо, але зайняту все одно не приймаємо.
+    const bool refused = CapSlotOn(slot) ? !g_hkOk[slot] : !CapHotkeyFree(packed);
+    if (packed && refused) {             // не далась — вертаємо як було
         g_hk[slot] = prev;
         CapApplyHotkeys(g_mainWnd);
     } else {
@@ -21461,6 +21477,21 @@ void VidStart()
     VidTraySet(true);
 }
 
+// CAPS-73/87: сторінки налаштувань будуються РАНІШЕ, ніж читається реєстр, тож
+// збережене показуємо окремим кроком — так само, як CapActRefresh для жестів.
+// Без цього після перезапуску стояли б типові 30 fps і «увімкнено».
+void VidSettingsRefresh(HWND hwnd)
+{
+    auto set = [hwnd](int id, bool on) {
+        if (HWND b = GetDlgItem(hwnd, id)) SendMessageW(b, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+    };
+    set(IDC_CAP_ENABLE, g_capOn);
+    set(IDC_VID_ENABLE, g_vidOn);
+    set(IDC_VID_FPS30, g_vidFps != 60);
+    set(IDC_VID_FPS60, g_vidFps == 60);
+    for (int i = 0; i < 3; ++i) set(IDC_VID_QLOW + i, g_vidQuality == i);
+}
+
 void VidStop()
 {
     if (g_vidJob) SetEvent(g_vidJob->stop);   // результат прийде через WMAPP_VIDDONE
@@ -21533,12 +21564,14 @@ void ShowTrayMenu(HWND hwnd)
     // Знімки — окремим підменю: у головному списку вони перекривали решту
     // програми, хоч це лише одна з її функцій.
     HMENU shots = CreatePopupMenu();
-    AppendMenuW(shots, MF_STRING, IDM_CAPSCREEN, S(Str::EdCapScreen));
-    AppendMenuW(shots, MF_STRING, IDM_CAPWINDOW, S(Str::EdCapWindow));
-    AppendMenuW(shots, MF_STRING, IDM_CAPREGION, S(Str::EdCapRegion));
-    AppendMenuW(shots, MF_STRING, IDM_CAPCLIP, S(Str::EdCapClip));
+    // CAPS-87: вимкнена функція лишається в меню, але сірою — видно, що вона є і де її ввімкнути.
+    const UINT capF = MF_STRING | (g_capOn ? 0 : MF_GRAYED);
+    AppendMenuW(shots, capF, IDM_CAPSCREEN, S(Str::EdCapScreen));
+    AppendMenuW(shots, capF, IDM_CAPWINDOW, S(Str::EdCapWindow));
+    AppendMenuW(shots, capF, IDM_CAPREGION, S(Str::EdCapRegion));
+    AppendMenuW(shots, capF, IDM_CAPCLIP, S(Str::EdCapClip));
     AppendMenuW(shots, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(shots, MF_STRING, VidRecording() ? IDM_VIDSTOP : IDM_VIDREC,
+    AppendMenuW(shots, MF_STRING | ((g_vidOn || VidRecording()) ? 0 : MF_GRAYED), VidRecording() ? IDM_VIDSTOP : IDM_VIDREC,
                 S(VidRecording() ? Str::VidMenuStop : Str::VidMenuStart));   // CAPS-73
     AppendMenuW(shots, MF_STRING, IDM_EDITOR, S(Str::EdMenu));
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)shots, S(Str::TabShots));
@@ -22021,19 +22054,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             CapHkRefresh();
             break;
         case IDM_CAPSCREEN:
-            CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Screen, nullptr);
+            if (g_capOn) CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Screen, nullptr);
             break;
         case IDM_CAPWINDOW:
-            CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Window, (HWND)lp);
+            if (g_capOn) CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Window, (HWND)lp);
             break;
         case IDM_CAPREGION:
-            CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Region, nullptr);
+            if (g_capOn) CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Region, nullptr);
             break;
         case IDM_CAPCLIP:
-            CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Clipboard, nullptr);
+            if (g_capOn) CapTake(GetModuleHandleW(nullptr), hwnd, CapMode::Clipboard, nullptr);
             break;
         case IDM_VIDREC:             // CAPS-73
-            VidStart();
+            if (g_vidOn) VidStart();   // CAPS-87
             break;
         case IDM_VIDSTOP:
             VidStop();
@@ -22049,6 +22082,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_vidQuality = LOWORD(wp) - IDC_VID_QLOW;
             RegSaveInt(kRegVidQuality, g_vidQuality);
             break;
+        case IDC_CAP_ENABLE:         // CAPS-87
+        case IDC_VID_ENABLE:
+            if (HIWORD(wp) == BN_CLICKED) {
+                const bool on = SendMessageW(GetDlgItem(hwnd, LOWORD(wp)), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                if (LOWORD(wp) == IDC_CAP_ENABLE) { g_capOn = on; RegSaveInt(kRegCapOn, on ? 1 : 0); }
+                else {
+                    g_vidOn = on;
+                    RegSaveInt(kRegVidOn, on ? 1 : 0);
+                    if (!on && VidRecording()) VidStop();   // запис не обриваємо — дописуємо й зберігаємо
+                }
+                CapApplyHotkeys(hwnd);
+                CapHkRefresh();
+            }
+            return 0;
         case IDC_VID_LIBMB:          // CAPS-74: як і ліміт знімків — на втраті фокуса
             if (HIWORD(wp) == EN_KILLFOCUS) {
                 wchar_t v[16] = {};
@@ -22508,7 +22555,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 
     // ---- вкладка «Знімки» (CAPS-21) ----
     y = PY;
-    sec(addK, Str::CapSecHotkeys);
+    // CAPS-87: прапорець активності замість заголовка «Гарячі клавіші» — сторінка
+    // заповнена до низу, а поля під ним і так саме про гарячі клавіші.
+    check(addK, Str::CapEnable, IDC_CAP_ENABLE, g_capOn);
     {
         const Str names[kHkShots] = { Str::CapHkClipL, Str::EdCapRegion, Str::EdCapScreen, Str::CapHkEditorL };
         // ⚠ IDC_CAP_HK1+3 — це IDC_CAP_HKRESET; четвертому полю свій номер.
@@ -22584,7 +22633,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // Окрема вкладка, а не секція «Знімків»: та вже повна до низу, а сюди ж
     // приїдуть звук, курсор і режим запису вікна (CAPS-75..77).
     y = PY;
-    sec(addV, Str::VidSecRec);
+    check(addV, Str::VidEnable, IDC_VID_ENABLE, g_vidOn);   // CAPS-87
     addV(mkS(L"STATIC", Str::VidHkLabel, 0, PX, y + 5, 186, 20, 0));
     g_capHkEdit[4] = addV(mk(L"EDIT", L"", ES_CENTER | ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP,
                              PX + 192, y, 224, 26, IDC_VID_HK));
@@ -22730,6 +22779,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     VidLibCleanup();   // CAPS-74: недописані .part і осиротілі .lhmeta
     CapLoadActs();     // CAPS-57: жест × дія, бібліотека для швидких знімків, Esc оверлея
     CapActRefresh();
+    VidSettingsRefresh(hwnd);   // CAPS-73/87
     if (!CapApplyHotkeys(hwnd)) TrayBalloon(kAppName, S(Str::CapHkBusy));
     CapHkRefresh();
     // CAPS-59: перший запуск із --editor — редактор одразу, але вже з циклу
