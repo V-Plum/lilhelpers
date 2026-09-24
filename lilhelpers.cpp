@@ -8725,7 +8725,7 @@ constexpr int kEdPickCorners = 5;        // CAPS-58: «Кути»
 int EdCornerPx(int level)
 {
     if (level <= 0) return 0;
-    const double base = (level == 1) ? 8.0 : 20.0;
+    const double base = (level == 1) ? 12.0 : 20.0;   // помірне 8→12 (власник 24.09)
     return (int)(base * g_edShotScale + 0.5);
 }
 int      g_edHeadFront = 0, g_edHeadBack = 0, g_edHeadSize = 1;
@@ -10754,10 +10754,21 @@ void EdEndsSample(Gdiplus::Graphics& g, const RECT& r, int startV, int endV, int
 // саме він найкраще читається в маленькій кнопці.
 void EdCornerSample(Gdiplus::Graphics& g, const RECT& r, int level, const Gdiplus::Color& c)
 {
-    const float x0 = (float)(r.left + EdPx(9)), y0 = (float)(r.top + EdPx(8));
-    const float x1 = (float)(r.right - EdPx(8)), y1 = (float)(r.bottom - EdPx(8));
-    const float rad = (float)EdPx(level == 0 ? 0 : level == 1 ? 7 : 13);
-    Gdiplus::Pen pen(c, 2.0f);
+    // Кут малюється в квадраті, вписаному в кнопку з полями, і радіус — частка
+    // сторони квадрата: інакше при великому масштабі дуга виходила за кнопку.
+    const int m = EdPx(8);
+    const int w = (r.right - r.left) - 2 * m, h = (r.bottom - r.top) - 2 * m;
+    const int sm = (w < h) ? w : h;
+    const float s = (float)(sm < 4 ? 4 : sm);
+    const float x0 = r.left + ((r.right - r.left) - s) / 2.0f;
+    const float y0 = r.top + ((r.bottom - r.top) - s) / 2.0f;
+    const float x1 = x0 + s, y1 = y0 + s;
+    const float rad = s * (level == 0 ? 0.0f : level == 1 ? 0.45f : 0.85f);
+    Gdiplus::Pen pen(c, EdPx(2) > 2 ? (float)EdPx(2) : 2.0f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    Gdiplus::Region oldClip; g.GetClip(&oldClip);
+    g.IntersectClip(Gdiplus::Rect(r.left, r.top, r.right - r.left, r.bottom - r.top));
     Gdiplus::GraphicsPath p;
     if (rad <= 0) {
         p.AddLine(x0, y1, x0, y0);
@@ -10768,6 +10779,7 @@ void EdCornerSample(Gdiplus::Graphics& g, const RECT& r, int level, const Gdiplu
         p.AddLine(x0 + rad, y0, x1, y0);
     }
     g.DrawPath(&pen, &p);
+    g.SetClip(&oldClip);
 }
 
 // CAPS-64: розкладка розкритого селекта. Звичайні — стовпчик під кнопкою; «Кінці»
