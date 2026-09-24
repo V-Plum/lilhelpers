@@ -5439,7 +5439,8 @@ bool VideoEnsureMf()
 bool IsVideoExt(const wchar_t* ext)
 {
     static const wchar_t* const k[] = { L".mp4", L".m4v", L".mov", L".avi",
-                                        L".wmv", L".asf", L".mkv", L".webm", L".3gp" };
+                                        L".wmv", L".asf", L".mkv", L".webm", L".3gp",
+                                        L".lhvideo" };   // CAPS-81: проєкт = MP4 + хвіст
     return ExtIn(ext, k, sizeof(k) / sizeof(*k));
 }
 
@@ -5468,6 +5469,45 @@ UINT DeriveVideoStride(DWORD bufLen, UINT32 w, UINT32 h, UINT fallback)
     return fallback;
 }
 
+// CAPS-81: читач відео з будь-якого нашого файла. Проєкт .lhvideo — це MP4 із
+// хвостом, але розширення Media Foundation не знає: відкриваємо як байтовий потік
+// і кажемо тип вмісту. Спільний запис дозволено — хвіст можна переписати, поки
+// відео відкрите (саме відео при цьому не чіпається). MFCreateFile із прапорцем
+// ALLOW_WRITE_SHARING чужого запису насправді НЕ пускає (ERROR_SHARING_VIOLATION),
+// тож файл відкриваємо як IStream без заборон і загортаємо в байтовий потік.
+#ifdef __MINGW32__
+extern "C" HRESULT WINAPI MFCreateMFByteStreamOnStream(IStream* pStream, IMFByteStream** ppByteStream);   // у бібліотеці є, у заголовках MinGW нема
+#endif
+IMFByteStream* LhvByteStream(const wchar_t* path)
+{
+    IMFByteStream* bs = nullptr;
+    IStream* file = nullptr;
+    if (FAILED(SHCreateStreamOnFileEx(path, STGM_READ | STGM_SHARE_DENY_NONE, 0, FALSE, nullptr, &file)) || !file)
+        return nullptr;
+    const HRESULT hr = MFCreateMFByteStreamOnStream(file, &bs);
+    file->Release();
+    if (FAILED(hr) || !bs) return nullptr;
+    IMFAttributes* ba = nullptr;
+    if (SUCCEEDED(bs->QueryInterface(IID_IMFAttributes, (void**)&ba)) && ba) { ba->SetString(MF_BYTESTREAM_CONTENT_TYPE, L"video/mp4"); ba->Release(); }
+    return bs;
+}
+
+bool LhvPathIs(const wchar_t* path)
+{
+    const size_t n = path ? wcslen(path) : 0;
+    return n > 8 && !lstrcmpiW(path + n - 8, L".lhvideo");
+}
+
+HRESULT LhOpenReader(const wchar_t* path, IMFAttributes* a, IMFSourceReader** r)
+{
+    if (!LhvPathIs(path)) return MFCreateSourceReaderFromURL(path, a, r);
+    IMFByteStream* bs = LhvByteStream(path);
+    if (!bs) return E_FAIL;
+    const HRESULT hr = MFCreateSourceReaderFromByteStream(bs, a, r);
+    bs->Release();
+    return hr;
+}
+
 // CAPS-74: кадр і тривалість — спільні для перегляду (CAPS-16) і бібліотеки.
 // Найпідступніше тут — крок рядка, і двох його копій бути не повинно.
 bool VideoGrabFrame(const wchar_t* path, Gdiplus::Bitmap** outBmp, LONGLONG* outDur)
@@ -5482,7 +5522,7 @@ bool VideoGrabFrame(const wchar_t* path, Gdiplus::Bitmap** outBmp, LONGLONG* out
     attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
 
     IMFSourceReader* reader = nullptr;
-    const HRESULT hrOpen = MFCreateSourceReaderFromURL(path, attrs, &reader);
+    const HRESULT hrOpen = LhOpenReader(path, attrs, &reader);   // CAPS-81
     attrs->Release();
     if (FAILED(hrOpen) || !reader) return false;
 
@@ -11165,7 +11205,8 @@ void EdLayout(HWND hwnd)
                 RECT del = { area.right - pad - EdPx(96), by - EdPx(32), area.right - pad, by };
                 RECT sh  = { cx0 + pad, by - EdPx(32), del.left - EdPx(8), by };
                 // CAPS-78: відео відкривається в редакторі, програвач — другорядна дія поруч
-                if (g_edLibSel >= 0 && g_edLibSel < (int)g_edLib.size() && g_edLib[g_edLibSel].video) {
+                if (g_edLibSel >= 0 && g_edLibSel < (int)g_edLib.size() && g_edLib[g_edLibSel].video &&
+                    !LhvPathIs(g_edLib[g_edLibSel].path.c_str())) {   // CAPS-81
                     const int mid = (sh.left + sh.right) / 2;
                     RECT pl = { mid + EdPx(4), sh.top, sh.right, sh.bottom };
                     sh.right = mid - EdPx(4);
@@ -15647,7 +15688,7 @@ bool EdPickFile(HWND owner, wchar_t* out, size_t cch, bool imagesOnly)
     // бути видні одразу, а не губитися серед чужих картинок. Для вставки
     // (CAPS-69) документ не годиться — лише картинки.
     fs[0].pszSpec = imagesOnly ? L"*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp"
-                               : L"*.lhshot;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp;*.mp4;*.m4v;*.mov;*.wmv;*.avi;*.mkv";
+                               : L"*.lhshot;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp;*.mp4;*.m4v;*.mov;*.wmv;*.avi;*.mkv;*.lhvideo";
     dlg->SetFileTypes(1, fs);
     dlg->SetTitle(S(imagesOnly ? Str::EdInsertTitle : Str::EdOpenTitle));
     if (SUCCEEDED(dlg->Show(owner))) {
@@ -19176,6 +19217,7 @@ void EdWriteObj(EdWr& w, const EdObj& o)
     if (EdIsSegment(o.kind)) { fi("hdf ", o.headFront); fi("hdb ", o.headBack); fi("hds ", o.headSize); }
     if (o.kind == EdKind::Image) fi("img ", o.img);
     if (o.kind == EdKind::Rect || o.kind == EdKind::Image) { fi("crnr", o.corners); fi("crpx", o.crpx); }
+    if (o.vf1 != INT_MAX) { fi("vf0 ", o.vf0); fi("vf1 ", o.vf1); }   // CAPS-81: лише позначки відео
 
     w.close(obj);
 }
@@ -19400,6 +19442,8 @@ void EdReadObj(EdRd& r, size_t end, EdObj& o)
         else if (!memcmp(t, "img ", 4)) o.img = r.i32v();
         else if (!memcmp(t, "crnr", 4)) o.corners = r.i32v();   // CAPS-58
         else if (!memcmp(t, "crpx", 4)) o.crpx = r.i32v();
+        else if (!memcmp(t, "vf0 ", 4)) o.vf0 = r.i32v();       // CAPS-81
+        else if (!memcmp(t, "vf1 ", 4)) o.vf1 = r.i32v();
         else if (!memcmp(t, "text", 4)) o.text = r.str();
         else if (!memcmp(t, "pts ", 4)) {
             const DWORD n = r.u32v();
@@ -19803,6 +19847,158 @@ bool VidMetaRead(const std::wstring& mp4, VidMeta& m)
     return !r.bad;
 }
 
+// ---- CAPS-81: проєкт відео .lhvideo ----
+// Один файл (рішення власника 25.09): MP4 байт у байт, а ПІСЛЯ нього — MP4-блок
+// «uuid» із проєктом (назва, правки, позначки, журнал миші, мініатюра). Невідомі
+// блоки MP4 програвачі пропускають, тож файл лишається звичайним відео: будь-який
+// програвач його грає (без правок), а перейменований у .mp4 — теж. Правка проєкту
+// переписує лише хвіст: гігабайти відео не чіпаються, запасу місця не треба.
+// Знайти хвіст — 16 байт наприкінці: «LHVEND» і зсув початку блока.
+const char kLhvMagic[8] = { 'L', 'H', 'V', 'I', 'D', 'E', 'O', 0x1A };
+const char kLhvEnd[8]   = { 'L', 'H', 'V', 'E', 'N', 'D', 0, 0 };
+const BYTE kLhvUuid[16] = { 0x6c, 0x68, 0x76, 0x2d, 0x9a, 0x3e, 0x4f, 0x81, 0xb2, 0x5d, 0x0c, 0x77, 0xe1, 0x46, 0x2f, 0xa9 };
+constexpr WORD kLhvVerMajor = 1, kLhvVerMinor = 0;
+
+bool LhvIs(const wchar_t* path) { return LhvPathIs(path); }
+
+// Де закінчується MP4 (= де починається блок проєкту); -1 — хвоста немає.
+LONGLONG LhvTailOffset(HANDLE f, LONGLONG size)
+{
+    if (size < 24 + 16) return -1;
+    BYTE foot[16];
+    DWORD got = 0;
+    LARGE_INTEGER at;
+    at.QuadPart = size - 16;
+    if (!SetFilePointerEx(f, at, nullptr, FILE_BEGIN) || !ReadFile(f, foot, 16, &got, nullptr) || got != 16) return -1;
+    if (memcmp(foot, kLhvEnd, 8)) return -1;
+    LONGLONG off = 0;
+    memcpy(&off, foot + 8, 8);
+    if (off < 0 || off > size - 24 - 16) return -1;
+    BYTE head[24];
+    at.QuadPart = off;
+    if (!SetFilePointerEx(f, at, nullptr, FILE_BEGIN) || !ReadFile(f, head, 24, &got, nullptr) || got != 24) return -1;
+    const DWORD boxSize = ((DWORD)head[0] << 24) | ((DWORD)head[1] << 16) | ((DWORD)head[2] << 8) | head[3];
+    if (memcmp(head + 4, "uuid", 4) || memcmp(head + 8, kLhvUuid, 16) || (LONGLONG)boxSize != size - off) return -1;
+    return off;
+}
+
+// Вміст проєкту (без заголовка блока й кінцівки). false — це не проєкт.
+bool LhvReadPayload(const wchar_t* path, std::vector<BYTE>& payload, LONGLONG* mp4End = nullptr)
+{
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER sz = {};
+    bool ok = false;
+    if (GetFileSizeEx(f, &sz)) {
+        const LONGLONG off = LhvTailOffset(f, sz.QuadPart);
+        const LONGLONG n = off >= 0 ? sz.QuadPart - off - 24 - 16 : -1;
+        if (off >= 0 && n >= 12 && n < (256LL << 20)) {
+            payload.resize((size_t)n);
+            LARGE_INTEGER at;
+            at.QuadPart = off + 24;
+            DWORD got = 0;
+            ok = SetFilePointerEx(f, at, nullptr, FILE_BEGIN) && ReadFile(f, payload.data(), (DWORD)n, &got, nullptr) && got == (DWORD)n
+                 && !memcmp(payload.data(), kLhvMagic, 8);
+            if (mp4End) *mp4End = off;
+        }
+    }
+    CloseHandle(f);
+    return ok;
+}
+
+// Записати (переписати) хвіст. Відео до mp4End не чіпається зовсім.
+bool LhvWriteTail(const wchar_t* path, const std::vector<BYTE>& payload)
+{
+    HANDLE f = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER sz = {};
+    bool ok = false;
+    if (GetFileSizeEx(f, &sz)) {
+        const LONGLONG old = LhvTailOffset(f, sz.QuadPart);
+        const LONGLONG mp4End = old >= 0 ? old : sz.QuadPart;
+        std::vector<BYTE> box;
+        const DWORD boxSize = (DWORD)(24 + payload.size() + 16);
+        box.reserve(boxSize);
+        box.push_back((BYTE)(boxSize >> 24)); box.push_back((BYTE)(boxSize >> 16));
+        box.push_back((BYTE)(boxSize >> 8));  box.push_back((BYTE)boxSize);
+        box.insert(box.end(), { 'u', 'u', 'i', 'd' });
+        box.insert(box.end(), kLhvUuid, kLhvUuid + 16);
+        box.insert(box.end(), payload.begin(), payload.end());
+        box.insert(box.end(), kLhvEnd, kLhvEnd + 8);
+        const BYTE* po = (const BYTE*)&mp4End;
+        box.insert(box.end(), po, po + 8);
+        LARGE_INTEGER at;
+        at.QuadPart = mp4End;
+        DWORD put = 0;
+        ok = SetFilePointerEx(f, at, nullptr, FILE_BEGIN) && SetEndOfFile(f)
+             && WriteFile(f, box.data(), (DWORD)box.size(), &put, nullptr) && put == box.size();
+        FlushFileBuffers(f);
+    }
+    CloseHandle(f);
+    return ok;
+}
+
+// Бібліотеці — те, що вона показує, без декодування: назва, дата, розмір, тривалість, мініатюра.
+bool LhvPeek(const wchar_t* path, EdLibItem& it)
+{
+    std::vector<BYTE> p;
+    if (!LhvReadPayload(path, p)) return false;
+    EdRd r{ p.data(), p.size(), 8, false };
+    WORD major = 0, minor = 0;
+    r.raw(&major, 2);
+    r.raw(&minor, 2);
+    if (major > kLhvVerMajor) return false;
+    while (!r.bad && r.at + 8 <= r.n) {
+        char t[4];
+        r.raw(t, 4);
+        const DWORD len = r.u32v();
+        if (r.bad || r.at + len > r.n) break;
+        const size_t next = r.at + len;
+        if (!memcmp(t, "META", 4)) { it.created = r.u64v(); it.name = r.str(); }
+        else if (!memcmp(t, "INFO", 4)) { it.w = r.i32v(); it.h = r.i32v(); it.dur = (LONGLONG)r.u64v(); }
+        else if (!memcmp(t, "THMB", 4) && len) it.thumb = EdPngDecode(p.data() + r.at, len);
+        else if (!memcmp(t, "OBJS", 4)) it.marks = (int)r.u32v();
+        r.at = next;
+    }
+    return true;
+}
+
+// Назву змінено в бібліотеці — переписати лише META у хвості, решту блоків як є.
+bool LhvRename(const wchar_t* path, const std::wstring& name)
+{
+    std::vector<BYTE> p;
+    if (!LhvReadPayload(path, p)) return false;
+    EdWr w;
+    w.raw(p.data(), 12);                          // магія й версія
+    size_t at = 12;
+    bool done = false;
+    while (at + 8 <= p.size()) {
+        char t[4];
+        DWORD len = 0;
+        memcpy(t, &p[at], 4);
+        memcpy(&len, &p[at + 4], 4);
+        const size_t body = at + 8;
+        if (body + len > p.size()) return false;
+        if (!memcmp(t, "META", 4)) {
+            EdRd r{ p.data(), body + len, body, false };
+            const ULONGLONG created = r.u64v();
+            r.str();                               // стара назва
+            const size_t m = w.open("META");
+            w.u64v(created);
+            w.str(name);
+            if (!r.bad && r.at < body + len) w.raw(p.data() + r.at, body + len - r.at);   // решта META як була
+            w.close(m);
+            done = true;
+        } else {
+            w.raw(p.data() + at, 8 + len);
+        }
+        at = body + len;
+    }
+    return done && LhvWriteTail(path, w.b);
+}
+
 // Кадр для мініатюри — той самий код, що й перегляд по пробілу (VideoGrabFrame),
 // зменшений до 320×240: мініатюра в кеші — кілобайти, а не мегабайти.
 Gdiplus::Bitmap* VidThumbFrom(Gdiplus::Bitmap* frame)
@@ -19827,8 +20023,11 @@ bool EndsWithI(const wchar_t* s, const wchar_t* tail)
 
 // Відео — у спільний список бібліотеки. keep = false: лише порахувати (фільтр
 // «Знімки»), але кеш усе одно підтримати.
+void VidLibScanLhv(const wchar_t* dir, bool keep);   // CAPS-81, нижче
+
 void VidLibScanInto(const wchar_t* dir, bool keep)
 {
+    VidLibScanLhv(dir, keep);
     wchar_t mask[MAX_PATH];
     wsprintfW(mask, L"%s\\*.mp4", dir);
     WIN32_FIND_DATAW fd;
@@ -19887,8 +20086,36 @@ void VidLibScanInto(const wchar_t* dir, bool keep)
     FindClose(h);
 }
 
+// CAPS-81: проєкти відео — назва, мініатюра й тривалість лежать у самому файлі.
+void VidLibScanLhv(const wchar_t* dir, bool keep)
+{
+    wchar_t mask[MAX_PATH];
+    wsprintfW(mask, L"%s\\*.lhvideo", dir);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(mask, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !EndsWithI(fd.cFileName, L".lhvideo")) continue;
+        const std::wstring path = std::wstring(dir) + L"\\" + fd.cFileName;
+        const ULONGLONG size = ((ULONGLONG)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+        ++g_edLibVids;
+        g_edLibVidBytes += size;
+        if (!keep) continue;
+        EdLibItem it;
+        it.video = true;
+        it.file = fd.cFileName;
+        it.path = path;
+        it.bytes = size;
+        it.created = ((ULONGLONG)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime;
+        if (!LhvPeek(path.c_str(), it) || it.name.empty()) it.name = std::wstring(fd.cFileName, wcslen(fd.cFileName) - 8);
+        g_edLib.push_back(it);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
+
 bool VidMetaRename(const std::wstring& mp4, const std::wstring& name)
 {
+    if (LhvIs(mp4.c_str())) return LhvRename(mp4.c_str(), name);   // CAPS-81: у проєкті назва — у хвості
     VidMeta m;
     if (!VidMetaRead(mp4, m)) return false;
     m.name = name;
@@ -19928,12 +20155,13 @@ void VidLibRetention(const wchar_t* keepPath)
     std::vector<F> all;
     ULONGLONG total = 0;
     wchar_t mask[MAX_PATH];
-    wsprintfW(mask, L"%s\\*.mp4", dir);
+    wsprintfW(mask, L"%s\\*", dir);                  // CAPS-81: і записи, і проєкти
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW(mask, &fd);
     if (h == INVALID_HANDLE_VALUE) return;
     do {
-        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !EndsWithI(fd.cFileName, L".mp4")) continue;
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            !(EndsWithI(fd.cFileName, L".mp4") || EndsWithI(fd.cFileName, L".lhvideo"))) continue;
         F f;
         f.path = std::wstring(dir) + L"\\" + fd.cFileName;
         f.when = ((ULONGLONG)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime;
@@ -19958,8 +20186,8 @@ void VidLibCleanup()
 {
     const wchar_t* dir = EdLibDir();
     if (!dir) return;
-    const wchar_t* masks[3] = { L"*.mp4.part", L"*.lhmeta.tmp", L"*.lhmeta" };
-    for (int i = 0; i < 3; ++i) {
+    const wchar_t* masks[4] = { L"*.mp4.part", L"*.lhmeta.tmp", L"*.lhmeta", L"*.lhvideo.part" };   // CAPS-81
+    for (int i = 0; i < 4; ++i) {
         wchar_t mask[MAX_PATH];
         wsprintfW(mask, L"%s\\%s", dir, masks[i]);
         WIN32_FIND_DATAW fd;
@@ -20305,7 +20533,7 @@ inline HRESULT EvExportRun(EvExportJob* j)
             ra->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
         }
         if (marks) ra->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);   // NV12 → RGB32
-        hr = MFCreateSourceReaderFromURL(j->src, ra, &rd);
+        hr = LhOpenReader(j->src, ra, &rd);          // CAPS-81
         ra->Release();
         if (FAILED(hr)) break;                   // файл не читається — другий прохід не допоможе
         vSi = aSi = MAXDWORD;
@@ -20824,7 +21052,7 @@ void EvProbeFile(const wchar_t* path)
 {
     g_evFps = 30.0; g_evAudio = false;
     IMFSourceReader* r = nullptr;
-    if (FAILED(MFCreateSourceReaderFromURL(path, nullptr, &r)) || !r) return;
+    if (FAILED(LhOpenReader(path, nullptr, &r)) || !r) return;   // CAPS-81
     IMFMediaType* t = nullptr;
     if (SUCCEEDED(r->GetNativeMediaType((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &t)) && t) {
         UINT32 n = 0, d = 0;
@@ -20998,7 +21226,7 @@ DWORD WINAPI EvThumbThread(LPVOID param)
             }
         }
         a->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE);
-        if (FAILED(MFCreateSourceReaderFromURL(j->path, a, &r))) r = nullptr;
+        if (FAILED(LhOpenReader(j->path, a, &r))) r = nullptr;   // CAPS-81
         a->Release();
         if (r) {
             IMFMediaType* t = nullptr;
@@ -21323,12 +21551,24 @@ bool EvStart(const wchar_t* path)
     g_evView = CreateWindowExW(0, L"lilhelpers_evview", L"", WS_CHILD | WS_CLIPSIBLINGS,
                                0, 0, 1, 1, g_edWnd, nullptr, GetModuleHandleW(nullptr), nullptr);
     BSTR url = SysAllocString(path);
-    hr = g_evMe->SetSource(url);
+    if (LhvPathIs(path)) {                     // CAPS-81: проєкт — через байтовий потік із типом MP4
+        IMFMediaEngineEx* ex = nullptr;
+        IMFByteStream* bs = LhvByteStream(path);
+        hr = (bs && SUCCEEDED(g_evMe->QueryInterface(__uuidof(IMFMediaEngineEx), (void**)&ex)) && ex)
+             ? ex->SetSourceFromByteStream(bs, url) : E_FAIL;
+        if (ex) ex->Release();
+        if (bs) bs->Release();
+    } else {
+        hr = g_evMe->SetSource(url);
+    }
     SysFreeString(url);
     return SUCCEEDED(hr) && g_evView;
 }
 
 void EvHoverHide();
+extern wchar_t g_evPendingDelete[MAX_PATH];   // CAPS-81, нижче
+extern std::vector<BYTE> g_evMouseLog;
+bool LhvApply(const wchar_t* path);
 extern HWND g_evOver;                      // CAPS-80, нижче
 extern std::vector<int> g_evOverSig;
 
@@ -21339,6 +21579,9 @@ void EvClose()
     EvSaveCancel();                        // CAPS-79: експорт належить відкритому відео
     EvEditClear();
     if (g_evOver) { DestroyWindow(g_evOver); g_evOver = nullptr; }   // CAPS-80
+    // CAPS-81: MP4, що став проєктом, — у кошик тепер, коли програвач його відпустив
+    if (g_evPendingDelete[0]) { VidLibRemove(g_evPendingDelete, false); g_evPendingDelete[0] = 0; }
+    g_evMouseLog.clear();
     g_evOverSig.clear();
     g_evFrozen = -1;
     g_evUndoOrder.clear();
@@ -21405,6 +21648,8 @@ bool EvOpen(HINSTANCE hInst, const wchar_t* path)
     g_evRate = 1.0;
     g_evFrozen = -1;                      // CAPS-80: на старті — відео, поки не став перший кадр
     EvEditReset();                        // CAPS-79: правки — з чистого аркуша
+    g_evMouseLog = m.mouse;               // CAPS-81: журнал миші запису (з .lhmeta)
+    if (LhvIs(path)) LhvApply(path);      // CAPS-81: проєкт — правки й позначки назад
     g_edTool = EdTool::Select;            // CAPS-78: у відео поки лише «Вибір» (позначки — CAPS-80)
     g_edVideo = true;
     wchar_t cap[160];
@@ -22578,6 +22823,161 @@ void EvBuildMarkSpans(std::vector<EvMarkSpan>& out, int vw, int vh)
     }
 }
 
+// ---- CAPS-81: проєкт із редактора й назад ----
+std::vector<BYTE> g_evMouseLog;                  // журнал миші відкритого відео (з .lhmeta чи проєкту)
+wchar_t g_evPendingDelete[MAX_PATH] = {};        // старий MP4, що став проєктом: у кошик, щойно відео закриють
+
+std::vector<BYTE> LhvBuild()
+{
+    EdWr w;
+    w.raw(kLhvMagic, 8);
+    w.raw(&kLhvVerMajor, 2);
+    w.raw(&kLhvVerMinor, 2);
+    {   const size_t at = w.open("META");
+        ULONGLONG created = g_evCreated;
+        if (!created) { FILETIME ft; GetSystemTimeAsFileTime(&ft); created = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime; }
+        w.u64v(created);
+        w.str(g_evName);
+        wchar_t ver[32] = {};
+        ExeVersionString(ver, 32);
+        w.str(ver);
+        w.close(at);
+    }
+    {   const size_t at = w.open("INFO");
+        w.i32v(g_evW); w.i32v(g_evH); w.u64v((ULONGLONG)(g_evDur * 1e7 + 0.5));
+        w.i32v((int)(g_evFps * 1000 + 0.5)); w.u8v(g_evAudio ? 1 : 0); w.i32v(EvFrames());
+        w.close(at);
+    }
+    if (g_edImg) {                               // мініатюра — кадр із позначками, як у редакторі
+        if (Gdiplus::Bitmap* flat = EdRender()) {
+            std::vector<BYTE> tp;
+            if (EdThumbPng(flat, tp)) { const size_t at = w.open("THMB"); w.raw(tp.data(), tp.size()); w.close(at); }
+            delete flat;
+        }
+    }
+    {   const size_t at = w.open("CUTS");
+        w.u32v((DWORD)g_evEd.parts.size());
+        for (const EvPart& p : g_evEd.parts) { w.i32v(p.a); w.i32v(p.b); w.u8v(p.off ? 1 : 0); }
+        w.i32v(g_evEd.in); w.i32v(g_evEd.out);
+        w.close(at);
+    }
+    {   const size_t at = w.open("BANK");        // вкладені зображення позначок — у файлі, як у .lhshot
+        w.u32v((DWORD)g_edImgBank.size());
+        for (size_t i = 0; i < g_edImgBank.size(); ++i) {
+            std::vector<BYTE> png;
+            if (!g_edImgBank[i] || !EdPngEncode(g_edImgBank[i], png)) png.clear();
+            w.u32v((DWORD)png.size());
+            if (!png.empty()) w.raw(png.data(), png.size());
+        }
+        w.close(at);
+    }
+    {   const size_t at = w.open("NUMS");
+        w.i32v(g_edSeq); w.i32v(g_edStartNum); w.i32v(g_edCounterGroup); w.i32v(g_edNextGrp);
+        w.close(at);
+    }
+    {   const size_t at = w.open("SCAL");
+        w.i32v((int)(g_edShotScale * 1000.0 + 0.5));
+        w.close(at);
+    }
+    {   EvAdoptMarks();
+        const size_t at = w.open("OBJS");
+        w.u32v((DWORD)g_edObjs.size());
+        for (const EdObj& o : g_edObjs) EdWriteObj(w, o);
+        w.close(at);
+    }
+    if (!g_evMouseLog.empty()) { const size_t at = w.open("MOUS"); w.raw(g_evMouseLog.data(), g_evMouseLog.size()); w.close(at); }
+    return w.b;
+}
+
+// Відкрите відео — проєкт: відновити правки й позначки. Кличеться, коли кадрів
+// уже відомо (після проби файла) і документ редактора вже є.
+bool LhvApply(const wchar_t* path)
+{
+    std::vector<BYTE> p;
+    if (!LhvReadPayload(path, p)) return false;
+    EdRd r{ p.data(), p.size(), 8, false };
+    WORD major = 0, minor = 0;
+    r.raw(&major, 2);
+    r.raw(&minor, 2);
+    if (major > kLhvVerMajor) return false;
+    EvEdit ed;
+    bool haveCuts = false;
+    std::vector<Gdiplus::Bitmap*> bank;
+    std::vector<EdObj> objs;
+    int seq = 0, startNum = 1, cgroup = 0, nextGrp = 1, scale1000 = 1000;
+    std::vector<BYTE> mouse;
+    while (!r.bad && r.at + 8 <= r.n) {
+        char t[4];
+        r.raw(t, 4);
+        const DWORD len = r.u32v();
+        if (r.bad || r.at + len > r.n) break;
+        const size_t next = r.at + len;
+        if (!memcmp(t, "META", 4)) { const ULONGLONG c = r.u64v(); const std::wstring nm = r.str(); if (!nm.empty()) lstrcpynW(g_evName, nm.c_str(), 128); if (c) g_evCreated = c; }
+        else if (!memcmp(t, "CUTS", 4)) {
+            const DWORD n = r.u32v();
+            if (n > 100000) break;
+            for (DWORD i = 0; i < n && !r.bad; ++i) { EvPart q; q.a = r.i32v(); q.b = r.i32v(); q.off = r.u8v() != 0; ed.parts.push_back(q); }
+            ed.in = r.i32v(); ed.out = r.i32v();
+            haveCuts = !r.bad;
+        } else if (!memcmp(t, "BANK", 4)) {
+            const DWORD n = r.u32v();
+            for (DWORD i = 0; i < n && n < 4096 && !r.bad; ++i) {
+                const DWORD blen = r.u32v();
+                if (r.bad || r.at + blen > next) break;
+                bank.push_back(blen ? EdPngDecode(p.data() + r.at, blen) : nullptr);
+                r.at += blen;
+            }
+        } else if (!memcmp(t, "NUMS", 4)) { seq = r.i32v(); startNum = r.i32v(); cgroup = r.i32v(); nextGrp = r.i32v(); }
+        else if (!memcmp(t, "SCAL", 4)) { const int v = r.i32v(); if (v >= 250 && v <= 8000) scale1000 = v; }
+        else if (!memcmp(t, "OBJS", 4)) {
+            const DWORD n = r.u32v();
+            for (DWORD i = 0; i < n && n < 100000 && !r.bad; ++i) {
+                char ot[4];
+                r.raw(ot, 4);
+                const DWORD olen = r.u32v();
+                if (r.bad || memcmp(ot, "OBJ ", 4) || r.at + olen > next) { r.bad = true; break; }
+                EdObj o = EdObj{};
+                o.alpha = 100;
+                const size_t oend = r.at + olen;
+                EdReadObj(r, oend, o);
+                r.at = oend;
+                objs.push_back(o);
+            }
+        } else if (!memcmp(t, "MOUS", 4)) mouse.assign(p.data() + r.at, p.data() + next);
+        r.at = next;
+    }
+    // Правки — лише якщо вони про ці кадри: частини суцільно покривають [0, N).
+    const int n = EvFrames();
+    if (haveCuts && !ed.parts.empty()) {
+        bool ok = ed.parts[0].a == 0;
+        for (size_t i = 1; i < ed.parts.size() && ok; ++i) ok = ed.parts[i].a == ed.parts[i - 1].b && ed.parts[i].b > ed.parts[i].a;
+        if (ok) {
+            // тривалість, яку каже рушій, буває на кадр інша за записану — хвіст підганяємо
+            while (ed.parts.size() > 1 && ed.parts.back().a >= n) ed.parts.pop_back();
+            ed.parts.back().b = n;
+            if (ed.out > n || ed.out <= ed.in) ed.out = n;
+            if (ed.in < 0 || ed.in >= ed.out) ed.in = 0;
+            g_evEd = ed;
+        }
+    }
+    for (Gdiplus::Bitmap* b : g_edImgBank) delete b;
+    g_edImgBank = bank;
+    g_edObjs = objs;
+    g_edSeq = seq; g_edStartNum = startNum; g_edCounterGroup = cgroup; g_edNextGrp = nextGrp > 0 ? nextGrp : 1;
+    g_edShotScale = scale1000 / 1000.0;
+    g_evMouseLog = mouse;
+    // щойно відкритий проєкт — нічого не змінено
+    g_evSavedKeep = EvKeepSegs();
+    g_evMarksSavedGen = g_evMarksGen;
+    return true;
+}
+
+// «Зберегти» з правками чи позначками: проєкт замість MP4 (рішення власника 25.09).
+// Уже проєкт — лише хвіст, на місці й одразу. Інакше — новий .lhvideo у
+// бібліотеці: відео копіюється байт у байт у своєму потоці, хвіст дописується
+// там же, а старий MP4 бібліотеки йде в кошик, щойно відео закриють.
+bool EvSaveProject(bool closeAfter);
+
 // ---- CAPS-79: правки — відтворення, таймлайн, збереження -------------------
 
 struct EvSaveJob {
@@ -22589,6 +22989,7 @@ struct EvSaveJob {
     std::wstring name;
     std::vector<EvSeg> keep;
     int marksGen = 0;              // CAPS-80: які позначки збережено
+    std::vector<BYTE> tail;        // CAPS-81: проєкт (mode 3) — хвіст після копії відео
 };
 
 EvSaveJob* g_evJob = nullptr;
@@ -22847,6 +23248,11 @@ DWORD WINAPI EvSaveThread(LPVOID param)
     else hr = EvExportRun(&j->x);
     if (SUCCEEDED(hr) && InterlockedCompareExchange(&j->x.cancel, 0, 0)) hr = E_ABORT;
     if (SUCCEEDED(hr) && !MoveFileExW(j->x.dst, j->out, MOVEFILE_REPLACE_EXISTING)) hr = HRESULT_FROM_WIN32(GetLastError());
+    if (SUCCEEDED(hr) && j->mode == 3) {             // CAPS-81: проєкт — хвіст ще в .part, до перейменування
+        // (перейменування вище вже відбулось — дописуємо в кінцевий файл)
+        if (!LhvWriteTail(j->out, j->tail)) { hr = E_FAIL; DeleteFileW(j->out); }
+        else VidLibRetention(j->out);
+    }
     if (FAILED(hr)) DeleteFileW(j->x.dst);
     if (SUCCEEDED(hr) && j->mode == 0) {
         // Назва й дата — одразу; мініатюру й розмір бібліотека дорахує сама (кеш
@@ -22936,6 +23342,8 @@ bool EvSaveStart(int mode, bool closeAfter)
     }
     const bool edited = EvEdited();
     const bool marked = EvHasMarks();                    // CAPS-80
+    // CAPS-81: з правками чи позначками «Зберегти» кладе проєкт, а не перекодований MP4
+    if (mode == 0 && (edited || marked || LhvIs(g_evPath))) return EvSaveProject(closeAfter);
     wchar_t out[MAX_PATH] = {}, part[MAX_PATH] = {};
     if (mode == 0) {
         const wchar_t* dir = EdLibDir();
@@ -23040,7 +23448,15 @@ void EvSaved(LPARAM lp)
             g_evSavedKeep = j->keep;
             g_evMarksSavedGen = j->marksGen;       // CAPS-80
             if (j->mode == 0) lstrcpynW(g_evLibOut, j->out, MAX_PATH);
-            if (j->mode < 2) EdTick(EdHit::Store);
+            if (j->mode == 3) {                        // CAPS-81: тепер відкритий документ — проєкт
+                const wchar_t* dir = EdLibDir();
+                if (dir && EvInDir(g_evPath, dir) && !LhvIs(g_evPath)) lstrcpynW(g_evPendingDelete, g_evPath, MAX_PATH);
+                lstrcpynW(g_evPath, j->out, MAX_PATH);
+                lstrcpynW(g_evLibOut, j->out, MAX_PATH);
+                WIN32_FILE_ATTRIBUTE_DATA fa = {};
+                if (GetFileAttributesExW(g_evPath, GetFileExInfoStandard, &fa)) g_evBytes = ((ULONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+            }
+            if (j->mode < 2 || j->mode == 3) EdTick(EdHit::Store);
             else if (EvClipFile(j->out)) EdToast(Str::VidCopiedFile);
             else MessageBoxW(g_edWnd, S(Str::EdErrCopy), kAppName, MB_OK | MB_ICONWARNING);
             if (j->closeAfter) PostMessageW(g_edWnd, WM_CLOSE, 0, 0);
@@ -23050,6 +23466,55 @@ void EvSaved(LPARAM lp)
         InvalidateRect(g_edWnd, nullptr, FALSE);
     }
     delete j;
+}
+
+bool EvSaveProject(bool closeAfter)
+{
+    if (g_evJob || !g_edVideo || !g_evPath[0]) return false;
+    const std::vector<BYTE> payload = LhvBuild();
+    if (LhvIs(g_evPath)) {                     // уже проєкт — лише хвіст, одразу
+        if (!LhvWriteTail(g_evPath, payload)) {
+            MessageBoxW(g_edWnd, S(Str::VidErrExport), kAppName, MB_OK | MB_ICONWARNING);
+            return false;
+        }
+        g_evSavedKeep = EvKeepSegs();
+        g_evMarksSavedGen = g_evMarksGen;
+        WIN32_FILE_ATTRIBUTE_DATA fa = {};
+        if (GetFileAttributesExW(g_evPath, GetFileExInfoStandard, &fa)) g_evBytes = ((ULONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+        EdTick(EdHit::Store);
+        if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
+        if (closeAfter && g_edWnd) PostMessageW(g_edWnd, WM_CLOSE, 0, 0);
+        return true;
+    }
+    wchar_t part[MAX_PATH] = {}, out[MAX_PATH] = {};
+    if (!VidLibPath(part, out)) return false;
+    const size_t n = wcslen(out);
+    if (n < 5 || n + 5 >= MAX_PATH) return false;
+    std::wstring base(out, n - 4);                         // «…\штамп» без .mp4
+    swprintf(out, MAX_PATH, L"%s.lhvideo", base.c_str());
+    for (int i = 2; i < 100 && GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES; ++i)
+        swprintf(out, MAX_PATH, L"%s (%d).lhvideo", base.c_str(), i);
+    swprintf(part, MAX_PATH, L"%s.part", out);
+    EvSaveJob* j = new EvSaveJob;
+    lstrcpynW(j->x.src, g_evPath, MAX_PATH);
+    lstrcpynW(j->x.dst, part, MAX_PATH);
+    lstrcpynW(j->out, out, MAX_PATH);
+    j->x.notify = g_edWnd;
+    j->mode = 3;
+    j->copyOnly = true;                        // відео — байт у байт; правки — у хвості
+    j->closeAfter = closeAfter;
+    j->keep = EvKeepSegs();
+    j->marksGen = g_evMarksGen;
+    j->tail = payload;
+    j->name = g_evName;
+    g_evJob = j;
+    g_evJobThread = CreateThread(nullptr, 0, EvSaveThread, j, 0, nullptr);
+    if (!g_evJobThread) { g_evJob = nullptr; delete j; return false; }
+    if (g_edWnd) {
+        SetTimer(g_edWnd, kEvSaveTimer, 150, nullptr);
+        InvalidateRect(g_edWnd, &g_edRcStatus, FALSE);
+    }
+    return true;
 }
 
 bool EvSaveMenuAt(HWND hwnd, const RECT& btn)
