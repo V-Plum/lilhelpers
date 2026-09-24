@@ -527,8 +527,10 @@ X(EdTipOvWindow,      L"У вікно редактора — тон, розмі�
 X(RgnActEditor,       L"відкрити в редакторі",          L"open in editor")                             \
 X(RgnActClip,         L"скопіювати",                    L"copy")                                       \
 X(RgnActOverlay,      L"редагувати тут",                L"edit in place")                              \
-X(RgnHintPick,        L"Клік — вікно · Space — увесь екран",                                          \
-                      L"Click: window · Space: whole screen")                                          \
+X(RgnHintPick,        L"Клік — вікно · Space — увесь екран · двічі — через 3 с",                      \
+                      L"Click: window · Space: whole screen · twice: in 3 s")                           \
+X(RgnHintLens,        L"Коліщатко — лінза",             L"Wheel: magnifier")                           \
+X(RgnCountdownEsc,    L"Esc — скасувати",               L"Esc to cancel")                              \
 X(RgnWholeScreen,     L"Увесь екран",                   L"Whole screen")                               \
 X(RgnVidStart,        L"Відпустіть — почати запис · Esc — скасувати",                                  \
                       L"Release to start recording · Esc to cancel")                                   \
@@ -7783,6 +7785,17 @@ int   g_rgnHover = -1;         // вікно під курсором; -1 — р�
 WPARAM g_rgnMk = 0;            // модифікатори з останнього руху миші — для підказки
 int   g_rgnGesture = 0;        // жест, яким вибір завершено
 bool  g_rgnVideo = false;      // CAPS-73: вибір для запису — жестів немає, підказка інша
+// CAPS-86: лінза — вмикається коліщатком (рішення власника 25.09: без налаштування).
+int   g_rgnLens = 0;           // 0 — вимкнено, інакше кратність 4 / 8 / 16
+float g_rgnScale = 1.0f;       // DPI монітора: розмір лінзи
+RECT  g_rgnPrevLens = {};
+// CAPS-85: подвійний клік (або другий клік із рамкою) — захоплення з відліком.
+bool  g_rgnPending = false;    // перший клік був; чекаємо, чи буде другий
+bool  g_rgnSecond = false;     // другий клік натиснуто
+POINT g_rgnClickPt = {};       // де був перший клік
+int   g_rgnClickGst = 0;       // жест першого кліку
+bool  g_rgnDelayed = false;    // результат: знімати після відліку
+constexpr UINT_PTR kRgnDblTimer = 21;
 
 RECT RgnSelRect()
 {
@@ -7822,15 +7835,15 @@ RECT RgnSelRect()
 void RgnHintLabel(HDC dc, Gdiplus::Graphics* g, int w, int h, int ax, int ay,
                   const wchar_t* head, bool pickHint, RECT* measureOnly = nullptr)
 {
-    wchar_t segA[96], segB[96];
+    wchar_t segA[96], segB[160];
     wsprintfW(segA, L"Shift — %s", S(CapActVerb(g_capAct[1])));
-    wsprintfW(segB, L"Alt — %s", S(CapActVerb(g_capAct[2])));
+    // CAPS-86: лінза — у тому самому рядку, що й модифікатори (прохання власника)
+    wsprintfW(segB, L"Alt — %s    %s", S(CapActVerb(g_capAct[2])), S(Str::RgnHintLens));
     const wchar_t* gap = L"    ";
     if (g_rgnVideo) {              // CAPS-73: для відео жест нічого не міняє
         // «Відпустіть» — лише коли вже тягнуть; до того це просто назва режиму.
         lstrcpynW(segA, S(pickHint ? Str::RgnVidHover : Str::RgnVidStart), 96);
-        segB[0] = 0;
-        gap = L"";
+        lstrcpynW(segB, S(Str::RgnHintLens), 160);
     }
     const wchar_t* pick = pickHint ? S(Str::RgnHintPick) : nullptr;
     HGDIOBJ oldF0 = GetCurrentObject(dc, OBJ_FONT);
@@ -7911,6 +7924,156 @@ bool RgnLabelSpec(int w, int h, int* ax, int* ay, wchar_t* head, bool* pick)
         *ax = (int)g_rgnCur.x + 12; *ay = (int)g_rgnCur.y + 34; *pick = true;
     }
     return dragged;
+}
+
+// ---- CAPS-86: лінза ----
+// Збільшений фрагмент ЗАМОРОЖЕНОГО кадру навколо курсора — цілим кратним, без
+// згладжування (видно окремі пікселі), з сіткою й виділеним центральним пікселем.
+// Стоїть над курсором праворуч, біля країв перескакує — щоб не закривати ні саму
+// точку, ні плашку-підказку (та під курсором праворуч). Під лінзою — координати,
+// розмір рамки й колір центрального пікселя.
+void RgnInvalidateFrame(HWND hwnd);
+void RgnUpdateHover();
+double CapMonitorScale(HMONITOR mon);   // нижче
+
+int RgnLensSide(int* n)
+{
+    const int z = g_rgnLens > 0 ? g_rgnLens : 8;
+    int k = (int)(144.0f * g_rgnScale) / z;
+    if (!(k & 1)) --k;                  // непарне — центральний піксель рівно посередині
+    if (k < 5) k = 5;
+    if (n) *n = k;
+    return k * z;
+}
+
+int RgnLensInfoH() { return (int)(44.0f * g_rgnScale + 0.5f); }
+
+RECT RgnLensRect(int w, int h)
+{
+    if (!g_rgnLens) return RECT{ 0, 0, 0, 0 };
+    const int L = RgnLensSide(nullptr), H = L + RgnLensInfoH();
+    const int gap = (int)(24.0f * g_rgnScale);
+    // Над курсором — вище за плашку-підказку: вона стоїть від курсора до ~34 точок угору.
+    int x = g_rgnCur.x + gap, y = g_rgnCur.y - (int)(44.0f * g_rgnScale) - H;
+    if (x + L > w) x = g_rgnCur.x - gap - L;          // правий край — ліворуч
+    if (y < 0) {                                      // верхній край — униз, але ліворуч (праворуч унизу плашка)
+        y = g_rgnCur.y + gap;
+        if (g_rgnCur.x - gap - L >= 0) x = g_rgnCur.x - gap - L;
+    }
+    if (y + H > h) y = h - H;
+    if (x < 0) x = 0;
+    return RECT{ x, y, x + L, y + H };
+}
+
+DWORD RgnPixel(int x, int y)          // 0x00RRGGBB із світлого шару; поза кадром — чорне
+{
+    if (!g_rgnBright.bits || x < 0 || y < 0 || x >= g_rgnBright.w || y >= g_rgnBright.h) return 0;
+    const BYTE* p = g_rgnBright.bits + ((size_t)y * g_rgnBright.w + x) * 4;
+    return ((DWORD)p[2] << 16) | ((DWORD)p[1] << 8) | p[0];
+}
+
+void RgnPaintLens(HDC dc, Gdiplus::Graphics& g, int w, int h)
+{
+    g_rgnPrevLens = RgnLensRect(w, h);
+    if (!g_rgnLens) return;
+    const RECT r = g_rgnPrevLens;
+    int n = 0;
+    const int L = RgnLensSide(&n), z = g_rgnLens;
+    const int sx = g_rgnCur.x - n / 2, sy = g_rgnCur.y - n / 2;
+    // пікселі: найближчий сусід, по одному прямокутнику на піксель (n ≤ 36 — це дрібниця)
+    HBRUSH black = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RECT all = { r.left, r.top, r.left + L, r.top + L };
+    FillRect(dc, &all, black);
+    if (g_rgnBright.dc) {
+        const int oldMode = SetStretchBltMode(dc, COLORONCOLOR);
+        int cx0 = sx < 0 ? -sx : 0, cy0 = sy < 0 ? -sy : 0;
+        int cx1 = sx + n > g_rgnBright.w ? g_rgnBright.w - sx : n, cy1 = sy + n > g_rgnBright.h ? g_rgnBright.h - sy : n;
+        if (cx1 > cx0 && cy1 > cy0)
+            StretchBlt(dc, r.left + cx0 * z, r.top + cy0 * z, (cx1 - cx0) * z, (cy1 - cy0) * z,
+                       g_rgnBright.dc, sx + cx0, sy + cy0, cx1 - cx0, cy1 - cy0, SRCCOPY);
+        SetStretchBltMode(dc, oldMode);
+    } else if (g_rgnImg) {
+        g.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
+        g.DrawImage(g_rgnImg, Gdiplus::Rect(r.left, r.top, L, L), sx, sy, n, n, Gdiplus::UnitPixel);
+    }
+    // сітка — лише коли піксель уже великий
+    if (z >= 8) {
+        Gdiplus::Pen grid(Gdiplus::Color(55, 0, 0, 0), 1.0f);
+        for (int i = 1; i < n; ++i) {
+            g.DrawLine(&grid, (INT)(r.left + i * z), (INT)r.top, (INT)(r.left + i * z), (INT)(r.top + L));
+            g.DrawLine(&grid, (INT)r.left, (INT)(r.top + i * z), (INT)(r.left + L), (INT)(r.top + i * z));
+        }
+    }
+    // центральний піксель — біле з чорним, видно на будь-якому тлі
+    const int c = (n / 2) * z;
+    Gdiplus::Pen outer(Gdiplus::Color(255, 0, 0, 0), 1.0f), inner(Gdiplus::Color(255, 255, 255, 255), 1.0f);
+    g.DrawRectangle(&outer, r.left + c - 1, r.top + c - 1, z + 1, z + 1);
+    g.DrawRectangle(&inner, r.left + c, r.top + c, z - 1, z - 1);
+    Gdiplus::Pen frame(Gdiplus::Color(235, 255, 255, 255), 1.0f);
+    g.DrawRectangle(&frame, r.left, r.top, L - 1, L - 1);
+    // відомості
+    Gdiplus::SolidBrush back(Gdiplus::Color(225, 20, 20, 24));
+    g.FillRectangle(&back, r.left, r.top + L, L, RgnLensInfoH());
+    const DWORD px = RgnPixel(g_rgnCur.x, g_rgnCur.y);
+    wchar_t l1[64], l2[32];
+    if (g_rgnDragging) {
+        const RECT s = RgnSelRect();
+        swprintf(l1, 64, L"%d, %d   %d × %d", (int)g_rgnCur.x, (int)g_rgnCur.y, (int)(s.right - s.left), (int)(s.bottom - s.top));
+    } else {
+        swprintf(l1, 64, L"%d, %d", (int)g_rgnCur.x, (int)g_rgnCur.y);
+    }
+    swprintf(l2, 32, L"#%06X", (unsigned)px);
+    SetBkMode(dc, TRANSPARENT);
+    HGDIOBJ oldF = SelectObject(dc, g_rgnFontSm);
+    SetTextColor(dc, RGB(235, 235, 240));
+    const int lh = RgnLensInfoH() / 2, pad = (int)(6 * g_rgnScale);
+    RECT t1 = { r.left + pad, r.top + L + 2, r.right - pad, r.top + L + lh };
+    DrawTextW(dc, l1, -1, &t1, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    const int sw = lh - (int)(8 * g_rgnScale);
+    Gdiplus::SolidBrush swb(Gdiplus::Color(255, (BYTE)(px >> 16), (BYTE)(px >> 8), (BYTE)px));
+    Gdiplus::Pen swp(Gdiplus::Color(200, 255, 255, 255), 1.0f);
+    const int swy = r.top + L + lh + (lh - sw) / 2 - 1;
+    g.FillRectangle(&swb, r.left + pad, swy, sw, sw);
+    g.DrawRectangle(&swp, r.left + pad, swy, sw - 1, sw - 1);
+    RECT t2 = { r.left + pad + sw + pad, r.top + L + lh - 2, r.right - pad, r.top + L + 2 * lh - 2 };
+    DrawTextW(dc, l2, -1, &t2, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(dc, oldF);
+}
+
+// Стрілки: курсор на піксель (з Shift — на 10). Справжній курсор теж їде —
+// щоб наступний рух миші почався звідси, а не стрибнув назад.
+void RgnNudge(HWND hwnd, int dx, int dy, int step)
+{
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    POINT p = { g_rgnCur.x + dx * step, g_rgnCur.y + dy * step };
+    if (p.x < 0) p.x = 0;
+    if (p.y < 0) p.y = 0;
+    if (p.x > rc.right - 1) p.x = rc.right - 1;
+    if (p.y > rc.bottom - 1) p.y = rc.bottom - 1;
+    g_rgnCur = p;
+    if (g_rgnDragging) g_rgnTo = p;
+    else RgnUpdateHover();
+    SetCursorPos(g_rgnMon.left + p.x, g_rgnMon.top + p.y);
+    RgnInvalidateFrame(hwnd);
+}
+
+// Клік без рамки: вікно під точкою кліку або весь монітор (CAPS-57). delayed —
+// подвійний клік (CAPS-85): знімати після відліку.
+void RgnFinishClick(HWND hwnd, POINT at, int gesture, bool delayed)
+{
+    g_rgnCur = at;
+    RgnUpdateHover();
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    const RECT s = RgnHoverRect(rc.right, rc.bottom);
+    g_rgnFrom = { s.left, s.top };
+    g_rgnTo = { s.right, s.bottom };
+    g_rgnDragging = true;
+    g_rgnGesture = gesture;
+    g_rgnDelayed = delayed;
+    g_rgnOk = true;
+    g_rgnDone = true;
 }
 
 // Що було намальовано минулого разу — щоб стерти рівно це.
@@ -8022,6 +8185,7 @@ void RgnPaint(HDC dc, int w, int h)
         RgnHintLabel(dc, &g, w, h, ax, ay, head, pick, &g_rgnPrevLabel);
         RgnHintLabel(dc, &g, w, h, ax, ay, head, pick);
     }
+    RgnPaintLens(dc, g, w, h);                     // CAPS-86: поверх усього
     g_rgnPrevValid = true;
     g_rgnPrevDragged = dragged;
     // ⚠ Світле й рамка — окремо: над робочим столом рамка йде краєм монітора,
@@ -8074,6 +8238,11 @@ void RgnInvalidateFrame(HWND hwnd)
     inval(0, g_rgnCur.y - 2, w, g_rgnCur.y + 3);
     inval(g_rgnCur.x - 2, 0, g_rgnCur.x + 3, h);
     InvalidateRect(hwnd, &g_rgnPrevLabel, FALSE);
+    {   // CAPS-86: лінза — стара й нова; +2 — рамка малюється на пів пікселя назовні
+        RECT old = g_rgnPrevLens, ln = RgnLensRect(w, h);
+        if (!IsRectEmpty(&old)) { InflateRect(&old, 2, 2); InvalidateRect(hwnd, &old, FALSE); }
+        if (!IsRectEmpty(&ln)) { InflateRect(&ln, 2, 2); InvalidateRect(hwnd, &ln, FALSE); }
+    }
     HDC dc = GetDC(hwnd);
     RECT lab = {};
     RgnHintLabel(dc, nullptr, w, h, ax, ay, head, pick, &lab);
@@ -8117,6 +8286,13 @@ LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     case WM_LBUTTONDOWN:
+        // CAPS-85: другий клік одразу після першого — захоплення з відліком
+        // (подвійний клік — вікно чи екран; другий клік із рамкою — ділянка).
+        if (g_rgnPending) {
+            KillTimer(hwnd, kRgnDblTimer);
+            g_rgnPending = false;
+            g_rgnSecond = true;
+        }
         g_rgnFrom.x = GET_X_LPARAM(lp);
         g_rgnFrom.y = GET_Y_LPARAM(lp);
         g_rgnTo = g_rgnFrom;
@@ -8124,6 +8300,21 @@ LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SetCapture(hwnd);
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+    case WM_TIMER:
+        if (wp == kRgnDblTimer) {      // CAPS-85: другого кліку не було — звичайний клік
+            KillTimer(hwnd, kRgnDblTimer);
+            g_rgnPending = false;
+            RgnFinishClick(hwnd, g_rgnClickPt, g_rgnClickGst, false);
+        }
+        return 0;
+    case WM_MOUSEWHEEL: {              // CAPS-86: лінза — вгору збільшує, вниз зменшує й вимикає
+        const int d = GET_WHEEL_DELTA_WPARAM(wp);
+        const int before = g_rgnLens;
+        if (d > 0) g_rgnLens = g_rgnLens == 0 ? 4 : (g_rgnLens < 16 ? g_rgnLens * 2 : 16);
+        else if (d < 0) g_rgnLens = g_rgnLens <= 4 ? 0 : g_rgnLens / 2;
+        if (g_rgnLens != before) RgnInvalidateFrame(hwnd);
+        return 0;
+    }
     case WM_MOUSEMOVE:
         g_rgnCur.x = GET_X_LPARAM(lp);
         g_rgnCur.y = GET_Y_LPARAM(lp);
@@ -8141,15 +8332,24 @@ LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (s.right - s.left < 4 || s.bottom - s.top < 4) {
             // CAPS-57: клік без тягання — вікно під курсором або весь монітор
             // (раніше це було скасуванням; скасовують Esc і правою кнопкою).
-            g_rgnCur = g_rgnTo;
-            RgnUpdateHover();
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            s = RgnHoverRect(rc.right, rc.bottom);
-            g_rgnFrom = { s.left, s.top };
-            g_rgnTo = { s.right, s.bottom };
+            // CAPS-85: але спершу почекати, чи не буде другого кліку.
+            g_rgnDragging = false;
+            if (g_rgnSecond) {         // другий клік без рамки — подвійний: вікно першого кліку
+                g_rgnSecond = false;
+                RgnFinishClick(hwnd, g_rgnClickPt, RgnGesture(wp), true);
+                return 0;
+            }
+            g_rgnPending = true;
+            g_rgnClickPt = g_rgnTo;
+            g_rgnClickGst = RgnGesture(wp);
+            UINT dbl = GetDoubleClickTime();
+            if (dbl > 400) dbl = 400;  // одинарний клік не має відчутно баритись
+            SetTimer(hwnd, kRgnDblTimer, dbl, nullptr);
+            return 0;
         }
         g_rgnGesture = RgnGesture(wp);
+        g_rgnDelayed = g_rgnSecond;    // CAPS-85: другий клік із рамкою — ділянка з відліком
+        g_rgnSecond = false;
         g_rgnOk = true;
         g_rgnDone = true;
         return 0;
@@ -8161,6 +8361,11 @@ LRESULT CALLBACK RgnWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
         if (wp == VK_ESCAPE) { g_rgnOk = false; g_rgnDone = true; return 0; }
+        if (wp == VK_LEFT || wp == VK_RIGHT || wp == VK_UP || wp == VK_DOWN) {   // CAPS-86: на піксель
+            const bool shift = GetKeyState(VK_SHIFT) < 0 || (RgnKeyMods(lp) & MK_SHIFT);
+            RgnNudge(hwnd, wp == VK_LEFT ? -1 : wp == VK_RIGHT ? 1 : 0, wp == VK_UP ? -1 : wp == VK_DOWN ? 1 : 0, shift ? 10 : 1);
+            return 0;
+        }
         if ((wp == VK_SPACE || wp == VK_RETURN) && !g_rgnDragging) {
             // CAPS-57: увесь монітор — з тим самим жестом, що й мишею.
             RECT rc;
@@ -8223,6 +8428,10 @@ bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out, int* g
     g_rgnGesture = 0;
     g_rgnMk = 0;
     g_rgnPrevValid = false;
+    g_rgnLens = 0;                                 // CAPS-86: відкривається без лінзи
+    g_rgnPrevLens = RECT{ 0, 0, 0, 0 };
+    g_rgnScale = (float)CapMonitorScale(MonitorFromRect(&monRc, MONITOR_DEFAULTTONEAREST));
+    g_rgnPending = g_rgnSecond = g_rgnDelayed = false;   // CAPS-85
     GetCursorPos(&g_rgnCur);                     // напрямні одразу під курсором
     g_rgnCur.x -= monRc.left;
     g_rgnCur.y -= monRc.top;
@@ -8281,11 +8490,108 @@ bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out, int* g
 }
 
 // Заморожений монітор під курсором — і для накладки вибору, і для оверлея.
-bool CapFreezeMonitor(CapShot* whole, RECT* monRc)
+// ---- CAPS-85: відлік перед захопленням ----
+// Маленьке вікно 3-2-1 у правому нижньому куті монітора: видно, але в знімок не
+// потрапляє (ховається перед самим захопленням і ще й виключене з захоплення).
+// Мишу пропускає наскрізь і фокус не бере — поки йде відлік, людина відкриває
+// меню, що згорталося від гарячої клавіші. Esc — скасувати (глобально: фокус у
+// чужому вікні).
+int CapCountdownMs() { return 3000; }          // тестова збірка скорочує
+
+int g_cdLeft = 0;                              // секунд лишилось — для малювання
+bool CapCountdownCancel() { return (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0; }   // тестова збірка додає свій прапорець
+
+LRESULT CALLBACK CdProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
-    POINT pt = {};
-    GetCursorPos(&pt);
-    HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+    if (msg == WM_NCHITTEST) return HTTRANSPARENT;
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH b = CreateSolidBrush(RGB(20, 20, 24));
+        FillRect(dc, &rc, b);
+        DeleteObject(b);
+        const int hgt = rc.bottom - rc.top;
+        HFONT big = CreateFontW(-(hgt * 55 / 100), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
+        HGDIOBJ o = SelectObject(dc, big);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(255, 255, 255));
+        wchar_t d[8];
+        swprintf(d, 8, L"%d", g_cdLeft);
+        RECT t = { rc.left, rc.top, rc.right, rc.top + hgt * 74 / 100 };
+        DrawTextW(dc, d, -1, &t, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(dc, g_rgnFontSm ? (HGDIOBJ)g_rgnFontSm : o);
+        SetTextColor(dc, RGB(170, 170, 178));
+        RECT t2 = { rc.left, rc.top + hgt * 66 / 100, rc.right, rc.bottom - hgt * 6 / 100 };
+        DrawTextW(dc, S(Str::RgnCountdownEsc), -1, &t2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(dc, o);
+        DeleteObject(big);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+bool CapCountdown(const RECT& mon)
+{
+    static bool reg = false;
+    if (!reg) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = CdProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"lilhelpers_countdown";
+        RegisterClassW(&wc);
+        reg = true;
+    }
+    const double sc = CapMonitorScale(MonitorFromRect(&mon, MONITOR_DEFAULTTONEAREST));
+    const int side = (int)(120 * sc), margin = (int)(32 * sc);
+    HWND w = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+                             L"lilhelpers_countdown", L"", WS_POPUP,
+                             mon.right - margin - side, mon.bottom - margin - side, side, side,
+                             nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (w) {
+        SetLayeredWindowAttributes(w, 0, 225, LWA_ALPHA);
+        SetWindowDisplayAffinity(w, 0x00000011);   // WDA_EXCLUDEFROMCAPTURE (визначено нижче)
+        HRGN rr = CreateRoundRectRgn(0, 0, side + 1, side + 1, (int)(20 * sc), (int)(20 * sc));
+        SetWindowRgn(w, rr, FALSE);
+    }
+    const int total = CapCountdownMs();
+    const ULONGLONG t0 = GetTickCount64();
+    bool ok = true;
+    for (;;) {
+        const int left = total - (int)(GetTickCount64() - t0);
+        if (left <= 0) break;
+        const int secs = (left + 999) / 1000;
+        if (secs != g_cdLeft) {
+            g_cdLeft = secs;
+            if (w) {
+                if (!IsWindowVisible(w)) ShowWindow(w, SW_SHOWNOACTIVATE);
+                InvalidateRect(w, nullptr, FALSE);
+            }
+        }
+        if (CapCountdownCancel()) { ok = false; break; }
+        MSG m;
+        while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            if (m.message == WM_QUIT) { PostQuitMessage((int)m.wParam); ok = false; break; }
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+        if (!ok) break;
+        Sleep(15);
+    }
+    if (w) DestroyWindow(w);
+    g_cdLeft = 0;
+    if (ok) Sleep(80);                          // DWM прибрав лічильник з екрана — тоді знімок
+    return ok;
+}
+
+// CAPS-85: той самий монітор ще раз — свіжий кадр після відліку.
+bool g_capFreshGrab = false;   // тестова збірка бере тоді інший файл-кадр
+
+bool CapFreezeAt(HMONITOR mon, CapShot* whole, RECT* monRc)
+{
     MONITORINFO mi = { sizeof(mi) };
     if (!GetMonitorInfoW(mon, &mi)) return false;
     *whole = CapShot{};
@@ -8300,6 +8606,13 @@ bool CapFreezeMonitor(CapShot* whole, RECT* monRc)
     return true;
 }
 
+bool CapFreezeMonitor(CapShot* whole, RECT* monRc)
+{
+    POINT pt = {};
+    GetCursorPos(&pt);
+    return CapFreezeAt(MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY), whole, monRc);
+}
+
 // CAPS-57: вибір віддає не вирізане, а ВСЕ потрібне для будь-якої дії:
 // заморожений монітор, рамку в екранних координатах і жест. Вирізати чи
 // редагувати поверх — вирішує вже CapTake за жестом.
@@ -8311,6 +8624,23 @@ bool CapRegionEx(CapShot* whole, RECT* monRc, RECT* sel, int* gesture)
         whole->bmp = nullptr;
         g_capCancelled = true;
         return false;
+    }
+    if (g_rgnDelayed) {
+        // CAPS-85: накладки вже нема — відлік, а знімок свіжий, з того самого
+        // монітора: заради цього все й робиться (меню, що згортаються від клавіші).
+        const HMONITOR mon = MonitorFromRect(monRc, MONITOR_DEFAULTTONEAREST);
+        if (!CapCountdown(*monRc)) {
+            delete whole->bmp;
+            whole->bmp = nullptr;
+            g_capCancelled = true;
+            return false;
+        }
+        CapShot fresh = {};
+        RECT rc2 = {};
+        g_capFreshGrab = true;
+        const bool ok = CapFreezeAt(mon, &fresh, &rc2);
+        g_capFreshGrab = false;
+        if (ok && fresh.bmp) { delete whole->bmp; *whole = fresh; }
     }
     return true;
 }
