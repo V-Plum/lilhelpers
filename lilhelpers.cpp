@@ -57,6 +57,7 @@
 // CAPS-10: автооновлення — SHA-256 і перевірка ECDSA-підпису вбудованим BCrypt.
 #include <bcrypt.h>
 #include <vector>
+#include <algorithm>      // CAPS-80: std::sort / std::unique
 // CAPS-16: перегляд по пробілу — виділення Провідника (IShellWindows → IShellView → CF_HDROP), значки.
 #include <exdisp.h>
 #include <shlobj.h>
@@ -639,7 +640,12 @@ X(VidTipEnd,          L"У кінець (End)",                L"To end (End)") 
 X(VidTipLoop,         L"Повтор по колу",                L"Loop")                                       \
 X(VidTipMute,         L"Звук: увімкнути / вимкнути",    L"Sound on / off")                             \
 X(VidTipCopyFrame,    L"Копіювати кадр (Ctrl+C)",       L"Copy frame (Ctrl+C)")                        \
-X(VidToolLater,       L"У відео — з наступного етапу",  L"For video — in the next stage")              \
+X(VidToolLater,       L"У відео кадрування немає",      L"No cropping in video")                       \
+X(VidMarksEmpty,      L"Позначки: виберіть інструмент і малюйте на кадрі — з'являться тут на 3 с", \
+                      L"Marks: pick a tool and draw on the frame — each shows here for 3 s")          \
+X(VidTipMarks,        L"Тягніть — пересунути; за край — змінити, коли видно",                          \
+                      L"Drag to move; drag an edge to change when it shows")                           \
+X(VidMarkedSuffix,    L" (з позначками)",               L" (with marks)")                              \
 X(VidTipSplit,        L"Розрізати тут (S)",             L"Split here (S)")                             \
 X(VidTipCut,          L"Вирізати вибране (Delete)",     L"Cut selection (Delete)")                     \
 X(VidTipRestore,      L"Повернути фрагмент (Delete)",   L"Restore part (Delete)")                      \
@@ -8799,6 +8805,9 @@ struct EdObj {
     // міняються ні від масштабу на екрані, ні після відкриття файлу.
     int      corners;
     int      crpx;
+    // CAPS-80. Лише у відео: кадри [vf0, vf1), коли позначку видно. INT_MAX у vf1 —
+    // «ще не призначено»: щойно створена, дістане проміжок від поточного кадру.
+    int      vf0 = 0, vf1 = INT_MAX;
 };
 
 // Чіп називає вид однією назвою і для інструмента, і для вибраного. Префікс
@@ -8997,7 +9006,8 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    LibFilter,          // CAPS-74: «Усе / Знімки / Відео»; ⚠ нові — лише в кінець
                    VidBtn, VidTrack, VidSpeed, VidLoop, VidMute, VidFrameShot, VidShowFile,   // CAPS-78
                    LibPlayer,
-                   VidFilm, VidEdit };   // CAPS-79: стрічка (вибір, проміжок, ручки обрізання) і кнопки правок
+                   VidFilm, VidEdit,     // CAPS-79: стрічка (вибір, проміжок, ручки обрізання) і кнопки правок
+                   VidMarks };           // CAPS-80: доріжка позначок
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -9097,6 +9107,18 @@ bool     g_edHdr = false, g_edToneMapped = false;   // CAPS-21: звідки п�
 // CAPS-78: режим «Відео». Стан оголошено тут — ним користуються розкладка,
 // малювання й обробник вікна, що стоять у файлі раніше за сам модуль.
 bool      g_edVideo = false;
+// CAPS-80: позначки у відео. g_evFrozen — кадр, що зараз лежить у редакторі як
+// зображення (на паузі); g_evLiveFrame — кадр для малювання поза екраном (шар
+// відтворення, експорт). Позначка «жива», коли кадр у її проміжку.
+int       g_evFrozen = -1, g_evLiveFrame = -1;
+std::vector<char> g_evUndoOrder, g_evRedoOrder;   // спільна черга скасування: 0 — таймлайн, 1 — позначки
+int       g_evMarksGen = 0, g_evMarksSavedGen = 0;
+bool EdObjLive(const EdObj& o)
+{
+    if (!g_edVideo || o.vf1 == INT_MAX) return true;
+    const int f = g_evLiveFrame >= 0 ? g_evLiveFrame : g_evFrozen;
+    return f >= o.vf0 && f < o.vf1;
+}
 RECT      g_edRcTimeline = {};
 wchar_t   g_evPath[MAX_PATH] = {}, g_evName[128] = {};
 double    g_evDur = 0, g_evPos = 0, g_evFps = 30, g_evRate = 1.0, g_evTlZoom = 1.0, g_evTlOff = 0;
@@ -9161,6 +9183,11 @@ bool EvConfirmClose();
 bool EvConfirmReplace();
 void EvSaved(LPARAM lp);
 void EvSaveTick();
+void EvNoteMarkUndo();                         // CAPS-80
+void EvAdoptMarks();
+bool EvViewWanted();
+void EvOverSync();
+bool EvStripPlayback();
 void EvLayout(HWND hwnd);
 void EvPaintTimeline(HDC dc, Gdiplus::Graphics& g, const EdTheme& t);
 void EvPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t);
@@ -10019,6 +10046,7 @@ void EdPushUndo()
     g_edUndo.push_back(s);
     if ((int)g_edUndo.size() > kEdUndoMax) g_edUndo.erase(g_edUndo.begin());
     g_edRedo.clear();
+    EvNoteMarkUndo();                          // CAPS-80: у відео — ще й у спільну чергу
 }
 
 void EdApply(const EdSnap& s)
@@ -10618,7 +10646,7 @@ void EdLayout(HWND hwnd)
 
     // CAPS-78: у відео під полотном — таймлайн; полотно (і вікно кадру) коротше.
     if (g_edVideo && !g_edOverlay) {
-        const int tlh = EdPx(132);
+        const int tlh = EdPx(156);             // CAPS-80: +доріжка позначок
         g_edRcTimeline = { g_edRcCanvas.left, g_edRcCanvas.bottom - tlh, g_edRcCanvas.right, g_edRcCanvas.bottom };
         g_edRcCanvas.bottom -= tlh;
     }
@@ -10739,8 +10767,9 @@ void EdLayout(HWND hwnd)
         }
     }
 
-    // смуга властивостей (CAPS-78: у відео смуга своя — EvLayout)
-    if (!g_edVideo) {
+    // смуга властивостей (CAPS-78: у відео смуга своя — EvLayout; CAPS-80: але з
+    // інструментом малювання чи вибраною позначкою — звичайна, з її властивостями)
+    if (!g_edVideo || !EvStripPlayback()) {
         HDC dc = GetDC(hwnd);
         const size_t stripFirst = g_edRegions.size();   // CAPS-33: ділянки смуги їдуть до рамки
         const int cy = (g_edRcStrip.top + g_edRcStrip.bottom) / 2;
@@ -11964,7 +11993,7 @@ Str EdStripHint()
 void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     struct FlatScope { FlatScope() { g_edFlatNow = true; } ~FlatScope() { g_edFlatNow = false; } } flat;
-    if (g_edVideo && !g_edOverlay) {   // CAPS-78: смуга відтворення
+    if (g_edVideo && !g_edOverlay && EvStripPlayback()) {   // CAPS-78: смуга відтворення
         HBRUSH sb = CreateSolidBrush(t.surface);
         FillRect(dc, &g_edRcStrip, sb);
         DeleteObject(sb);
@@ -12318,7 +12347,7 @@ void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         }
         const bool active = ((int)g_edTool == i);
         // CAPS-78: у відео поки працює лише «Вибір»; решта — сірі, на своїх місцях (CAPS-80)
-        const bool off = g_edVideo && i > 0;
+        const bool off = g_edVideo && i == 10;   // CAPS-80: у відео нема лише кадрування
         const bool hot = (g_edHotWhat == EdHit::Tool && g_edHotIdx == i) && !off;
         EdPaintButton(g, *r, t, active, hot, !active);
         EdIcon(g, icos[i], EdIconBox(*r), EdC(active ? t.accent : (off ? t.text2 : t.text), off ? 110 : 255), 1.5f);
@@ -12326,8 +12355,8 @@ void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     // CAPS-69: «Зображення» — не інструмент, а дія (вибрати файл), тож ніколи
     // не буває «увімкненою».
     if (const RECT* ri = EdRegionRect(EdHit::InsertImg, 0)) {
-        EdPaintButton(g, *ri, t, false, g_edHotWhat == EdHit::InsertImg && !g_edVideo, true);
-        EdIcon(g, IcoImage, EdIconBox(*ri), EdC(g_edVideo ? t.text2 : t.text, g_edVideo ? 110 : 255), 1.5f);
+        EdPaintButton(g, *ri, t, false, g_edHotWhat == EdHit::InsertImg, true);
+        EdIcon(g, IcoImage, EdIconBox(*ri), EdC(t.text), 1.5f);
     }
     // CAPS-70: низ рейки — риска, далі (в оверлеї) «У вікно», найнижче «Копіювати».
     const RECT* firstBottom = g_edOverlay ? EdRegionRect(EdHit::OvWindow, 0) : EdRegionRect(EdHit::Copy, 0);
@@ -13389,6 +13418,7 @@ void EdDrawHead(Gdiplus::Graphics& g, const Gdiplus::Color& col, float tipX, flo
 // проходить наскрізь: інакше ефект не знав би, що саме під ним.
 void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, double oy, int idx)
 {
+    if (!EdObjLive(o)) return;                 // CAPS-80: позначка іншого кадру відео
     float pw = (float)(o.thick * s);
     if (pw < 1.0f) pw = 1.0f;              // тонше пікселя — це вже невидимо
     const Gdiplus::Color col = EdC(o.color, o.alpha * 255 / 100);
@@ -13690,6 +13720,7 @@ void EdPaintCanvas(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     FillRect(dc, &g_edRcCanvas, b);
     DeleteObject(b);
     if (!g_edImg) return;
+    if (g_edVideo) EvAdoptMarks();             // CAPS-80: щойно намальована — на 3 с від цього кадру
 
     // Обов'язково клипаємо: збільшене зображення інакше малюється поверх смуги
     // властивостей і рядка стану (граблі CAPS-16).
@@ -15336,7 +15367,7 @@ bool EdHitObject(const EdObj& o, POINT pt)
 int EdPick(POINT pt)
 {
     for (int i = (int)g_edObjs.size() - 1; i >= 0; --i)
-        if (EdHitObject(g_edObjs[i], pt)) return i;
+        if (EdObjLive(g_edObjs[i]) && EdHitObject(g_edObjs[i], pt)) return i;   // CAPS-80
     return -1;
 }
 
@@ -16037,7 +16068,8 @@ Str EdTipFor(EdHit what, int idx)
             if (idx == 1 && EvSelIsOff()) return Str::VidTipRestore;
             if (idx >= 0 && idx < 4) return ve[idx];
         }
-        if ((what == EdHit::Tool && idx > 0) || what == EdHit::InsertImg) return Str::VidToolLater;
+        if (what == EdHit::Tool && idx == 10) return Str::VidToolLater;
+        if (what == EdHit::VidMarks) return Str::VidTipMarks;
     }
     switch (what) {
     case EdHit::OvCopy:   return Str::EdTipOvCopy;
@@ -20029,6 +20061,16 @@ int                    g_evThumbW = 0, g_evThumbH = 0;
 HWND                   g_evHover = nullptr;
 double                 g_evHoverT = -1;
 RECT                   g_evRcRuler = {}, g_evRcFilm = {}, g_evRcChip = {}, g_evRcFacts = {};
+RECT                   g_evRcMarks = {};   // CAPS-80: доріжка позначок
+void EvFreezeNow();
+void EvPaintMarks(HDC dc, Gdiplus::Graphics& g, const EdTheme& t);   // CAPS-80, нижче
+bool EvMarksPress(HWND hwnd, POINT pt);
+void EvMarksDrag(HWND hwnd, POINT pt);
+void EvMarksDragEnd();
+void EvFreezeForEdit();
+void EvThaw();
+void EvUndoAny();
+void EvRedoAny();
 const double           kEvRates[3] = { 0.5, 1.0, 2.0 };
 
 void EvFmtTime(double s, wchar_t* out, int n)
@@ -20061,7 +20103,13 @@ int EvFrameIdx(double t)
 
 struct EvSeg { int a, b; };
 
+// CAPS-80: що накласти на кадр. type 0 — готовий шар (PARGB, px у межах r),
+// 1 маркер, 2 плашка, 3 пікселі, 4 розмиття (ефекти рахуються з пікселів під ними).
+struct EvMarkOp { int type = 0; RECT r = {}; std::vector<BYTE> px; int param = 0; COLORREF color = 0; int alpha = 100; };
+struct EvMarkSpan { int a = 0, b = 0; std::vector<EvMarkOp> ops; };
+
 struct EvExportJob {
+    std::vector<EvMarkSpan> spans;     // CAPS-80: порожньо — позначок нема
     wchar_t src[MAX_PATH] = {};
     wchar_t dst[MAX_PATH] = {};
     std::vector<EvSeg> keep;
@@ -20093,6 +20141,120 @@ inline LONGLONG EvMapFrame(const std::vector<EvSeg>& keep, int idx)
     return -1;
 }
 
+// CAPS-80: накласти позначки проміжку на кадр (BGRA, рядок = w*4). Ефекти — ті
+// самі чисті функції, що й у редакторі, і з тих самих пікселів «під собою».
+inline void EvApplyMarks(BYTE* fb, int w, int h, const std::vector<EvMarkOp>& ops)
+{
+    std::vector<BYTE> tmp;
+    for (const EvMarkOp& op : ops) {
+        RECT r = op.r;
+        if (r.left < 0) r.left = 0;
+        if (r.top < 0) r.top = 0;
+        if (r.right > w) r.right = w;
+        if (r.bottom > h) r.bottom = h;
+        const int rw = r.right - r.left, rh = r.bottom - r.top;
+        if (rw < 1 || rh < 1) continue;
+        if (op.type == 0) {                          // готовий шар, премультиплікований
+            const int ow = op.r.right - op.r.left;
+            for (int y = 0; y < rh; ++y) {
+                BYTE* d = fb + ((size_t)(r.top + y) * w + r.left) * 4;
+                const BYTE* sp = &op.px[((size_t)(r.top - op.r.top + y) * ow + (r.left - op.r.left)) * 4];
+                for (int x = 0; x < rw; ++x, d += 4, sp += 4) {
+                    const unsigned a = sp[3];
+                    if (!a) continue;
+                    if (a == 255) { d[0] = sp[0]; d[1] = sp[1]; d[2] = sp[2]; continue; }
+                    const unsigned ia = 255 - a;
+                    d[0] = (BYTE)(sp[0] + (d[0] * ia + 127) / 255);
+                    d[1] = (BYTE)(sp[1] + (d[1] * ia + 127) / 255);
+                    d[2] = (BYTE)(sp[2] + (d[2] * ia + 127) / 255);
+                }
+            }
+            continue;
+        }
+        tmp.resize((size_t)rw * rh * 4);
+        for (int y = 0; y < rh; ++y) memcpy(&tmp[(size_t)y * rw * 4], fb + ((size_t)(r.top + y) * w + r.left) * 4, (size_t)rw * 4);
+        BYTE* px = tmp.data();
+        if (op.type == 1) {                          // маркер: множення порозрядним І, як у редакторі
+            const BYTE mr = GetRValue(op.color), mg = GetGValue(op.color), mb = GetBValue(op.color);
+            for (size_t i = 0; i < (size_t)rw * rh; ++i) { px[i * 4] &= mb; px[i * 4 + 1] &= mg; px[i * 4 + 2] &= mr; }
+        } else if (op.type == 2) {                   // плашка
+            const BYTE pr = GetRValue(op.color), pg = GetGValue(op.color), pb = GetBValue(op.color);
+            for (size_t i = 0; i < (size_t)rw * rh; ++i) { px[i * 4] = pb; px[i * 4 + 1] = pg; px[i * 4 + 2] = pr; px[i * 4 + 3] = 255; }
+        } else if (op.type == 3) {
+            EdPixelate(px, rw, rh, rw * 4, op.param);
+        } else {
+            EdBoxBlur(px, rw, rh, rw * 4, op.param);
+        }
+        const unsigned k = op.alpha >= 100 ? 255u : (unsigned)(op.alpha * 255 / 100), ik = 255 - k;
+        for (int y = 0; y < rh; ++y) {
+            BYTE* d = fb + ((size_t)(r.top + y) * w + r.left) * 4;
+            const BYTE* sp = &tmp[(size_t)y * rw * 4];
+            if (k == 255) { memcpy(d, sp, (size_t)rw * 4); continue; }
+            for (int x = 0; x < rw * 4; ++x) d[x] = (BYTE)((sp[x] * k + d[x] * ik + 127) / 255);
+        }
+    }
+}
+
+// CAPS-80: декодований кадр (RGB32) → по кадру на кожен слот, що лишається, зі
+// своїм набором позначок → енкодер.
+inline HRESULT EvMarksEmit(EvExportJob* j, IMFSinkWriter* sw, DWORD vOut, IMFSample* s, int idx, int n,
+                           UINT32 vw, UINT32 vh, double fps, std::vector<BYTE>& frame, std::vector<BYTE>& comp)
+{
+    IMFMediaBuffer* b = nullptr;
+    if (FAILED(s->GetBufferByIndex(0, &b)) || !b) return E_FAIL;
+    IMF2DBuffer* b2 = nullptr;
+    BYTE* p = nullptr;
+    LONG pitch = 0;
+    DWORD len = 0;
+    const bool l2 = SUCCEEDED(b->QueryInterface(IID_IMF2DBuffer, (void**)&b2)) && b2 && SUCCEEDED(b2->Lock2D(&p, &pitch));
+    if (!l2) {
+        if (b2) { b2->Release(); b2 = nullptr; }
+        if (FAILED(b->Lock(&p, nullptr, &len))) { b->Release(); return E_FAIL; }
+        pitch = (LONG)vw * 4;                        // крок — з довжини буфера (декодер вирівнює рядки)
+        for (LONG c = (LONG)vw * 4; c <= (LONG)vw * 4 + 4096; c += 4)
+            if (len % (DWORD)c == 0 && len / (DWORD)c >= vh) { pitch = c; break; }
+    }
+    const size_t row = (size_t)vw * 4, bytes = row * vh;
+    frame.resize(bytes);
+    const bool down = pitch < 0;                     // RGB32 буває знизу вгору
+    for (UINT32 y = 0; y < vh; ++y) {
+        const BYTE* src = down ? p + (size_t)(-pitch) * (vh - 1 - y) : p + (size_t)pitch * y;
+        memcpy(&frame[(size_t)y * row], src, row);
+    }
+    if (l2) { b2->Unlock2D(); b2->Release(); } else b->Unlock();
+    b->Release();
+    HRESULT hr = S_OK;
+    for (size_t k = 0; k < j->keep.size() && SUCCEEDED(hr); ++k) {
+        const int from = idx > j->keep[k].a ? idx : j->keep[k].a;
+        const int to = idx + n < j->keep[k].b ? idx + n : j->keep[k].b;
+        for (int f = from; f < to && SUCCEEDED(hr); ++f) {
+            const EvMarkSpan* sp = nullptr;
+            for (const EvMarkSpan& x : j->spans) if (f >= x.a && f < x.b) { sp = &x; break; }
+            comp = frame;
+            if (sp) EvApplyMarks(comp.data(), (int)vw, (int)vh, sp->ops);
+            IMFMediaBuffer* ob = nullptr;
+            hr = MFCreateMemoryBuffer((DWORD)bytes, &ob);
+            BYTE* d = nullptr;
+            if (SUCCEEDED(hr)) hr = ob->Lock(&d, nullptr, nullptr);
+            if (SUCCEEDED(hr)) { memcpy(d, comp.data(), bytes); ob->Unlock(); ob->SetCurrentLength((DWORD)bytes); }
+            IMFSample* os = nullptr;
+            if (SUCCEEDED(hr)) hr = MFCreateSample(&os);
+            if (SUCCEEDED(hr)) hr = os->AddBuffer(ob);
+            if (SUCCEEDED(hr)) {
+                const LONGLONG out = EvMapFrame(j->keep, f);
+                const LONGLONG t0 = EvTimeOf(out, fps), t1 = EvTimeOf(out + 1, fps);
+                os->SetSampleTime(t0);
+                os->SetSampleDuration(t1 - t0);
+                hr = sw->WriteSample(vOut, os);
+                ++j->framesOut;
+            }
+            if (os) os->Release();
+            if (ob) ob->Release();
+        }
+    }
+    return hr;
+}
+
 inline void EvExportDrop(IMFSinkWriter*& sw, IMFSourceReader*& rd, IMFDXGIDeviceManager*& dm, ID3D11Device*& dev)
 {
     if (sw) { sw->Release(); sw = nullptr; }
@@ -20116,9 +20278,13 @@ inline HRESULT EvExportRun(EvExportJob* j)
     LONGLONG totalKeep = 0;
     for (size_t i = 0; i < j->keep.size(); ++i) totalKeep += j->keep[i].b - j->keep[i].a;
     const int lastFrame = j->keep.back().b;
+    // CAPS-80: з позначками кадр потрібен у пам'яті (RGB32) — туди малюються шари й ефекти
+    const bool marks = !j->spans.empty();
+    UINT32 vw = 0, vh = 0;
+    std::vector<BYTE> frame, comp;
 
     // 0 — апаратно (D3D-менеджер і для читача, і для запису), 1 — програмно
-    for (int pass = j->noHw ? 1 : 0; pass < 2; ++pass) {
+    for (int pass = (j->noHw || marks) ? 1 : 0; pass < 2; ++pass) {
         EvExportDrop(sw, rd, dm, dev);
         DeleteFileW(j->dst);
         j->hw = (pass == 0);
@@ -20138,6 +20304,7 @@ inline HRESULT EvExportRun(EvExportJob* j)
             ra->SetUnknown(MF_SOURCE_READER_D3D_MANAGER, dm);
             ra->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
         }
+        if (marks) ra->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);   // NV12 → RGB32
         hr = MFCreateSourceReaderFromURL(j->src, ra, &rd);
         ra->Release();
         if (FAILED(hr)) break;                   // файл не читається — другий прохід не допоможе
@@ -20172,7 +20339,7 @@ inline HRESULT EvExportRun(EvExportJob* j)
         IMFMediaType* vt = nullptr;
         MFCreateMediaType(&vt);
         vt->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-        vt->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_NV12);
+        vt->SetGUID(MF_MT_SUBTYPE, marks ? MFVideoFormat_RGB32 : MFVideoFormat_NV12);
         hr = rd->SetCurrentMediaType(vSi, nullptr, vt);
         vt->Release();
         if (FAILED(hr)) continue;
@@ -20223,7 +20390,20 @@ inline HRESULT EvExportRun(EvExportJob* j)
         // пише зсув композиції без edit list, і все відео зсувається на кадр (перший — на 33 мс)
         static const GUID kBCount = { 0x8d390aac, 0xdc5c, 0x4200, { 0xb5, 0x7f, 0x81, 0x4d, 0x04, 0xba, 0xba, 0xb2 } };
         if (ep) ep->SetUINT32(kBCount, 0);
-        hr = sw->SetInputMediaType(vOut, vin, ep);
+        vw = w; vh = h;
+        IMFMediaType* rgbIn = nullptr;
+        if (marks) {                                 // CAPS-80: у енкодер іде вже намальований RGB32
+            MFCreateMediaType(&rgbIn);
+            rgbIn->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+            rgbIn->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+            rgbIn->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+            rgbIn->SetUINT32(MF_MT_DEFAULT_STRIDE, w * 4);
+            MFSetAttributeSize(rgbIn, MF_MT_FRAME_SIZE, w, h);
+            MFSetAttributeRatio(rgbIn, MF_MT_FRAME_RATE, fn, fd);
+            MFSetAttributeRatio(rgbIn, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+        }
+        hr = sw->SetInputMediaType(vOut, rgbIn ? rgbIn : vin, ep);
+        if (rgbIn) rgbIn->Release();
         if (ep) ep->Release();
         vin->Release();
         if (FAILED(hr)) continue;
@@ -20302,6 +20482,14 @@ inline HRESULT EvExportRun(EvExportJob* j)
             const int idx = (int)((double)ts * fps / 1e7 + 0.5);
             int n = (int)((double)dur * fps / 1e7 + 0.5);
             if (n < 1) n = 1;
+            if (marks) {                             // CAPS-80: кожен кадр — свій набір позначок
+                hr = EvMarksEmit(j, sw, vOut, s, idx, n, vw, vh, fps, frame, comp);
+                if (idx + n >= lastFrame) { vDone = true; rd->SetStreamSelection(vSi, FALSE); }
+                InterlockedExchange(&j->progress, (LONG)(j->framesOut * 999 / (totalKeep > 0 ? totalKeep : 1)));
+                s->Release();
+                if (FAILED(hr)) break;
+                continue;
+            }
             bool first = true;
             for (size_t k = 0; k < j->keep.size() && SUCCEEDED(hr); ++k) {
                 const int from = idx > j->keep[k].a ? idx : j->keep[k].a;
@@ -20433,6 +20621,9 @@ void EvEditReset()
     g_evSelA = g_evSelB = -1;
     g_evSavedKeep.clear();
     if (n > 0) g_evSavedKeep.push_back(EvSeg{ 0, n });
+    g_evUndoOrder.clear();                     // CAPS-80
+    g_evRedoOrder.clear();
+    g_evMarksGen = g_evMarksSavedGen = 0;
 }
 
 void EvEditClear()
@@ -20475,8 +20666,8 @@ bool EvEdited()
     return !(k.size() == 1 && k[0].a == 0 && k[0].b == EvEditFrames());
 }
 
-// Є що зберігати: те, що лишається, не збігається з уже збереженим.
-bool EvDirty() { return !g_evEd.parts.empty() && !EvSameSegs(EvKeepSegs(), g_evSavedKeep); }
+// Є що зберігати: те, що лишається, не збігається з уже збереженим (CAPS-80: або позначки).
+bool EvDirty() { return !g_evEd.parts.empty() && (!EvSameSegs(EvKeepSegs(), g_evSavedKeep) || g_evMarksGen != g_evMarksSavedGen); }
 
 int EvKeptFrames()
 {
@@ -20518,15 +20709,18 @@ int EvPartAt(int f)
     return -1;
 }
 
-bool EvCanUndo() { return g_edVideo && !g_evUndo.empty(); }
-bool EvCanRedo() { return g_edVideo && !g_evRedo.empty(); }
+bool EvCanUndo() { return g_edVideo && !g_evUndoOrder.empty(); }   // CAPS-80: і таймлайн, і позначки
+bool EvCanRedo() { return g_edVideo && !g_evRedoOrder.empty(); }
 bool EvSelIsOff() { return g_evSelA < 0 && g_evSelPart >= 0 && g_evSelPart < (int)g_evEd.parts.size() && g_evEd.parts[(size_t)g_evSelPart].off; }
+
+void EvNoteCutUndo();   // CAPS-80, нижче
 
 void EvPushUndo()
 {
     g_evUndo.push_back(g_evEd);
     if (g_evUndo.size() > 200) g_evUndo.erase(g_evUndo.begin());
     g_evRedo.clear();
+    EvNoteCutUndo();                           // CAPS-80: спільна черга з позначками
 }
 
 void EvUndo()
@@ -20946,6 +21140,7 @@ void EvPlay()
     g_evMe->Play();
     g_evMe->SetPlaybackRate(g_evRate);
     g_evPlaying = true;
+    EvThaw();                                  // CAPS-80: відео наживо, позначки — шаром
     EvTimerOn();
     EvInvalidateInfo();
 }
@@ -20967,6 +21162,7 @@ void EvToggleReverse()
     g_evRev = 1;
     g_evRevT0 = GetTickCount64();
     g_evRevPos0 = g_evPos;
+    EvThaw();                                  // CAPS-80
     EvTimerOn();
     EvInvalidateInfo();
 }
@@ -21042,6 +21238,12 @@ void EvTick()
     }
     if (moved) { EvAutoScroll(); EvInvalidateInfo(); g_evIdle = 0; }
     else if (!g_evPlaying && !g_evRev && !g_evSeeking && ++g_evIdle > 50) KillTimer(g_edWnd, kEvTimer);
+    // CAPS-80: стало — кадр у редактор (там редагуються позначки); рухається — шар позначок
+    if (!g_evPlaying && !g_evRev && !g_evSeeking && !g_evScrub) {
+        if (EvFrameIdx(g_evPos) != g_evFrozen || (g_evView && IsWindowVisible(g_evView))) EvFreezeNow();
+    } else {
+        EvOverSync();
+    }
 }
 
 void EvLayout(HWND hwnd);
@@ -21127,6 +21329,8 @@ bool EvStart(const wchar_t* path)
 }
 
 void EvHoverHide();
+extern HWND g_evOver;                      // CAPS-80, нижче
+extern std::vector<int> g_evOverSig;
 
 void EvClose()
 {
@@ -21134,6 +21338,11 @@ void EvClose()
     if (g_edWnd) KillTimer(g_edWnd, kEvTimer);
     EvSaveCancel();                        // CAPS-79: експорт належить відкритому відео
     EvEditClear();
+    if (g_evOver) { DestroyWindow(g_evOver); g_evOver = nullptr; }   // CAPS-80
+    g_evOverSig.clear();
+    g_evFrozen = -1;
+    g_evUndoOrder.clear();
+    g_evRedoOrder.clear();
     InterlockedIncrement(&g_evThumbGen);   // потік мініатюр побачить і зупиниться
     EvThumbsClear();
     EvHoverHide();
@@ -21194,6 +21403,7 @@ bool EvOpen(HINSTANCE hInst, const wchar_t* path)
     g_evTlZoom = 1.0;
     g_evTlOff = 0;
     g_evRate = 1.0;
+    g_evFrozen = -1;                      // CAPS-80: на старті — відео, поки не став перший кадр
     EvEditReset();                        // CAPS-79: правки — з чистого аркуша
     g_edTool = EdTool::Select;            // CAPS-78: у відео поки лише «Вибір» (позначки — CAPS-80)
     g_edVideo = true;
@@ -21254,7 +21464,8 @@ Gdiplus::Bitmap* EvGrabFrame()
 
 void EvCopyFrame(HWND hwnd)
 {
-    Gdiplus::Bitmap* b = EvGrabFrame();
+    // CAPS-80: на паузі — кадр разом із живими позначками (рівно те, що видно)
+    Gdiplus::Bitmap* b = (g_evFrozen == EvFrameIdx(g_evPos) && g_edImg) ? EdRender() : EvGrabFrame();
     if (!b) return;
     const bool ok = EdClipPut(b, hwnd);
     delete b;
@@ -21271,7 +21482,12 @@ void EvFrameToShot(HWND hwnd)
     wchar_t t[32], label[200];
     EvFmtTime(g_evPos, t, 32);
     swprintf(label, 200, S(Str::VidFrameLabel), g_evName, t);
+    // CAPS-80: живі позначки переходять у знімок редагованими
+    std::vector<EdObj> keep;
+    for (const EdObj& o : g_edObjs) if (EdObjLive(o)) { keep.push_back(o); keep.back().vf0 = 0; keep.back().vf1 = INT_MAX; }
     EdOpenBitmap((HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), b, label, false, false);   // закриває відео
+    g_edObjs = keep;
+    if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
 }
 
 // ---- таймлайн ---------------------------------------------------------------
@@ -21393,7 +21609,7 @@ void EvLayout(HWND hwnd)
     if (!g_edVideo) return;
     // вікно кадру — рівно на полотні; бібліотека його ховає
     if (g_evView) {
-        const bool show = g_evReady && !g_edLibOpen;
+        const bool show = g_evReady && !g_edLibOpen && EvViewWanted();   // CAPS-80: на паузі — редактор
         const RECT& c = g_edRcCanvas;
         RECT cur;
         GetWindowRect(g_evView, &cur);
@@ -21431,9 +21647,13 @@ void EvLayout(HWND hwnd)
     EdAdd(track, EdHit::VidTrack, 0);
     RECT film = { g_evRcFilm.left - EdPx(6), g_evRcRuler.bottom + EdPx(2), g_evRcFilm.right + EdPx(6), g_evRcFilm.bottom + EdPx(4) };
     EdAdd(film, EdHit::VidFilm, 0);
+    // CAPS-80: доріжка позначок — під стрічкою
+    g_evRcMarks = { g_evRcFilm.left, g_evRcFilm.bottom + EdPx(6), g_evRcFilm.right, g_evRcFilm.bottom + EdPx(26) };
+    { RECT mk = { g_evRcMarks.left - EdPx(6), g_evRcMarks.top - EdPx(1), g_evRcMarks.right + EdPx(6), g_evRcMarks.bottom + EdPx(2) };
+      EdAdd(mk, EdHit::VidMarks, 0); }
 
-    // смуга: «Відтворення», швидкість, повтор, звук
-    {
+    // смуга: «Відтворення», швидкість, повтор, звук (CAPS-80: коли нема інструмента малювання)
+    if (EvStripPlayback()) {
         HDC dc = GetDC(hwnd);
         const int scy = (g_edRcStrip.top + g_edRcStrip.bottom) / 2;
         int sx = EdPx(14);
@@ -21638,6 +21858,7 @@ void EvPaintTimeline(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         g.ResetClip();
     }
     EvPaintEdits(dc, g, t);                        // CAPS-79: вирізане, розрізи, вибране, ручки, кнопки
+    EvPaintMarks(dc, g, t);                        // CAPS-80: доріжка позначок
     // покажчик позиції
     const int px = EvTimeToX(g_evPos);
     if (px >= g_evRcRuler.left - 1 && px <= g_evRcRuler.right + 1) {
@@ -21768,6 +21989,7 @@ bool EvClick(HWND hwnd, const EdRegion* r, POINT pt)
     case EdHit::VidTrack:
         g_evDrag = 1;
         g_evScrub = true;
+        EvThaw();                                 // CAPS-80: тягнуть — показуємо відео наживо
         SetCapture(hwnd);
         if (g_evPlaying || g_evRev) EvPause();
         EvSeek(EvXToTime(pt.x));
@@ -21799,9 +22021,16 @@ bool EvClick(HWND hwnd, const EdRegion* r, POINT pt)
         return true;
     }
     case EdHit::Copy: EvCopyFrame(hwnd); return true;
-    case EdHit::Tool: return r->idx != 0;         // «Вибір» — як завжди; решта до CAPS-80 сірі
+    case EdHit::Tool:                             // CAPS-80: усі інструменти, крім кадрування
+        if (r->idx == 10) return true;
+        EvFreezeForEdit();
+        return false;
     case EdHit::InsertImg:
     case EdHit::Canvas:
+        EvFreezeForEdit();                        // малюють на поточному кадрі
+        return false;
+    case EdHit::VidMarks:
+        if (!EvMarksPress(hwnd, pt)) { EdSelClear(); InvalidateRect(hwnd, nullptr, FALSE); }
         return true;
     default: return false;
     }
@@ -21811,6 +22040,7 @@ bool EvClick(HWND hwnd, const EdRegion* r, POINT pt)
 bool EvMouseMove(HWND hwnd, POINT pt)
 {
     if (g_evScrub) {
+        if (g_evDrag == 5) { EvMarksDrag(hwnd, pt); return true; }   // CAPS-80: доріжка позначок
         if (g_evDrag >= 2) { EvEditDrag(hwnd, pt); return true; }   // CAPS-79: стрічка й ручки
         EvSeek(EvXToTime(pt.x));
         EvHoverShow(hwnd, pt);
@@ -21825,7 +22055,8 @@ bool EvMouseMove(HWND hwnd, POINT pt)
 
 void EvScrubEnd()
 {
-    EvEditDragEnd();                                // CAPS-79
+    if (g_evDrag == 5) EvMarksDragEnd();            // CAPS-80
+    else EvEditDragEnd();                           // CAPS-79
     g_evDrag = 0;
     g_evScrub = false;
     ReleaseCapture();
@@ -21848,19 +22079,29 @@ bool EvKey(HWND hwnd, WPARAM vk, LPARAM lp)
     // CAPS-79: правки
     case 'S': if (ctrl) { EvSaveStart(0, false); return true; } EvSplitHere(); return true;
     case VK_DELETE:
-    case VK_BACK: EvCutSel(); return true;
+    case VK_BACK:
+        if (g_edSel >= 0) return false;        // CAPS-80: вибрана позначка — видаляє редактор
+        EvCutSel();
+        return true;
     case 'I': if (!ctrl) { EvSetIn(EvFrameIdx(g_evPos)); return true; } break;
-    case 'Z': if (ctrl) { if (shift) EvRedo(); else EvUndo(); return true; } break;
-    case 'Y': if (ctrl) { EvRedo(); return true; } break;
+    case 'Z': if (ctrl) { if (shift) EvRedoAny(); else EvUndoAny(); return true; } break;
+    case 'Y': if (ctrl) { EvRedoAny(); return true; } break;
     case 'J': if (!ctrl) { if (!g_evRev) EvToggleReverse(); return true; } break;
     case 'K': if (!ctrl) { EvPause(); return true; } break;
     case 'L': if (!ctrl) { if (!g_evPlaying) EvPlay(); return true; } break;
     case 'C': if (ctrl) { EvCopyFrame(hwnd); return true; } break;
-    case VK_ESCAPE: return EvClearSel();          // спершу знімає виділення, далі — закрити редактор
+    case VK_ESCAPE:                                // по шару за раз; останній — закрити редактор
+        // CAPS-80: свій порядок — редакторів Esc із «початковим» інструментом закрив би вікно
+        if (g_edPickOpen >= 0 || g_edEdit) return false;
+        if (g_edSel >= 0) { EdSelClear(); EdLayout(hwnd); InvalidateRect(hwnd, nullptr, FALSE); return true; }
+        if (g_edTool != EdTool::Select) { g_edTool = EdTool::Select; EdLayout(hwnd); InvalidateRect(hwnd, nullptr, FALSE); return true; }
+        return EvClearSel();
     case 'O': if (ctrl) return false; EvSetOut(EvFrameIdx(g_evPos)); return true;   // відкрити інше / кінець тут
     default: break;
     }
-    return vk != VK_F1 && vk != VK_TAB;
+    // CAPS-80: решту (літери інструментів, Ctrl+D, Ctrl+V…) — редакторові, крім
+    // кадрування (C) і Enter (у знімку це «зберегти/скопіювати документ»).
+    return vk == 'C' || vk == VK_RETURN;
 }
 
 
@@ -21878,6 +22119,465 @@ void EvThumbReady(LPARAM lp)
     delete m;
 }
 
+// ---- CAPS-80: позначки поверх відео ----
+// Позначка — звичайний об'єкт редактора знімків (EdObj) плюс проміжок кадрів
+// [vf0, vf1). Усю механіку (інструменти, виділення, ручки, кольори, порядок,
+// дублювання) дає редактор: на паузі поточний кадр стає його зображенням, а вікно
+// відео ховається — і редагування працює саме собою, лише з позначками, живими на
+// цьому кадрі. Під час відтворення позначки малює прозоре дочірнє вікно поверх
+// відео; приховування там — заштрихована плашка (розмивати кожен кадр наживо
+// дорого), а справжнє розмиття — на паузі й у файлі.
+
+constexpr double kEvMarkSec = 3.0;           // нова позначка — на 3 с від поточного кадру
+HWND g_evOver = nullptr;                          // шар позначок під час відтворення
+std::vector<int> g_evOverSig;                     // що в ньому намальовано
+
+int EvMarkLen() { return (int)(kEvMarkSec * g_evFps + 0.5); }
+
+bool EvHasMarks()
+{
+    for (const EdObj& o : g_edObjs) if (o.vf1 != INT_MAX) return true;
+    return false;
+}
+
+// Щойно створена позначка (будь-яким шляхом: інструмент, вставка, дублікат
+// без часу) дістає проміжок від кадру, на якому її зробили.
+void EvAdoptMarks()
+{
+    if (!g_edVideo || g_evFrozen < 0) return;
+    const int n = EvFrames();
+    for (EdObj& o : g_edObjs)
+        if (o.vf1 == INT_MAX) {
+            o.vf0 = g_evFrozen;
+            o.vf1 = g_evFrozen + EvMarkLen();
+            if (o.vf1 > n) o.vf1 = n;
+            if (o.vf1 <= o.vf0) o.vf1 = o.vf0 + 1;
+        }
+}
+
+// Скасування: одна черга на дві системи — правки таймлайну (CAPS-79) і позначки
+// (стеки редактора знімків). Порядок дій пам'ятає, чия черга скасовуватись.
+void EvNoteMarkUndo()
+{
+    if (!g_edVideo) return;
+    g_evUndoOrder.push_back(1);
+    if (g_evUndoOrder.size() > 400) g_evUndoOrder.erase(g_evUndoOrder.begin());
+    g_evRedoOrder.clear();
+    g_evRedo.clear();
+    ++g_evMarksGen;
+}
+
+void EvNoteCutUndo()
+{
+    g_evUndoOrder.push_back(0);
+    if (g_evUndoOrder.size() > 400) g_evUndoOrder.erase(g_evUndoOrder.begin());
+    g_evRedoOrder.clear();
+    g_edRedo.clear();
+}
+
+void EvMarksChanged();
+
+// CAPS-80: з інструментом малювання чи вибраною позначкою смуга — властивості позначки
+bool EvStripPlayback() { return g_edTool == EdTool::Select && g_edSel < 0; }
+
+void EvUndoAny()
+{
+    while (!g_evUndoOrder.empty()) {
+        const char k = g_evUndoOrder.back();
+        g_evUndoOrder.pop_back();
+        if (k == 0 && !g_evUndo.empty()) { EvUndo(); g_evRedoOrder.push_back(0); return; }
+        if (k == 1 && !g_edUndo.empty()) { EdUndoAction(); ++g_evMarksGen; g_evRedoOrder.push_back(1); EvMarksChanged(); return; }
+    }
+}
+
+void EvRedoAny()
+{
+    while (!g_evRedoOrder.empty()) {
+        const char k = g_evRedoOrder.back();
+        g_evRedoOrder.pop_back();
+        if (k == 0 && !g_evRedo.empty()) { EvRedo(); g_evUndoOrder.push_back(0); return; }
+        if (k == 1 && !g_edRedo.empty()) { EdRedoAction(); ++g_evMarksGen; g_evUndoOrder.push_back(1); EvMarksChanged(); return; }
+    }
+}
+
+// ---- пауза: кадр — зображення редактора -------------------------------------
+
+bool EvViewWanted() { return g_evPlaying || g_evRev || g_evScrub || g_evFrozen < 0; }
+
+void EvFreezeNow()
+{
+    if (!g_edVideo || !g_evReady || g_edLibOpen) return;
+    const int idx = EvFrameIdx(g_evPos);
+    if (idx != g_evFrozen) {
+        Gdiplus::Bitmap* b = EvGrabFrame();
+        if (!b) return;
+        // Лише базове зображення: EdOpenBitmap закрив би відео (новий документ).
+        for (size_t i = 0; i < g_edSrcBank.size(); ++i) delete g_edSrcBank[i];
+        g_edSrcBank.clear();
+        g_edSrcBank.push_back(b);
+        g_edSrcId = 0;
+        g_edSrc = b;
+        EdRebuildImage();
+        EdBelowClear();                         // композити «під ефектом» — від старого кадру
+        g_evFrozen = idx;
+        EvAdoptMarks();
+        if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() && !EdObjLive(g_edObjs[(size_t)g_edSel])) EdSelClear();
+    }
+    if (g_edWnd) {
+        EvLayout(g_edWnd);                         // вікно відео ховається — видно редактор
+        EvOverSync();                              // і шар позначок над ним — теж
+        InvalidateRect(g_edWnd, nullptr, FALSE);
+    }
+}
+
+// Відео зараз рухатиметься — показати вікно кадру (і шар позначок над ним).
+void EvThaw()
+{
+    if (g_edWnd) EvLayout(g_edWnd);
+    EvOverSync();
+}
+
+// Клік по полотну чи інструменту: малюють на поточному кадрі — зупинити й заморозити зараз.
+void EvFreezeForEdit()
+{
+    if (g_evPlaying || g_evRev) EvPause();
+    if (EvFrameIdx(g_evPos) != g_evFrozen || (g_evView && IsWindowVisible(g_evView))) EvFreezeNow();
+}
+
+// ---- відтворення: шар позначок ---------------------------------------------
+
+LRESULT CALLBACK EvOverProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_NCHITTEST) return HTTRANSPARENT;
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// Дочірнє вікно з попіксельною прозорістю над вікном кадру. Перемальовується лише
+// тоді, коли змінюється набір живих позначок чи масштаб, — не щокадру.
+void EvOverSync()
+{
+    const bool want = g_edVideo && g_evView && IsWindowVisible(g_evView) && EvHasMarks() && !g_edLibOpen;
+    if (!want) {
+        if (g_evOver && IsWindowVisible(g_evOver)) ShowWindow(g_evOver, SW_HIDE);
+        g_evOverSig.clear();
+        return;
+    }
+    const RECT c = g_edRcCanvas;
+    const int cw = c.right - c.left, ch = c.bottom - c.top;
+    if (cw < 1 || ch < 1) return;
+    const int f = EvFrameIdx(g_evPos);
+    const RECT ir = EdImageRect();
+    const double s = EdScale();
+    std::vector<int> sig = { cw, ch, ir.left, ir.top, (int)(s * 10000), EdViewX(), EdViewY(), g_evMarksGen };
+    for (size_t i = 0; i < g_edObjs.size(); ++i) {
+        const EdObj& o = g_edObjs[i];
+        if (o.vf1 != INT_MAX && f >= o.vf0 && f < o.vf1) sig.push_back((int)i);
+    }
+    if (!g_evOver) {
+        static bool reg = false;
+        if (!reg) {
+            WNDCLASSW wc = {};
+            wc.lpfnWndProc = EvOverProc;
+            wc.hInstance = GetModuleHandleW(nullptr);
+            wc.lpszClassName = L"lilhelpers_evmarks";
+            RegisterClassW(&wc);
+            reg = true;
+        }
+        g_evOver = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE, L"lilhelpers_evmarks", L"",
+                                   WS_CHILD, c.left, c.top, cw, ch, g_edWnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (!g_evOver) return;
+    }
+    if (sig == g_evOverSig && IsWindowVisible(g_evOver)) return;
+    g_evOverSig = sig;
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = cw;
+    bi.bmiHeader.biHeight = -ch;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    void* bits = nullptr;
+    HDC scr = GetDC(nullptr);
+    HDC mem = CreateCompatibleDC(scr);
+    HBITMAP dib = CreateDIBSection(scr, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (dib && bits) {
+        HGDIOBJ old = SelectObject(mem, dib);
+        memset(bits, 0, (size_t)cw * ch * 4);
+        {
+            Gdiplus::Bitmap canvas(cw, ch, cw * 4, PixelFormat32bppPARGB, (BYTE*)bits);
+            Gdiplus::Graphics g(&canvas);
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            const double ox = ir.left - c.left - EdViewX() * s, oy = ir.top - c.top - EdViewY() * s;
+            g_evLiveFrame = f;
+            for (size_t i = 0; i < g_edObjs.size(); ++i) {
+                const EdObj& o = g_edObjs[i];
+                if (o.vf1 == INT_MAX || f < o.vf0 || f >= o.vf1) continue;
+                if (EdIsEffect(o.kind)) {        // приховування й маркер — плашкою зі штрихуванням
+                    const float x = (float)(ox + o.x * s), y = (float)(oy + o.y * s), w = (float)(o.w * s), h = (float)(o.h * s);
+                    Gdiplus::SolidBrush dim(o.kind == EdKind::Mark ? Gdiplus::Color(90, GetRValue(o.color), GetGValue(o.color), GetBValue(o.color))
+                                                                   : Gdiplus::Color(215, 40, 40, 46));
+                    g.FillRectangle(&dim, x, y, w, h);
+                    if (o.kind == EdKind::Hide) {
+                        Gdiplus::HatchBrush hb(Gdiplus::HatchStyleWideUpwardDiagonal, Gdiplus::Color(70, 255, 255, 255), Gdiplus::Color(0, 0, 0, 0));
+                        g.FillRectangle(&hb, x, y, w, h);
+                    }
+                    continue;
+                }
+                EdDrawObject(g, o, s, ox, oy, (int)i);
+            }
+            g_evLiveFrame = -1;
+        }
+        POINT src = { 0, 0 };
+        SIZE sz = { cw, ch };
+        BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+        SetWindowPos(g_evOver, HWND_TOP, c.left, c.top, cw, ch, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        UpdateLayeredWindow(g_evOver, scr, nullptr, &sz, mem, &src, 0, &bf, ULW_ALPHA);
+        SelectObject(mem, old);
+    }
+    if (dib) DeleteObject(dib);
+    DeleteDC(mem);
+    ReleaseDC(nullptr, scr);
+}
+
+void EvMarksChanged()
+{
+    EvAdoptMarks();
+    g_evOverSig.clear();
+    EvOverSync();
+    if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
+}
+
+// ---- доріжка позначок на таймлайні -------------------------------------------
+
+int  g_evMarkDrag = -1;                      // яку позначку тягнуть
+int  g_evMarkDragKind = 0;                   // 1 — вся, 2 — початок, 3 — кінець
+int  g_evMarkFrom0 = 0, g_evMarkFrom1 = 0, g_evMarkGrab = 0;
+
+// Смуги позначок у дві доріжки: наступна, що перетинає попередню, — нижче.
+void EvMarkLanes(std::vector<int>& lane)
+{
+    lane.assign(g_edObjs.size(), -1);
+    int end[2] = { INT_MIN, INT_MIN };
+    std::vector<int> order;
+    for (size_t i = 0; i < g_edObjs.size(); ++i) if (g_edObjs[i].vf1 != INT_MAX) order.push_back((int)i);
+    std::sort(order.begin(), order.end(), [](int a, int b) { return g_edObjs[(size_t)a].vf0 < g_edObjs[(size_t)b].vf0; });
+    for (int i : order) {
+        const EdObj& o = g_edObjs[(size_t)i];
+        const int l = (o.vf0 >= end[0]) ? 0 : (o.vf0 >= end[1] ? 1 : (end[0] <= end[1] ? 0 : 1));
+        lane[(size_t)i] = l;
+        if (o.vf1 > end[l]) end[l] = o.vf1;
+    }
+}
+
+RECT EvMarkBar(int i, const std::vector<int>& lane)
+{
+    const EdObj& o = g_edObjs[(size_t)i];
+    const int lh = (g_evRcMarks.bottom - g_evRcMarks.top) / 2;
+    const int top = g_evRcMarks.top + lane[(size_t)i] * lh;
+    RECT r = { EvTimeToX(o.vf0 / g_evFps), top + 1, EvTimeToX(o.vf1 / g_evFps), top + lh - 1 };
+    if (r.right - r.left < EdPx(4)) r.right = r.left + EdPx(4);
+    return r;
+}
+
+void EvPaintMarks(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
+{
+    const RECT& m = g_evRcMarks;
+    if (m.right <= m.left) return;
+    Gdiplus::SolidBrush base(g_edDark ? Gdiplus::Color(255, 30, 30, 34) : Gdiplus::Color(255, 236, 236, 240));
+    g.FillRectangle(&base, (INT)m.left, (INT)m.top, (INT)(m.right - m.left), (INT)(m.bottom - m.top));
+    if (!EvHasMarks()) {
+        EdDrawText(dc, m, S(Str::VidMarksEmpty), g_edFontSmall, t.text2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        return;
+    }
+    g.SetClip(Gdiplus::Rect(m.left, m.top, m.right - m.left, m.bottom - m.top));
+    std::vector<int> lane;
+    EvMarkLanes(lane);
+    for (size_t i = 0; i < g_edObjs.size(); ++i) {
+        if (lane[i] < 0) continue;
+        const RECT r = EvMarkBar((int)i, lane);
+        const EdObj& o = g_edObjs[i];
+        const COLORREF c = EdIsEffect(o.kind) && o.kind == EdKind::Hide ? RGB(120, 120, 128) : o.color;
+        Gdiplus::SolidBrush b(Gdiplus::Color(215, GetRValue(c), GetGValue(c), GetBValue(c)));
+        g.FillRectangle(&b, (INT)r.left, (INT)r.top, (INT)(r.right - r.left), (INT)(r.bottom - r.top));
+        if ((int)i == g_edSel) {
+            Gdiplus::Pen p(EdC(t.accent), (float)EdPx(2));
+            g.DrawRectangle(&p, (INT)r.left, (INT)r.top, (INT)(r.right - r.left - 1), (INT)(r.bottom - r.top - 1));
+        }
+    }
+    g.ResetClip();
+}
+
+int EvMarkAt(POINT pt, int* kind)
+{
+    std::vector<int> lane;
+    EvMarkLanes(lane);
+    for (int i = (int)g_edObjs.size() - 1; i >= 0; --i) {
+        if (lane[(size_t)i] < 0) continue;
+        const RECT r = EvMarkBar(i, lane);
+        RECT hit = r;
+        InflateRect(&hit, EdPx(4), 1);
+        if (!PtInRect(&hit, pt)) continue;
+        const int edge = EdPx(6);
+        *kind = (pt.x - r.left <= edge && r.right - r.left > 2 * edge) ? 2
+              : (r.right - pt.x <= edge && r.right - r.left > 2 * edge) ? 3 : 1;
+        if (r.right - r.left <= 2 * edge) *kind = pt.x < (r.left + r.right) / 2 ? 2 : 3;
+        return i;
+    }
+    return -1;
+}
+
+// Натиснули на доріжці позначок: вибрати й почати тягнути (усю — чи край).
+bool EvMarksPress(HWND hwnd, POINT pt)
+{
+    int kind = 0;
+    const int i = EvMarkAt(pt, &kind);
+    if (i < 0) return false;
+    if (g_evPlaying || g_evRev) EvPause();
+    EdSelClear();
+    g_edSel = i;
+    EdPushUndo();                              // тут же й черга скасування (позначки)
+    g_evMarkDrag = i;
+    g_evMarkDragKind = kind;
+    g_evMarkFrom0 = g_edObjs[(size_t)i].vf0;
+    g_evMarkFrom1 = g_edObjs[(size_t)i].vf1;
+    g_evMarkGrab = (int)(EvXToTime(pt.x) * g_evFps + 0.5);
+    g_evDrag = 5;
+    g_evScrub = true;
+    SetCapture(hwnd);
+    const int f = EvFrameIdx(g_evPos);
+    if (f < g_evMarkFrom0 || f >= g_evMarkFrom1) EvSeek((g_evMarkFrom0 + 0.25) / g_evFps);   // показати її
+    InvalidateRect(hwnd, nullptr, FALSE);
+    return true;
+}
+
+void EvMarksDrag(HWND hwnd, POINT pt)
+{
+    if (g_evMarkDrag < 0 || g_evMarkDrag >= (int)g_edObjs.size()) return;
+    EdObj& o = g_edObjs[(size_t)g_evMarkDrag];
+    const int n = EvFrames();
+    const int at = (int)(EvXToTime(pt.x) * g_evFps + 0.5);
+    const int d = at - g_evMarkGrab;
+    if (g_evMarkDragKind == 1) {
+        int a = g_evMarkFrom0 + d, len = g_evMarkFrom1 - g_evMarkFrom0;
+        if (a < 0) a = 0;
+        if (a + len > n) a = n - len;
+        o.vf0 = a; o.vf1 = a + len;
+        EvSeek((o.vf0 + 0.25) / g_evFps);
+    } else if (g_evMarkDragKind == 2) {
+        int a = g_evMarkFrom0 + d;
+        if (a < 0) a = 0;
+        if (a > o.vf1 - 1) a = o.vf1 - 1;
+        o.vf0 = a;
+        EvSeek((o.vf0 + 0.25) / g_evFps);
+    } else {
+        int b = g_evMarkFrom1 + d;
+        if (b > n) b = n;
+        if (b < o.vf0 + 1) b = o.vf0 + 1;
+        o.vf1 = b;
+        EvSeek((o.vf1 - 1 + 0.25) / g_evFps);
+    }
+    g_evFrozen = -2;                           // поточний кадр перезаморозиться з новим набором позначок
+    (void)hwnd;
+    InvalidateRect(g_edWnd, &g_edRcTimeline, FALSE);
+}
+
+void EvMarksDragEnd()
+{
+    if (g_evMarkDrag >= 0 && g_evMarkDrag < (int)g_edObjs.size()) {
+        const EdObj& o = g_edObjs[(size_t)g_evMarkDrag];
+        if (o.vf0 == g_evMarkFrom0 && o.vf1 == g_evMarkFrom1 && !g_edUndo.empty()) {
+            g_edUndo.pop_back();                   // порожній рух не лишає сліду
+            if (!g_evUndoOrder.empty()) g_evUndoOrder.pop_back();
+        } else {
+            ++g_evMarksGen;
+        }
+    }
+    g_evMarkDrag = -1;
+    EvMarksChanged();
+}
+
+// ---- експорт: позначки на кожен кадр ----------------------------------------
+// Проміжки, де набір живих позначок незмінний; на кожен — готові шари звичайних
+// позначок (намальовані тим самим EdDrawObject, що й на екрані) і між ними —
+// ефекти, які рахуються на кожному кадрі з пікселів під ними (як у редакторі:
+// приховування бачить і кадр, і позначки нижче).
+
+void EvFlushLayer(Gdiplus::Bitmap*& layer, std::vector<EvMarkOp>& ops)
+{
+    if (!layer) return;
+    const int w = (int)layer->GetWidth(), h = (int)layer->GetHeight();
+    Gdiplus::BitmapData bd;
+    Gdiplus::Rect all(0, 0, w, h);
+    if (layer->LockBits(&all, Gdiplus::ImageLockModeRead, PixelFormat32bppPARGB, &bd) == Gdiplus::Ok) {
+        int x0 = w, y0 = h, x1 = -1, y1 = -1;
+        for (int y = 0; y < h; ++y) {
+            const DWORD* row = (const DWORD*)((const BYTE*)bd.Scan0 + (size_t)y * bd.Stride);
+            for (int x = 0; x < w; ++x)
+                if (row[x] >> 24) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+        }
+        if (x1 >= x0 && y1 >= y0) {
+            EvMarkOp op;
+            op.type = 0;
+            op.r = RECT{ x0, y0, x1 + 1, y1 + 1 };
+            const int rw = x1 + 1 - x0, rh = y1 + 1 - y0;
+            op.px.resize((size_t)rw * rh * 4);
+            for (int y = 0; y < rh; ++y)
+                memcpy(&op.px[(size_t)y * rw * 4], (const BYTE*)bd.Scan0 + (size_t)(y0 + y) * bd.Stride + (size_t)x0 * 4, (size_t)rw * 4);
+            ops.push_back(std::move(op));
+        }
+        layer->UnlockBits(&bd);
+    }
+    delete layer;
+    layer = nullptr;
+}
+
+void EvBuildMarkSpans(std::vector<EvMarkSpan>& out, int vw, int vh)
+{
+    out.clear();
+    EvAdoptMarks();
+    const int n = EvFrames();
+    std::vector<int> cuts = { 0, n };
+    for (const EdObj& o : g_edObjs)
+        if (o.vf1 != INT_MAX) { cuts.push_back(o.vf0 < 0 ? 0 : o.vf0); cuts.push_back(o.vf1 > n ? n : o.vf1); }
+    std::sort(cuts.begin(), cuts.end());
+    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+    for (size_t c = 0; c + 1 < cuts.size(); ++c) {
+        const int a = cuts[c], b = cuts[c + 1];
+        if (b <= a) continue;
+        EvMarkSpan sp;
+        sp.a = a; sp.b = b;
+        Gdiplus::Bitmap* layer = nullptr;
+        g_evLiveFrame = a;
+        for (size_t i = 0; i < g_edObjs.size(); ++i) {
+            const EdObj& o = g_edObjs[i];
+            if (o.vf1 == INT_MAX || a < o.vf0 || a >= o.vf1) continue;
+            if (EdIsEffect(o.kind)) {
+                EvFlushLayer(layer, sp.ops);
+                EvMarkOp op;
+                op.type = o.kind == EdKind::Mark ? 1 : (o.mode == 2 ? 2 : (o.mode == 1 ? 3 : 4));
+                op.r = RECT{ o.x, o.y, o.x + o.w, o.y + o.h };
+                op.param = o.kind == EdKind::Hide ? (o.mode == 1 ? EdHideBlock(o) : EdHideRadius(o)) : 0;
+                op.color = o.color;
+                op.alpha = o.alpha;
+                sp.ops.push_back(std::move(op));
+                continue;
+            }
+            if (!layer) {
+                layer = new Gdiplus::Bitmap(vw, vh, PixelFormat32bppPARGB);
+                Gdiplus::Graphics gc(layer);
+                gc.Clear(Gdiplus::Color(0, 0, 0, 0));
+            }
+            Gdiplus::Graphics g(layer);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            EdDrawObject(g, o, 1.0, 0.0, 0.0, (int)i);
+        }
+        EvFlushLayer(layer, sp.ops);
+        g_evLiveFrame = -1;
+        if (!sp.ops.empty()) out.push_back(std::move(sp));
+    }
+}
+
 // ---- CAPS-79: правки — відтворення, таймлайн, збереження -------------------
 
 struct EvSaveJob {
@@ -21888,6 +22588,7 @@ struct EvSaveJob {
     wchar_t out[MAX_PATH] = {};
     std::wstring name;
     std::vector<EvSeg> keep;
+    int marksGen = 0;              // CAPS-80: які позначки збережено
 };
 
 EvSaveJob* g_evJob = nullptr;
@@ -21976,6 +22677,7 @@ bool EvEditClick(HWND hwnd, const EdRegion* r, POINT pt)
         }
         g_evDrag = kind;
         g_evScrub = true;
+        EvThaw();                                 // CAPS-80
         g_evDragFrom = pt;
         g_evDragMoved = false;
         SetCapture(hwnd);
@@ -21992,8 +22694,8 @@ bool EvEditClick(HWND hwnd, const EdRegion* r, POINT pt)
         default: EvSetOut(EvFrameIdx(g_evPos)); break;
         }
         return true;
-    case EdHit::Undo: EvUndo(); return true;
-    case EdHit::Redo: EvRedo(); return true;
+    case EdHit::Undo: EvUndoAny(); return true;   // CAPS-80: і таймлайн, і позначки
+    case EdHit::Redo: EvRedoAny(); return true;
     case EdHit::Store:
         if (g_evJob) { EvAskStopSave(); return true; }
         EvSaveStart(0, false);
@@ -22183,6 +22885,7 @@ bool EvPickSavePath(HWND hwnd, wchar_t* out)
     dlg->SetTitle(S(Str::VidSaveTitle));
     std::wstring nm = g_evName;
     if (EvEdited() && !EndsWithI(nm.c_str(), S(Str::VidCutSuffix))) nm += S(Str::VidCutSuffix);
+    else if (!EvEdited() && EvHasMarks() && !EndsWithI(nm.c_str(), S(Str::VidMarkedSuffix))) nm += S(Str::VidMarkedSuffix);
     dlg->SetFileName(nm.c_str());
     out[0] = 0;
     if (SUCCEEDED(dlg->Show(hwnd))) {
@@ -22232,10 +22935,11 @@ bool EvSaveStart(int mode, bool closeAfter)
         return false;
     }
     const bool edited = EvEdited();
+    const bool marked = EvHasMarks();                    // CAPS-80
     wchar_t out[MAX_PATH] = {}, part[MAX_PATH] = {};
     if (mode == 0) {
         const wchar_t* dir = EdLibDir();
-        if (!edited && dir && EvInDir(g_evPath, dir)) {   // без правок запис уже там, де треба
+        if (!edited && !marked && dir && EvInDir(g_evPath, dir)) {   // без правок запис уже там, де треба
             g_evSavedKeep = keep;
             EdTick(EdHit::Store);
             if (closeAfter && g_edWnd) PostMessageW(g_edWnd, WM_CLOSE, 0, 0);
@@ -22270,11 +22974,14 @@ bool EvSaveStart(int mode, bool closeAfter)
     j->x.frames = EvEditFrames();
     j->x.notify = g_edWnd;
     j->mode = mode;
-    j->copyOnly = !edited;
+    j->copyOnly = !edited && !marked;
     j->closeAfter = closeAfter;
     j->keep = keep;
+    j->marksGen = g_evMarksGen;
+    if (marked) EvBuildMarkSpans(j->x.spans, g_evW, g_evH);   // CAPS-80: шари й ефекти — тут, у потоці вікна
     j->name = g_evName;
     if (edited && !EndsWithI(j->name.c_str(), S(Str::VidCutSuffix))) j->name += S(Str::VidCutSuffix);
+    else if (!edited && marked && !EndsWithI(j->name.c_str(), S(Str::VidMarkedSuffix))) j->name += S(Str::VidMarkedSuffix);
     g_evJob = j;
     g_evJobThread = CreateThread(nullptr, 0, EvSaveThread, j, 0, nullptr);
     if (!g_evJobThread) { g_evJob = nullptr; delete j; return false; }
@@ -22331,6 +23038,7 @@ void EvSaved(LPARAM lp)
     if (mine && g_edWnd) {
         if (SUCCEEDED(j->x.hr)) {
             g_evSavedKeep = j->keep;
+            g_evMarksSavedGen = j->marksGen;       // CAPS-80
             if (j->mode == 0) lstrcpynW(g_evLibOut, j->out, MAX_PATH);
             if (j->mode < 2) EdTick(EdHit::Store);
             else if (EvClipFile(j->out)) EdToast(Str::VidCopiedFile);
