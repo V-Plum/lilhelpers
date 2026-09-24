@@ -194,6 +194,7 @@ constexpr int  IDC_VID_FPS30     = 217;
 constexpr int  IDC_VID_FPS60     = 218;
 constexpr int  IDC_VID_QLOW      = 219;   // 219..221 = якість 0..2
 constexpr int  IDC_VID_SHOWLIB   = 222;
+constexpr int  IDC_VID_LIBMB     = 223;   // CAPS-74: межа обсягу відео в бібліотеці
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -570,6 +571,18 @@ X(EdLibEmptyBody,     L"Натисніть «Зберегти» (Ctrl+S) у ре
                       L"Press Save (Ctrl+S) in the editor — the snapshot lands here together with "     \
                       L"its marks, and you can come back to it.")                                      \
 X(EdLibOpenBtn,       L"Відкрити",                      L"Open")                                       \
+X(EdLibFilterAll,     L"Усе",                           L"All")                                        \
+X(EdLibFactDur,       L"Тривалість",                    L"Duration")                                   \
+X(EdLibVidChipMb,     L"%d відео · %d МБ",              L"%d videos · %d MB")                          \
+X(EdLibVidChipGb,     L"%d відео · %d,%d ГБ",           L"%d videos · %d.%d GB")                       \
+X(EdLibEmptyVidTitle, L"Тут будуть ваші записи екрана", L"Your screen recordings will live here")      \
+X(EdLibEmptyVidBody,  L"Alt+Shift+5 — і тягніть рамку: ділянка, клік — вікно, Space — увесь екран. "    \
+                      L"Та сама клавіша зупиняє запис, і він ляже сюди.",                              \
+                      L"Alt+Shift+5, then drag a frame: an area, click for a window, Space for the whole " \
+                      L"screen. The same key stops recording, and the video lands here.")             \
+X(VidLibLimitL,       L"Відео в бібліотеці — не більше", L"Keep videos in the library up to")          \
+X(VidLibLimitHint,    L"Понад межу найстаріші записи йдуть у кошик. На знімки ця межа не впливає.",    \
+                      L"Above the limit the oldest recordings go to the Recycle Bin. Shots are not affected.") \
 X(EdLibShowBtn,       L"Показати в Провіднику",         L"Show in Explorer")                           \
 X(EdLibDelBtn,        L"Видалити",                      L"Delete")                                     \
 X(EdLibRenameTip,     L"Перейменувати (F2)",            L"Rename (F2)")                                \
@@ -590,7 +603,8 @@ X(EdLibMarks1,        L"%d позначка",                   L"%d mark")     
 X(EdLibMarks2,        L"%d позначки",                   L"%d marks")                                   \
 X(EdLibMarks5,        L"%d позначок",                   L"%d marks")                                   \
 X(EdLibNowOpen,       L"у редакторі",                   L"in the editor")                              \
-X(EdLibStatus,        L"Бібліотека · %d знімків",       L"Library · %d snapshots")                     \
+X(EdLibStatus,        L"Бібліотека · знімків: %d · відео: %d", L"Library · snapshots: %d · videos: %d")    \
+X(EdLibFactRec,       L"Записано",                      L"Recorded")                                   \
 X(EdLibErrDel,        L"Не вдалося видалити файл.",     L"Could not delete the file.")                 \
 X(EdLibErrRename,     L"Не вдалося перейменувати знімок.", L"Could not rename the snapshot.")          \
 X(CapSecLib,          L"Бібліотека знімків",            L"Snapshot library")                           \
@@ -5358,9 +5372,12 @@ UINT DeriveVideoStride(DWORD bufLen, UINT32 w, UINT32 h, UINT fallback)
     return fallback;
 }
 
-bool PeekLoadVideo(const wchar_t* path, wchar_t* durOut, int durCch)
+// CAPS-74: кадр і тривалість — спільні для перегляду (CAPS-16) і бібліотеки.
+// Найпідступніше тут — крок рядка, і двох його копій бути не повинно.
+bool VideoGrabFrame(const wchar_t* path, Gdiplus::Bitmap** outBmp, LONGLONG* outDur)
 {
-    durOut[0] = 0;
+    *outBmp = nullptr;
+    *outDur = 0;
     if (!VideoEnsureMf()) return false;
 
     IMFAttributes* attrs = nullptr;
@@ -5397,7 +5414,7 @@ bool PeekLoadVideo(const wchar_t* path, wchar_t* durOut, int durCch)
                 && pv.vt == VT_UI8)
                 dur = (LONGLONG)pv.uhVal.QuadPart;
             PropVariantClear(&pv);
-            if (dur > 0) FormatDuration(dur, durOut, durCch);
+            *outDur = dur;
 
             if (dur > 20000000) {          // довше 2 с — відмотати, щоб не впіймати чорну заставку
                 PROPVARIANT pos;
@@ -5466,9 +5483,7 @@ bool PeekLoadVideo(const wchar_t* path, wchar_t* durOut, int durCch)
                                 }
                             }
                             bmp->UnlockBits(&bd);
-                            g_peekImg = bmp;
-                            g_peekInfo.imgW = (int)w;
-                            g_peekInfo.imgH = (int)h;
+                            *outBmp = bmp;
                             ok = true;
                         } else {
                             delete bmp;
@@ -5487,6 +5502,20 @@ bool PeekLoadVideo(const wchar_t* path, wchar_t* durOut, int durCch)
     if (want) want->Release();
     reader->Release();
     return ok;
+}
+
+bool PeekLoadVideo(const wchar_t* path, wchar_t* durOut, int durCch)
+{
+    durOut[0] = 0;
+    Gdiplus::Bitmap* bmp = nullptr;
+    LONGLONG dur = 0;
+    const bool ok = VideoGrabFrame(path, &bmp, &dur);
+    if (dur > 0) FormatDuration(dur, durOut, durCch);   // тривалість — навіть без кадру
+    if (!ok || !bmp) return false;
+    g_peekImg = bmp;
+    g_peekInfo.imgW = (int)bmp->GetWidth();
+    g_peekInfo.imgH = (int)bmp->GetHeight();
+    return true;
 }
 
 
@@ -8546,7 +8575,8 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    LibArea, LibBack, LibCard, LibRename, LibOpen, LibShow, LibDel,
                    LibDelYes, LibDelNo, OvCopy, OvWindow, OvHandle,
                    Swap, StripSep,     // CAPS-65: ⇄ кольорів і риски між групами смуги
-                   InsertImg };        // CAPS-69: «Зображення» на рейці
+                   InsertImg,          // CAPS-69: «Зображення» на рейці
+                   LibFilter };        // CAPS-74: «Усе / Знімки / Відео»; ⚠ нові — лише в кінець
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -8608,7 +8638,17 @@ struct EdLibItem {
     ULONGLONG bytes = 0;
     int w = 0, h = 0, marks = 0;
     Gdiplus::Bitmap* thumb = nullptr;
+    bool video = false;        // CAPS-74: MP4 з побічним .lhmeta
+    LONGLONG dur = 0;          // 100 нс, лише для відео
 };
+// CAPS-74: фільтр і лічильники оголошено тут — ними користуються розкладка й
+// малювання, що стоять у файлі раніше за решту коду бібліотеки відео.
+const wchar_t* kRegLibFilter = L"LibFilter";
+int g_edLibFilter = 0;                   // 0 — усе, 1 — знімки, 2 — відео
+int g_edLibShots = 0, g_edLibVids = 0;   // скільки всього, незалежно від фільтра
+ULONGLONG g_edLibVidBytes = 0;
+void VidLibBadge(HDC dc, Gdiplus::Graphics& g, const RECT& box, LONGLONG dur);
+void VidOpenFile(const wchar_t* path);
 std::vector<EdLibItem> g_edLib;
 bool   g_edLibOpen = false;
 int    g_edLibSel = -1;
@@ -8679,6 +8719,7 @@ void EdLibStamp(wchar_t* out, size_t cch);
 void EdLibToggle(HWND hwnd);
 void EdLibClose(HWND hwnd);
 void EdLibOpenSel(HWND hwnd);
+void EdLibScan();                 // CAPS-74: фільтр перечитує бібліотеку з обробника кліку
 void EdLibShowSel();
 void EdLibAskDelete(HWND hwnd, bool permanent);
 void EdLibDeleteSel(HWND hwnd);
@@ -10595,6 +10636,14 @@ void EdLayout(HWND hwnd)
         const int hdr = EdPx(56), pad = EdPx(20), colW = EdPx(400), gap = EdPx(14);
         RECT back = EdPill(area.left + pad, area.top + hdr / 2, EdPx(32), EdPx(32));
         EdAdd(back, EdHit::LibBack, 0);
+        // CAPS-74: фільтр — праворуч у шапці, над колонкою вибраного запису
+        {
+            const int fw = EdPx(76), fh = EdPx(28);
+            for (int i = 0; i < 3; ++i) {
+                RECT f = EdPill(area.right - pad - (3 - i) * fw, area.top + hdr / 2, fw, fh);
+                EdAdd(f, EdHit::LibFilter, i);
+            }
+        }
 
         const bool sel = (g_edLibSel >= 0 && g_edLibSel < (int)g_edLib.size());
         const int cx0 = area.right - colW;
@@ -13466,7 +13515,7 @@ void EdPaintLib(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         RECT tt = { bk->right + EdPx(14), area.top, bk->right + EdPx(14) + EdPx(140), area.top + hdr };
         EdDrawText(dc, tt, S(Str::EdLibTitle), g_edFontBold, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         // чіп: скільки з ліміту
-        const int n = (int)g_edLib.size(), mb = (int)(g_edLibBytes / (1024 * 1024));
+        const int n = g_edLibShots, mb = (int)(g_edLibBytes / (1024 * 1024));   // CAPS-74: лише знімки
         const int limit = EdLibRetLimit();
         if (EdLibRetMode() == 0) wsprintfW(buf, S(Str::EdLibFmtChip), n, limit, mb);
         else                     wsprintfW(buf, S(Str::EdLibFmtChipMb), mb, limit, n);
@@ -13478,9 +13527,40 @@ void EdPaintLib(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         EdDrawText(dc, chip, buf, g_edFontSmall, t.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         const bool full = (EdLibRetMode() == 0) ? n >= limit : mb >= limit;
         if (full) {
-            RECT wr = { chip.right + EdPx(12), area.top, area.right - pad, area.top + hdr };
+            const RECT* f0 = EdRegionRect(EdHit::LibFilter, 0);
+            RECT wr = { chip.right + EdPx(12), area.top, f0 ? f0->left - EdPx(12) : area.right - pad, area.top + hdr };
             EdDrawText(dc, wr, S(Str::EdLibFull), g_edFontSmall, g_edDark ? RGB(240, 180, 41) : RGB(150, 100, 0),
                        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+    }
+
+    // CAPS-74: скільки відео — окремим сірим чіпом праворуч від ліміту знімків;
+    // фільтр — сегментами праворуч у шапці.
+    {
+        const RECT* f0 = EdRegionRect(EdHit::LibFilter, 0);
+        if (g_edLibVids > 0 && f0) {
+            const int mb = (int)(g_edLibVidBytes / (1024 * 1024));
+            if (mb >= 1024) wsprintfW(buf, S(Str::EdLibVidChipGb), g_edLibVids, mb / 1024, (mb % 1024) * 10 / 1024);
+            else            wsprintfW(buf, S(Str::EdLibVidChipMb), g_edLibVids, mb);
+            const int cw = EdTextWidth(dc, buf, g_edFontSmall) + EdPx(18);
+            RECT vc = EdPill(f0->left - EdPx(12) - cw, area.top + hdr / 2, cw, EdPx(22));
+            Gdiplus::Color cf = EdC(t.hot);
+            EdFillRound(g, vc, (float)EdPx(11), &cf, nullptr);
+            EdDrawText(dc, vc, buf, g_edFontSmall, t.text2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        const Str names[3] = { Str::EdLibFilterAll, Str::TabShots, Str::TabVideo };
+        for (int i = 0; i < 3; ++i) {
+            const RECT* f = EdRegionRect(EdHit::LibFilter, i);
+            if (!f) continue;
+            const bool on = (g_edLibFilter == i);
+            const bool hot = (g_edHotWhat == EdHit::LibFilter && g_edHotIdx == i);
+            RECT fr = *f;
+            InflateRect(&fr, -EdPx(2), 0);
+            Gdiplus::Color ff = EdC(on ? t.accentBg : (hot ? t.hot : t.surface));
+            Gdiplus::Color fb = EdC(on ? t.accent : t.border);
+            EdFillRound(g, fr, (float)EdPx(6), &ff, &fb);
+            EdDrawText(dc, fr, S(names[i]), on ? g_edFontBold : g_edFont, on ? t.accent : t.text,
+                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
     }
 
@@ -13489,9 +13569,9 @@ void EdPaintLib(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         RECT c = { area.left + pad, area.top + hdr, area.right - pad, area.bottom - pad };
         const int cy = (c.top + c.bottom) / 2;
         RECT t1 = { c.left, cy - EdPx(30), c.right, cy - EdPx(6) };
-        EdDrawText(dc, t1, S(Str::EdLibEmptyTitle), g_edFontBold, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        EdDrawText(dc, t1, S(g_edLibFilter == 2 ? Str::EdLibEmptyVidTitle : Str::EdLibEmptyTitle), g_edFontBold, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         RECT t2 = { (c.left + c.right) / 2 - EdPx(260), cy, (c.left + c.right) / 2 + EdPx(260), cy + EdPx(60) };
-        EdDrawText(dc, t2, S(Str::EdLibEmptyBody), g_edFont, t.text2, DT_CENTER | DT_WORDBREAK);
+        EdDrawText(dc, t2, S(g_edLibFilter == 2 ? Str::EdLibEmptyVidBody : Str::EdLibEmptyBody), g_edFont, t.text2, DT_CENTER | DT_WORDBREAK);
         return;
     }
 
@@ -13518,6 +13598,7 @@ void EdPaintLib(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         }
         RECT tb = { r.left + EdPx(8), r.top + EdPx(8), r.right - EdPx(8), r.top + EdPx(8) + g_edLibThumbH };
         EdLibThumb(g, it.thumb, tb, t);
+        if (it.video) VidLibBadge(dc, g, tb, it.dur);   // CAPS-74
         const bool current = g_edDocPath[0] && !lstrcmpiW(it.path.c_str(), g_edDocPath);
         if (current) {
             const int cw = EdTextWidth(dc, S(Str::EdLibNowOpen), g_edFontSmall) + EdPx(14);
@@ -13532,7 +13613,13 @@ void EdPaintLib(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
             EdDrawText(dc, nm, it.name.c_str(), g_edFontBold, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         wchar_t when[32];
         EdLibWhen(it.created, when, 32, false);
-        wsprintfW(buf, L"%s · %d × %d · %s", when, it.w, it.h, EdLibMarksText(it.marks).c_str());
+        if (it.video) {                                 // CAPS-74: тривалість замість позначок
+            wchar_t d[24];
+            FormatDuration(it.dur, d, 24);
+            wsprintfW(buf, L"%s · %d × %d · %s", when, it.w, it.h, d);
+        } else {
+            wsprintfW(buf, L"%s · %d × %d · %s", when, it.w, it.h, EdLibMarksText(it.marks).c_str());
+        }
         RECT fx = { nm.left, nm.bottom, nm.right, nm.bottom + EdPx(16) };
         EdDrawText(dc, fx, buf, g_edFontSmall, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
@@ -13549,6 +13636,7 @@ void EdPaintLib(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     if (g_edLibSel < 0 || g_edLibSel >= (int)g_edLib.size()) return;
     const EdLibItem& it = g_edLib[g_edLibSel];
     EdLibThumb(g, it.thumb, g_edLibRcPreview, t);
+    if (it.video) VidLibBadge(dc, g, g_edLibRcPreview, it.dur);   // CAPS-74
     EdDrawText(dc, g_edLibRcName, it.name.c_str(), g_edFontBold, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     if (const RECT* rn = EdRegionRect(EdHit::LibRename, 0)) {
         EdPaintButton(g, *rn, t, false, g_edHotWhat == EdHit::LibRename, false);
@@ -13556,7 +13644,7 @@ void EdPaintLib(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
     wchar_t when[32];
     EdLibWhen(it.created, when, 32, true);
-    wsprintfW(buf, L"%s: %s", S(Str::EdLibFactWhen), when);
+    wsprintfW(buf, L"%s: %s", S(it.video ? Str::EdLibFactRec : Str::EdLibFactWhen), when);   // CAPS-74
     RECT sv = { g_edLibRcName.left, g_edLibRcName.bottom + EdPx(4), area.right - pad, g_edLibRcName.bottom + EdPx(22) };
     EdDrawText(dc, sv, buf, g_edFontSmall, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
@@ -13575,7 +13663,13 @@ void EdPaintLib(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         };
         wsprintfW(buf, L"%d × %d", it.w, it.h);
         row(Str::EdLibFactSize, buf);
-        row(Str::EdLibFactMarks, EdLibMarksText(it.marks).c_str());
+        if (it.video) {                                 // CAPS-74
+            wchar_t d[24];
+            FormatDuration(it.dur, d, 24);
+            row(Str::EdLibFactDur, d);
+        } else {
+            row(Str::EdLibFactMarks, EdLibMarksText(it.marks).c_str());
+        }
         if (it.bytes >= 1024 * 1024) {
             const int kb10 = (int)(it.bytes * 10 / (1024 * 1024));
             wsprintfW(buf, L"%s · %d,%d МБ", it.file.c_str(), kb10 / 10, kb10 % 10);
@@ -13938,7 +14032,7 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     if (const RECT* om = EdRegionRect(EdHit::OpenMenu, 0)) x = om->right + EdPx(12) + 1 + EdPx(12);
     if (const RECT* smr = EdRegionRect(EdHit::SaveMenu, 0)) x = smr->right + EdPx(12) + 1 + EdPx(12);   // CAPS-70
     if (g_edLibOpen) {
-        wsprintfW(buf, S(Str::EdLibStatus), (int)g_edLib.size());
+        wsprintfW(buf, S(Str::EdLibStatus), g_edLibShots, g_edLibVids);   // CAPS-74: усього, незалежно від фільтра
         RECT rl = { x, g_edRcStatus.top, x + EdPx(400), g_edRcStatus.bottom };
         EdDrawText(dc, rl, buf, g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         return;
@@ -16856,6 +16950,17 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             switch (r->what) {
             case EdHit::LibBack:   EdLibClose(hwnd); return 0;
             case EdHit::LibCard:   EdLibSelect(hwnd, r->idx); return 0;
+            case EdHit::LibFilter:                                  // CAPS-74
+                if (g_edLibEdit) EdLibRenameEnd(hwnd, true);
+                g_edLibFilter = r->idx;
+                RegSaveInt(kRegLibFilter, g_edLibFilter);
+                EdLibScan();
+                g_edLibSel = g_edLib.empty() ? -1 : 0;
+                g_edLibScroll = 0;
+                g_edLibConfirm = false;
+                EdLayout(hwnd);
+                InvalidateRect(hwnd, nullptr, TRUE);
+                return 0;
             case EdHit::LibOpen:   EdLibOpenSel(hwnd); return 0;
             case EdHit::LibShow:   EdLibShowSel(); return 0;
             case EdHit::LibDel:    EdLibAskDelete(hwnd, (wp & MK_SHIFT) != 0); return 0;
@@ -19011,10 +19116,297 @@ void EdLibFree()
     for (size_t i = 0; i < g_edLib.size(); ++i) delete g_edLib[i].thumb;
     g_edLib.clear();
     g_edLibBytes = 0;
+    g_edLibShots = g_edLibVids = 0;      // CAPS-74
+    g_edLibVidBytes = 0;
 }
 
 // Перелік теки: спочатку нові. Без групування по днях і без пошуку (рішення
 // власника 21.09) — дата й час і так стоять у назві й у рядку фактів.
+// ---- CAPS-74: відео в бібліотеці -------------------------------------------
+// Запис лишається чистим MP4: його можна відкрити будь-чим і перетягнути в
+// месенджер. Усе, що бібліотеці треба понад це (назва, мініатюра, тривалість),
+// лежить поруч у прихованому «<ім'я>.mp4.lhmeta». Так перейменування не
+// переписує гігабайтний файл, а мініатюра не декодується при кожному відкритті.
+// Кеш прив'язано до розміру й часу зміни MP4: інший файл під тим самим іменем
+// мініатюру перерахує. Формат — ті самі блоки, що й .lhshot: невідомий блок
+// читач пропускає за довжиною.
+
+const char kVidMetaMagic[8] = { 'L', 'H', 'V', 'M', 'E', 'T', 'A', 0x1A };
+constexpr DWORD kVidMetaVer = 1;
+const wchar_t* kRegLibVidMB  = L"LibVideoMB";
+constexpr int kVidLibDefMB = 5120;      // 5 ГБ — відео не витісняє знімки й не з'їдає диск
+
+int VidLibLimitMB() { return RegLoadInt(kRegLibVidMB, kVidLibDefMB, 100, 10000000); }
+
+std::wstring VidMetaPath(const std::wstring& mp4) { return mp4 + L".lhmeta"; }
+
+struct VidMeta {
+    ULONGLONG srcSize = 0, srcTime = 0;  // якому саме MP4 належить кеш
+    ULONGLONG created = 0;
+    std::wstring name;
+    int w = 0, h = 0;
+    LONGLONG dur = 0;                     // 100 нс
+    std::vector<BYTE> thumbPng;
+};
+
+bool VidMetaWrite(const std::wstring& mp4, const VidMeta& m)
+{
+    EdWr w;
+    w.raw(kVidMetaMagic, 8);
+    w.u32v(kVidMetaVer);
+    size_t at = w.open("SRC ");
+    w.u64v(m.srcSize); w.u64v(m.srcTime);
+    w.close(at);
+    at = w.open("META");
+    w.u64v(m.created); w.str(m.name);
+    w.close(at);
+    at = w.open("INFO");
+    w.i32v(m.w); w.i32v(m.h); w.u64v((ULONGLONG)m.dur);
+    w.close(at);
+    if (!m.thumbPng.empty()) {
+        at = w.open("THMB");
+        w.raw(m.thumbPng.data(), m.thumbPng.size());
+        w.close(at);
+    }
+    // Через .tmp і підміну: обірваний запис не лишить напівфайл. Прихований —
+    // у «Показати теку» людина бачить свої відео, а не службові файли.
+    const std::wstring path = VidMetaPath(mp4), tmp = path + L".tmp";
+    HANDLE f = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    DWORD put = 0;
+    const BOOL ok = WriteFile(f, w.b.data(), (DWORD)w.b.size(), &put, nullptr) && put == w.b.size();
+    CloseHandle(f);
+    if (!ok || !MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        DeleteFileW(tmp.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool VidMetaRead(const std::wstring& mp4, VidMeta& m)
+{
+    HANDLE f = CreateFileW(VidMetaPath(mp4).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER sz = {};
+    std::vector<BYTE> raw;
+    if (GetFileSizeEx(f, &sz) && sz.QuadPart >= 12 && sz.QuadPart < (8LL << 20)) {
+        raw.resize((size_t)sz.QuadPart);
+        DWORD got = 0;
+        if (!ReadFile(f, raw.data(), (DWORD)raw.size(), &got, nullptr) || got != raw.size()) raw.clear();
+    }
+    CloseHandle(f);
+    if (raw.size() < 12 || memcmp(raw.data(), kVidMetaMagic, 8)) return false;
+    EdRd r{ raw.data(), raw.size(), 12, false };
+    while (!r.bad && r.at + 8 <= r.n) {
+        char t[4];
+        r.raw(t, 4);
+        const DWORD len = r.u32v();
+        if (r.bad || r.at + len > r.n) return false;
+        EdRd b{ raw.data() + r.at, len, 0, false };
+        if (!memcmp(t, "SRC ", 4))      { m.srcSize = b.u64v(); m.srcTime = b.u64v(); }
+        else if (!memcmp(t, "META", 4)) { m.created = b.u64v(); m.name = b.str(); }
+        else if (!memcmp(t, "INFO", 4)) { m.w = b.i32v(); m.h = b.i32v(); m.dur = (LONGLONG)b.u64v(); }
+        else if (!memcmp(t, "THMB", 4)) { m.thumbPng.assign(raw.data() + r.at, raw.data() + r.at + len); }
+        r.at += len;
+    }
+    return !r.bad;
+}
+
+// Кадр для мініатюри — той самий код, що й перегляд по пробілу (VideoGrabFrame),
+// зменшений до 320×240: мініатюра в кеші — кілобайти, а не мегабайти.
+Gdiplus::Bitmap* VidThumbFrom(Gdiplus::Bitmap* frame)
+{
+    const int fw = (int)frame->GetWidth(), fh = (int)frame->GetHeight();
+    const double kx = 320.0 / (fw > 0 ? fw : 1), ky = 240.0 / (fh > 0 ? fh : 1);
+    const double k = kx < ky ? kx : ky;
+    const int tw = k < 1.0 ? (int)(fw * k + 0.5) : fw, th = k < 1.0 ? (int)(fh * k + 0.5) : fh;
+    Gdiplus::Bitmap* sm = new Gdiplus::Bitmap(tw > 0 ? tw : 1, th > 0 ? th : 1, PixelFormat32bppPARGB);
+    if (!sm || sm->GetLastStatus() != Gdiplus::Ok) { delete sm; return nullptr; }
+    Gdiplus::Graphics g(sm);
+    g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    g.DrawImage(frame, Gdiplus::Rect(0, 0, tw, th), 0, 0, fw, fh, Gdiplus::UnitPixel);
+    return sm;
+}
+
+bool EndsWithI(const wchar_t* s, const wchar_t* tail)
+{
+    const size_t a = wcslen(s), b = wcslen(tail);
+    return a >= b && !lstrcmpiW(s + a - b, tail);
+}
+
+// Відео — у спільний список бібліотеки. keep = false: лише порахувати (фільтр
+// «Знімки»), але кеш усе одно підтримати.
+void VidLibScanInto(const wchar_t* dir, bool keep)
+{
+    wchar_t mask[MAX_PATH];
+    wsprintfW(mask, L"%s\\*.mp4", dir);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(mask, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (!EndsWithI(fd.cFileName, L".mp4")) continue;       // «*.mp4» у Windows ловить і довші розширення
+        const std::wstring path = std::wstring(dir) + L"\\" + fd.cFileName;
+        const ULONGLONG size = ((ULONGLONG)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+        const ULONGLONG mtime = ((ULONGLONG)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime;
+        ++g_edLibVids;
+        g_edLibVidBytes += size;
+        VidMeta m;
+        const bool had = VidMetaRead(path, m);
+        if (!had || m.srcSize != size || m.srcTime != mtime) {
+            // Кешу немає або він від іншого файлу: декодуємо кадр ОДИН раз.
+            // Назву, дану людиною, зберігаємо й тоді, коли кеш застарів.
+            const std::wstring keepName = had ? m.name : L"";
+            const ULONGLONG keepCreated = had ? m.created : 0;
+            m = VidMeta{};
+            m.srcSize = size;
+            m.srcTime = mtime;
+            m.created = keepCreated ? keepCreated : mtime;
+            m.name = keepName;
+            Gdiplus::Bitmap* frame = nullptr;
+            LONGLONG dur = 0;
+            VideoGrabFrame(path.c_str(), &frame, &dur);
+            m.dur = dur;
+            if (frame) {
+                m.w = (int)frame->GetWidth();
+                m.h = (int)frame->GetHeight();
+                if (Gdiplus::Bitmap* sm = VidThumbFrom(frame)) { EdPngEncode(sm, m.thumbPng); delete sm; }
+                delete frame;
+            }
+            if (m.name.empty()) m.name = std::wstring(fd.cFileName, wcslen(fd.cFileName) - 4);
+            VidMetaWrite(path, m);
+        }
+        if (!keep) continue;
+        EdLibItem it;
+        it.video = true;
+        it.file = fd.cFileName;
+        it.path = path;
+        it.bytes = size;
+        it.created = m.created;
+        it.name = m.name;
+        it.w = m.w;
+        it.h = m.h;
+        it.dur = m.dur;
+        if (!m.thumbPng.empty()) it.thumb = EdPngDecode(m.thumbPng.data(), m.thumbPng.size());
+        g_edLib.push_back(it);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
+
+bool VidMetaRename(const std::wstring& mp4, const std::wstring& name)
+{
+    VidMeta m;
+    if (!VidMetaRead(mp4, m)) return false;
+    m.name = name;
+    return VidMetaWrite(mp4, m);
+}
+
+// Запис і його .lhmeta — ОДНІЄЮ операцією: у кошику вони лежать поруч і
+// відновлюються разом.
+bool VidLibRemove(const std::wstring& mp4, bool permanent)
+{
+    const std::wstring meta = VidMetaPath(mp4);
+    const bool hasMeta = GetFileAttributesW(meta.c_str()) != INVALID_FILE_ATTRIBUTES;
+    if (permanent) {
+        if (!DeleteFileW(mp4.c_str())) return false;
+        if (hasMeta) DeleteFileW(meta.c_str());
+        return true;
+    }
+    std::vector<wchar_t> from(mp4.begin(), mp4.end());
+    from.push_back(0);
+    if (hasMeta) { from.insert(from.end(), meta.begin(), meta.end()); from.push_back(0); }
+    from.push_back(0);                     // подвійний нуль — кінець списку
+    SHFILEOPSTRUCTW op = {};
+    op.wFunc = FO_DELETE;
+    op.pFrom = from.data();
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+    return SHFileOperationW(&op) == 0 && !op.fAnyOperationsAborted;
+}
+
+// Ретенція відео — окремо від знімків: інакше одне відео на 800 МБ за лімітом
+// «500 МБ» стерло б усі знімки. Найстаріші — у кошик; щойно записане не чіпаємо
+// ніколи, навіть якщо воно саме більше за межу.
+void VidLibRetention(const wchar_t* keepPath)
+{
+    const wchar_t* dir = EdLibDir();
+    if (!dir) return;
+    struct F { std::wstring path; ULONGLONG when, bytes; };
+    std::vector<F> all;
+    ULONGLONG total = 0;
+    wchar_t mask[MAX_PATH];
+    wsprintfW(mask, L"%s\\*.mp4", dir);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(mask, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !EndsWithI(fd.cFileName, L".mp4")) continue;
+        F f;
+        f.path = std::wstring(dir) + L"\\" + fd.cFileName;
+        f.when = ((ULONGLONG)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime;
+        f.bytes = ((ULONGLONG)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+        total += f.bytes;
+        all.push_back(f);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    for (size_t i = 1; i < all.size(); ++i)            // найстаріші наперед
+        for (size_t j = i; j > 0 && all[j].when < all[j - 1].when; --j) std::swap(all[j], all[j - 1]);
+    const ULONGLONG limit = (ULONGLONG)VidLibLimitMB() * 1024 * 1024;
+    for (size_t k = 0; k < all.size() && total > limit; ++k) {
+        if (keepPath && !lstrcmpiW(all[k].path.c_str(), keepPath)) continue;
+        if (!VidLibRemove(all[k].path, false)) break;
+        total -= all[k].bytes;
+    }
+}
+
+// Старт програми: недописані .part (вимкнули живлення посеред запису) і
+// .lhmeta без свого MP4 (відео видалили повз бібліотеку) — прибираємо.
+void VidLibCleanup()
+{
+    const wchar_t* dir = EdLibDir();
+    if (!dir) return;
+    const wchar_t* masks[3] = { L"*.mp4.part", L"*.lhmeta.tmp", L"*.lhmeta" };
+    for (int i = 0; i < 3; ++i) {
+        wchar_t mask[MAX_PATH];
+        wsprintfW(mask, L"%s\\%s", dir, masks[i]);
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW(mask, &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            const std::wstring path = std::wstring(dir) + L"\\" + fd.cFileName;
+            if (i == 2) {
+                if (!EndsWithI(fd.cFileName, L".lhmeta")) continue;
+                const std::wstring mp4 = path.substr(0, path.size() - 7);
+                if (GetFileAttributesW(mp4.c_str()) != INVALID_FILE_ATTRIBUTES) continue;
+            }
+            SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
+            DeleteFileW(path.c_str());
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+}
+
+// «0:42» на мініатюрі відео: трикутник і тривалість у темній плашці.
+void VidLibBadge(HDC dc, Gdiplus::Graphics& g, const RECT& box, LONGLONG dur)
+{
+    wchar_t t[24];
+    FormatDuration(dur, t, 24);
+    const int tw = EdTextWidth(dc, t, g_edFontSmall);
+    const int h = EdPx(20), tri = EdPx(8), padX = EdPx(6);
+    const int w = padX + tri + EdPx(5) + tw + padX;
+    RECT r = { box.right - EdPx(6) - w, box.bottom - EdPx(6) - h, box.right - EdPx(6), box.bottom - EdPx(6) };
+    Gdiplus::Color bg(200, 20, 20, 24);
+    EdFillRound(g, r, (float)EdPx(4), &bg, nullptr);
+    const float cx = (float)(r.left + padX), cy = (float)(r.top + r.bottom) / 2.0f;
+    Gdiplus::PointF p[3] = { { cx, cy - tri / 2.0f }, { cx, cy + tri / 2.0f }, { cx + tri * 0.87f, cy } };
+    Gdiplus::SolidBrush white(Gdiplus::Color(255, 255, 255, 255));
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    g.FillPolygon(&white, p, 3);
+    RECT tr = { r.left + padX + tri + EdPx(5), r.top, r.right - padX, r.bottom };
+    EdDrawText(dc, tr, t, g_edFontSmall, RGB(255, 255, 255), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+}
+
 void EdLibScan()
 {
     EdLibFree();
@@ -19024,9 +19416,14 @@ void EdLibScan()
     wsprintfW(mask, L"%s\\*.lhshot", dir);
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW(mask, &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
-    do {
+    // CAPS-74: немає жодного знімка — це ще не порожня бібліотека, далі відео.
+    if (h != INVALID_HANDLE_VALUE) do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        // Лічильник і обсяг — за всіма знімками; мініатюри читаємо лише тоді,
+        // коли знімки видно у фільтрі.
+        ++g_edLibShots;
+        g_edLibBytes += ((ULONGLONG)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+        if (g_edLibFilter == 2) continue;
         EdLibItem it;
         it.file = fd.cFileName;
         it.path = std::wstring(dir) + L"\\" + fd.cFileName;
@@ -19054,10 +19451,10 @@ void EdLibScan()
             }
             d.free();
         }
-        g_edLibBytes += it.bytes;
         g_edLib.push_back(it);
     } while (FindNextFileW(h, &fd));
-    FindClose(h);
+    if (h != INVALID_HANDLE_VALUE) FindClose(h);
+    VidLibScanInto(dir, g_edLibFilter != 1);   // CAPS-74
     // спочатку нові
     for (size_t i = 1; i < g_edLib.size(); ++i)
         for (size_t j = i; j > 0 && g_edLib[j].created > g_edLib[j - 1].created; --j)
@@ -19077,6 +19474,7 @@ void EdLibToggle(HWND hwnd)
 {
     if (g_edLibOpen) { EdLibClose(hwnd); return; }
     if (g_edEdit) EdTextCommit();
+    g_edLibFilter = RegLoadInt(kRegLibFilter, 0, 0, 2);   // CAPS-74: фільтр пам'ятається
     EdLibScan();
     g_edLibOpen = true;
     g_edLibScroll = 0;
@@ -19104,6 +19502,9 @@ void EdLibOpenSel(HWND hwnd)
 {
     if (g_edLibSel < 0 || g_edLibSel >= (int)g_edLib.size()) return;
     const std::wstring path = g_edLib[g_edLibSel].path;
+    // CAPS-74: відео — системним програвачем (редактора відео ще немає, CAPS-78);
+    // бібліотека лишається відкритою.
+    if (g_edLib[g_edLibSel].video) { VidOpenFile(path.c_str()); return; }
     // Той, що вже відкритий, — просто повертаємось до нього, нічого не перечитуючи.
     if (g_edDocPath[0] && !lstrcmpiW(path.c_str(), g_edDocPath)) { EdLibClose(hwnd); return; }
     if (!EdConfirmReplace()) return;
@@ -19149,7 +19550,9 @@ void EdLibDeleteSel(HWND hwnd)
     g_edLibConfirm = false;
     if (g_edLibSel < 0 || g_edLibSel >= (int)g_edLib.size()) return;
     const std::wstring path = g_edLib[g_edLibSel].path;
-    if (!EdLibRemoveFile(path, g_edLibConfirmPerm)) {
+    const bool removed = g_edLib[g_edLibSel].video ? VidLibRemove(path, g_edLibConfirmPerm)   // CAPS-74: разом із .lhmeta
+                                                   : EdLibRemoveFile(path, g_edLibConfirmPerm);
+    if (!removed) {
         MessageBoxW(hwnd, S(Str::EdLibErrDel), kAppName, MB_OK | MB_ICONWARNING);
         return;
     }
@@ -19259,7 +19662,9 @@ void EdLibRenameEnd(HWND hwnd, bool apply)
     std::wstring name = buf;
     while (!name.empty() && name.back() == L' ') name.pop_back();
     if (apply && !name.empty() && idx >= 0 && idx < (int)g_edLib.size() && name != g_edLib[idx].name) {
-        if (EdDocRename(g_edLib[idx].path.c_str(), name)) {
+        const bool renamed = g_edLib[idx].video ? VidMetaRename(g_edLib[idx].path, name)   // CAPS-74
+                                                : EdDocRename(g_edLib[idx].path.c_str(), name);
+        if (renamed) {
             g_edLib[idx].name = name;
             if (g_edDocPath[0] && !lstrcmpiW(g_edLib[idx].path.c_str(), g_edDocPath))
                 lstrcpynW(g_edDocName, name.c_str(), 128);
@@ -21082,6 +21487,13 @@ void VidDone(VidResult* r)
     VidReleaseJob();
     if (!r) return;
     if (SUCCEEDED(r->hr) && r->frames > 0) {
+        VidLibRetention(r->path);                      // CAPS-74: щойно записане не чіпає
+        if (g_edWnd && g_edLibOpen) {                  // бібліотека відкрита — показати новий запис
+            EdLibScan();
+            if (g_edLibSel >= (int)g_edLib.size()) g_edLibSel = g_edLib.empty() ? -1 : 0;
+            EdLayout(g_edWnd);
+            InvalidateRect(g_edWnd, nullptr, TRUE);
+        }
         VidToastShow(r->path);
     } else if (FAILED(r->hr)) {
         wchar_t msg[512];
@@ -21636,6 +22048,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_VID_QLOW + 2:
             g_vidQuality = LOWORD(wp) - IDC_VID_QLOW;
             RegSaveInt(kRegVidQuality, g_vidQuality);
+            break;
+        case IDC_VID_LIBMB:          // CAPS-74: як і ліміт знімків — на втраті фокуса
+            if (HIWORD(wp) == EN_KILLFOCUS) {
+                wchar_t v[16] = {};
+                GetWindowTextW(GetDlgItem(hwnd, IDC_VID_LIBMB), v, 16);
+                int n = _wtoi(v);
+                if (n < 100) n = 100;
+                RegSaveInt(kRegLibVidMB, n);
+                wsprintfW(v, L"%d", n);
+                SetWindowTextW(GetDlgItem(hwnd, IDC_VID_LIBMB), v);
+            }
             break;
         case IDC_VID_SHOWLIB:
             if (const wchar_t* d = EdLibDir()) ShellExecuteW(nullptr, L"open", L"explorer.exe", d, nullptr, SW_SHOWNORMAL);
@@ -22194,6 +22617,16 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     y += 4;
     sec(addV, Str::VidSecWhere);
     text(addV, Str::VidWhereText, 3, 0, 8);
+    {   // CAPS-74: своя межа для відео — знімки вона не витісняє
+        addV(mkS(L"STATIC", Str::VidLibLimitL, 0, PX, y + 3, 250, 20, 0));
+        HWND em = addV(mk(L"EDIT", L"", ES_NUMBER | ES_CENTER | WS_BORDER | WS_TABSTOP, PX + 256, y - 1, 80, 24, IDC_VID_LIBMB));
+        addV(mkS(L"STATIC", Str::CapLibSizeUnit, 0, PX + 344, y + 3, 60, 20, 0));
+        wchar_t v[16];
+        wsprintfW(v, L"%d", VidLibLimitMB());
+        SetWindowTextW(em, v);
+        y += 30;
+    }
+    hint(addV, Str::VidLibLimitHint, 2);
     button(addV, Str::CapLibShow, PX, 150, IDC_VID_SHOWLIB);
     y += 38;
 
@@ -22294,6 +22727,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     g_edKeepTool    = RegLoadInt(kRegEdKeepTool, 1, 0, 1) != 0;
     CapLoadHotkeys();
     VidLoadSettings(); // CAPS-73
+    VidLibCleanup();   // CAPS-74: недописані .part і осиротілі .lhmeta
     CapLoadActs();     // CAPS-57: жест × дія, бібліотека для швидких знімків, Esc оверлея
     CapActRefresh();
     if (!CapApplyHotkeys(hwnd)) TrayBalloon(kAppName, S(Str::CapHkBusy));
