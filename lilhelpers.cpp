@@ -94,6 +94,7 @@
 #include <inspectable.h>
 #include <asyncinfo.h>
 #include <shcore.h>
+#include <shellscalingapi.h>   // CAPS-58: GetDpiForMonitor — масштаб монітора зйомки
 // CAPS-21: захоплення екрана через Desktop Duplication — системні DXGI і D3D11.
 #include <dxgi1_6.h>
 #include <d3d11.h>
@@ -647,6 +648,16 @@ X(EdFilled,           L"Заливка",                       L"Filled")       
 X(CapKeepTool,        L"Лишати інструмент активним після малювання",                                   \
                       L"Keep the tool active after drawing")                                           \
 X(EdToolRect,         L"Прямокутник",                   L"Rectangle")                                  \
+X(EdTipEnds,          L"Кінці лінії: початок, кінець і розмір наконечника",                            \
+                      L"Line ends: start, end and arrowhead size")                                    \
+X(EdTipCorners,       L"Кути: без скруглення, помірне, сильне",                                        \
+                      L"Corners: square, soft, round")                                                 \
+X(EdEndsStart,        L"Початок",                       L"Start")                                      \
+X(EdEndsEnd,          L"Кінець",                        L"End")                                        \
+X(EdEndsSize,         L"Розмір",                        L"Size")                                       \
+X(EdCorner0,          L"Без скруглення",                L"Square")                                     \
+X(EdCorner1,          L"Помірне",                       L"Soft")                                       \
+X(EdCorner2,          L"Сильне",                        L"Round")                                      \
 X(EdSelHint,          L"Виберіть позначку, щоб змінити її колір, прозорість або розмір.",              \
                       L"Select a mark to change its colour, opacity or size.")                         \
 X(EdNoMarksHint,      L"Знімок ще без позначок. Виберіть інструмент на рейці ліворуч або натисніть "    \
@@ -8247,6 +8258,12 @@ struct EdObj {
     // об'єкт-контейнер: контейнер довелося б проводити крізь порядок, кадр,
     // поворот знімка й скасування.
     int      grp;
+    // CAPS-58. Кути прямокутника й вставленого зображення: 0 — без скруглення,
+    // 1 — помірне, 2 — сильне. crpx — сам радіус у пікселях ЗНІМКА, порахований
+    // у мить вибору з урахуванням масштабу монітора зйомки: так кути не
+    // міняються ні від масштабу на екрані, ні після відкриття файлу.
+    int      corners;
+    int      crpx;
 };
 
 // Чіп називає вид однією назвою і для інструмента, і для вибраного. Префікс
@@ -8696,6 +8713,21 @@ int EdCurGroup();
 int EdGroupStart(int grp);
 int EdGroupCount(int grp);
 int      g_edDash = 0;                   // CAPS-34: стиль лінії за замовчуванням
+int      g_edCorners = 0;                // CAPS-58: кути нового прямокутника
+// CAPS-58: масштаб монітора, з якого знято знімок (DPI / 96). Радіус кутів —
+// «логічні» пікселі × цей масштаб: на 4K при 150 % помірне скруглення виглядає
+// так само, як на 1080p. Для файлів і буфера — 1. Зберігається в документі.
+double   g_edShotScale = 1.0;
+double   g_capNextScale = 1.0;           // для наступного EdOpenBitmap (ставить CapTake)
+constexpr int kEdPickEnds = 4;           // CAPS-64: панель «Кінці» (початок, кінець, розмір)
+constexpr int kEdPickCorners = 5;        // CAPS-58: «Кути»
+
+int EdCornerPx(int level)
+{
+    if (level <= 0) return 0;
+    const double base = (level == 1) ? 8.0 : 20.0;
+    return (int)(base * g_edShotScale + 0.5);
+}
 int      g_edHeadFront = 0, g_edHeadBack = 0, g_edHeadSize = 1;
 int      g_edStampSize = kEdStampSizes[1];
 int      g_edStamp    = 0;
@@ -9799,6 +9831,10 @@ bool EdManySel();
 const RECT* EdRegionRect(EdHit what, int idx);
 int EdPickCount(int group);           // селект наконечника довший за решту
 
+// CAPS-64: розкладка розкритого селекта — нижче, разом зі зразками.
+int EdPickLayout(int group, const RECT& btn, const RECT& client, RECT out[16]);
+extern RECT g_edPickBox;
+
 // ---- CAPS-33: панелі оверлея біля рамки -------------------------------------
 // Правило власника: рейка й смуга стоять на звичних місцях відносно рамки —
 // рейка ліворуч, смуга над нею; якщо там не вміщаються, переходять на
@@ -10132,10 +10168,16 @@ void EdLayout(HWND hwnd)
             // CAPS-34: стиль лінії — усім контурним; наконечники — лише стрілці.
             // Кожен набір згорнуто у ВИПАДНИЙ СЕЛЕКТ (рішення власника 21.09):
             // кнопка показує поточний вибір, решта варіантів — за нею.
-            if (EdHasDash(kk) && !cropMode) {
-                const int pn = (kk == EdKind::Line) ? 4 : 1;
-                for (int gi = 0; gi < pn; ++gi) {
-                    RECT r = EdPill(x, cy, EdPx(42), EdPx(28));
+            // CAPS-64: у лінії — «Стиль» і «Кінці» (замість чотирьох однакових
+            // на вигляд кнопок); CAPS-58: у прямокутника й зображення — «Кути».
+            if ((EdHasDash(kk) || kk == EdKind::Image) && !cropMode) {
+                int groups[3], pn = 0;
+                if (EdHasDash(kk)) groups[pn++] = 0;
+                if (kk == EdKind::Line) groups[pn++] = kEdPickEnds;
+                if (kk == EdKind::Rect || kk == EdKind::Image) groups[pn++] = kEdPickCorners;
+                for (int k = 0; k < pn; ++k) {
+                    const int gi = groups[k];
+                    RECT r = EdPill(x, cy, EdPx(gi == kEdPickEnds ? 62 : 42), EdPx(28));
                     EdAdd(r, EdHit::Pick, gi);
                     x = r.right + EdPx(4);
                 }
@@ -10293,13 +10335,13 @@ void EdLayout(HWND hwnd)
     // ділянки перекривають і полотно, і смугу під ним.
     if (g_edPickOpen >= 0) {
         if (const RECT* btn = EdRegionRect(EdHit::Pick, g_edPickOpen)) {
-            const int iw = EdPx(52), ih = EdPx(32);
-            const int top = btn->bottom + EdPx(6);
-            const int n = EdPickCount(g_edPickOpen);
-            for (int i = 0; i < n; ++i) {
-                RECT r = { btn->left, top + i * ih, btn->left + iw, top + (i + 1) * ih };
-                EdAdd(r, EdHit::PickItem, i);
-            }
+            RECT cells[16];
+            const RECT bcopy = *btn;
+            const int n = EdPickLayout(g_edPickOpen, bcopy, rc, cells);
+            // Тло панелі — теж ділянка: клік між клітинками не має закривати її
+            // й не має падати на полотно під нею.
+            EdAdd(g_edPickBox, EdHit::PickItem, -1);
+            for (int i = 0; i < n; ++i) EdAdd(cells[i], EdHit::PickItem, i);
         }
     }
 
@@ -10643,6 +10685,24 @@ void EdPaintCrop(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 }
 
+// CAPS-58: скруглений прямокутник у дробових координатах. Радіус затиснуто
+// половиною коротшої сторони — інакше вузька рамка ставала б пігулкою з
+// перехльостом дуг, а «сильне» на тонкій смужці виглядало б поламаним.
+void EdRoundRectPathF(Gdiplus::GraphicsPath& p, float x, float y, float w, float h, float r)
+{
+    p.Reset();
+    if (w <= 0 || h <= 0) return;
+    const float lim = (w < h ? w : h) / 2.0f;
+    if (r > lim) r = lim;
+    if (r <= 0.5f) { p.AddRectangle(Gdiplus::RectF(x, y, w, h)); return; }
+    const float d = r * 2.0f;
+    p.AddArc(x, y, d, d, 180.0f, 90.0f);
+    p.AddArc(x + w - d, y, d, d, 270.0f, 90.0f);
+    p.AddArc(x + w - d, y + h - d, d, d, 0.0f, 90.0f);
+    p.AddArc(x, y + h - d, d, d, 90.0f, 90.0f);
+    p.CloseFigure();
+}
+
 // Наконечник малює той самий код, що й на полотні — інакше зразок у кнопці
 // рано чи пізно почав би обіцяти не те, що малюється.
 void EdDrawHead(Gdiplus::Graphics& g, const Gdiplus::Color& col, float tipX, float tipY,
@@ -10650,7 +10710,11 @@ void EdDrawHead(Gdiplus::Graphics& g, const Gdiplus::Color& col, float tipX, flo
 
 // Поточне значення селекта: у вибраного об'єкта або типове.
 // Скільки варіантів у наборі. У наконечників їх чотири — «немає» теж вибір.
-int EdPickCount(int group) { return (group == 1 || group == 2) ? 4 : 3; }
+int EdPickCount(int group)
+{
+    if (group == kEdPickEnds) return 11;          // 4 початки + 4 кінці + 3 розміри
+    return (group == 1 || group == 2) ? 4 : 3;
+}
 
 int EdPickValue(int group)
 {
@@ -10660,8 +10724,87 @@ int EdPickValue(int group)
     case 0:  return o ? o->dash     : g_edDash;
     case 1:  return o ? o->headFront : g_edHeadFront;
     case 2:  return o ? o->headBack  : g_edHeadBack;
+    case kEdPickCorners: return o ? o->corners : g_edCorners;
     default: return o ? o->headSize  : g_edHeadSize;
     }
+}
+
+// CAPS-64: лінія з обома кінцями, як вона ляже на знімок. -1 — кінець не
+// показуємо зовсім (рядок панелі про інший кінець), 0 — «без наконечника»:
+// маленька риска-упор, щоб кнопка не зливалась зі «Стилем» (обидві інакше —
+// та сама пряма), 1..3 — наконечник.
+void EdEndsSample(Gdiplus::Graphics& g, const RECT& r, int startV, int endV, int sizeV,
+                  const Gdiplus::Color& c)
+{
+    const float cy = (r.top + r.bottom) / 2.0f;
+    const float x0 = (float)(r.left + EdPx(8)), x1 = (float)(r.right - EdPx(8));
+    const double len = 5.0 + sizeV * 3.0;
+    Gdiplus::Pen pen(c, 2.0f);
+    const float a = startV > 0 ? (float)(x0 + len * 0.9) : x0;
+    const float b = endV > 0   ? (float)(x1 - len * 0.9) : x1;
+    g.DrawLine(&pen, a, cy, b, cy);
+    const float tk = (float)EdPx(4);
+    if (startV == 0) g.DrawLine(&pen, x0, cy - tk, x0, cy + tk);
+    if (endV == 0)   g.DrawLine(&pen, x1, cy - tk, x1, cy + tk);
+    if (endV > 0)    EdDrawHead(g, c, x1, cy,  1.0, 0.0, len, 1.6f, endV - 1);
+    if (startV > 0)  EdDrawHead(g, c, x0, cy, -1.0, 0.0, len, 1.6f, startV - 1);
+}
+
+// CAPS-58: кут рамки — гострий, м'який чи круглий. Малюється лівий верхній кут:
+// саме він найкраще читається в маленькій кнопці.
+void EdCornerSample(Gdiplus::Graphics& g, const RECT& r, int level, const Gdiplus::Color& c)
+{
+    const float x0 = (float)(r.left + EdPx(9)), y0 = (float)(r.top + EdPx(8));
+    const float x1 = (float)(r.right - EdPx(8)), y1 = (float)(r.bottom - EdPx(8));
+    const float rad = (float)EdPx(level == 0 ? 0 : level == 1 ? 7 : 13);
+    Gdiplus::Pen pen(c, 2.0f);
+    Gdiplus::GraphicsPath p;
+    if (rad <= 0) {
+        p.AddLine(x0, y1, x0, y0);
+        p.AddLine(x0, y0, x1, y0);
+    } else {
+        p.AddLine(x0, y1, x0, y0 + rad);
+        p.AddArc(x0, y0, rad * 2, rad * 2, 180.0f, 90.0f);
+        p.AddLine(x0 + rad, y0, x1, y0);
+    }
+    g.DrawPath(&pen, &p);
+}
+
+// CAPS-64: розкладка розкритого селекта. Звичайні — стовпчик під кнопкою; «Кінці»
+// — три рядки з підписами (початок, кінець, розмір); «Кути» — стовпчик із
+// підписами. Панель не вилазить за вікно: не вміщається внизу — розкривається
+// вгору, за правий край — зсувається ліворуч.
+RECT g_edPickBox = {};
+int EdPickLayout(int group, const RECT& btn, const RECT& client, RECT out[16])
+{
+    int n = 0, w = 0, h = 0;
+    const int ih = EdPx(32);
+    if (group == kEdPickEnds) {
+        const int lab = EdPx(78), iw = EdPx(52);
+        for (int row = 0; row < 3; ++row) {
+            const int cnt = (row == 2) ? 3 : 4;
+            for (int i = 0; i < cnt; ++i)
+                out[n++] = RECT{ lab + i * iw, row * (ih + EdPx(2)), lab + (i + 1) * iw, row * (ih + EdPx(2)) + ih };
+        }
+        w = lab + 4 * iw;
+        h = 3 * ih + 2 * EdPx(2);
+    } else if (group == kEdPickCorners) {
+        const int iw = EdPx(170);
+        for (int i = 0; i < 3; ++i) out[n++] = RECT{ 0, i * ih, iw, (i + 1) * ih };
+        w = iw; h = 3 * ih;
+    } else {
+        const int iw = EdPx(52);
+        const int cnt = EdPickCount(group);
+        for (int i = 0; i < cnt; ++i) out[n++] = RECT{ 0, i * ih, iw, (i + 1) * ih };
+        w = iw; h = cnt * ih;
+    }
+    int left = btn.left, top = btn.bottom + EdPx(6);
+    if (top + h > client.bottom - EdPx(6)) top = btn.top - EdPx(6) - h;
+    if (left + w > client.right - EdPx(6)) left = client.right - EdPx(6) - w;
+    if (left < client.left + EdPx(6)) left = client.left + EdPx(6);
+    for (int i = 0; i < n; ++i) OffsetRect(&out[i], left, top);
+    g_edPickBox = RECT{ left, top, left + w, top + h };
+    return n;
 }
 
 // Зразок у кнопці й у списку: та сама фігура, що буде на полотні, тільки мала.
@@ -10888,13 +11031,18 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 
     // CAPS-34: кнопки випадних селектів. Кожна показує поточний вибір.
-    for (int gi = 0; gi < 4; ++gi) {
+    for (int gi = 0; gi <= kEdPickCorners; ++gi) {
         const RECT* r = EdRegionRect(EdHit::Pick, gi);
-        if (!r) break;
+        if (!r) continue;
         const bool open = (g_edPickOpen == gi);
         EdPaintButton(g, *r, t, open, g_edHotWhat == EdHit::Pick && g_edHotIdx == gi, false);
         RECT inner = { r->left, r->top, r->right - EdPx(8), r->bottom };
-        EdPickSample(g, inner, gi, EdPickValue(gi), EdC(t.text));
+        if (gi == kEdPickEnds)
+            EdEndsSample(g, inner, EdPickValue(2), EdPickValue(1), EdPickValue(3), EdC(t.text));
+        else if (gi == kEdPickCorners)
+            EdCornerSample(g, inner, EdPickValue(kEdPickCorners), EdC(t.text));
+        else
+            EdPickSample(g, inner, gi, EdPickValue(gi), EdC(t.text));
         // Маленька стрілка вниз: кнопка з нею читається як список, а не як тогл.
         Gdiplus::Pen chev(EdC(t.text2), 1.4f);
         const float cxx = (float)(r->right - EdPx(7)), cyy = (float)((r->top + r->bottom) / 2);
@@ -12142,6 +12290,21 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
 
     switch (o.kind) {
     case EdKind::Rect:
+        if (o.crpx > 0) {
+            // CAPS-58: GDI+ не має скругленого прямокутника — шлях із чотирьох дуг.
+            // Контур іде по середині лінії, тож і радіус для нього менший на пів товщини.
+            const float rad = (float)(o.crpx * s);
+            Gdiplus::GraphicsPath gp;
+            if (o.filled) {
+                EdRoundRectPathF(gp, x, y, w, h, rad);
+                g.FillPath(&brush, &gp);
+            } else {
+                EdApplyDash(pen, o.dash);
+                EdRoundRectPathF(gp, x + half, y + half, w - pw, h - pw, rad - half);
+                g.DrawPath(&pen, &gp);
+            }
+            break;
+        }
         if (o.filled) g.FillRectangle(&brush, x, y, w, h);
         else { EdApplyDash(pen, o.dash); g.DrawRectangle(&pen, x + half, y + half, w - pw, h - pw); }
         break;
@@ -12180,6 +12343,16 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
         // 96 крапок на дюйм у роздільність поверхні — та сама пастка, що з
         // плитками тексту.
         const Gdiplus::Rect dst((INT)(x + 0.5f), (INT)(y + 0.5f), (INT)w, (INT)h);
+        // CAPS-58: скруглені кути вставленого зображення — маскою-кліпом того
+        // самого шляху, що й у прямокутника.
+        Gdiplus::GraphicsState stImg = g.Save();
+        if (o.crpx > 0) {
+            Gdiplus::GraphicsPath gp;
+            EdRoundRectPathF(gp, (float)dst.X, (float)dst.Y, (float)dst.Width, (float)dst.Height,
+                             (float)(o.crpx * s));
+            g.SetClip(&gp, Gdiplus::CombineModeIntersect);
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        }
         if (o.alpha >= 100) {
             g.DrawImage(bmp, dst, 0, 0, (INT)bmp->GetWidth(), (INT)bmp->GetHeight(),
                         Gdiplus::UnitPixel);
@@ -12195,6 +12368,7 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
             g.DrawImage(bmp, dst, 0, 0, (INT)bmp->GetWidth(), (INT)bmp->GetHeight(),
                         Gdiplus::UnitPixel, &ia);
         }
+        g.Restore(stImg);
         break;
     }
     case EdKind::Pen: {
@@ -12968,30 +13142,64 @@ void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 void EdPaintPick(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     if (g_edPickOpen < 0) return;
-    const RECT* first = EdRegionRect(EdHit::PickItem, 0);
-    const RECT* last  = EdRegionRect(EdHit::PickItem, EdPickCount(g_edPickOpen) - 1);
-    if (!first || !last) return;
-    RECT box = { first->left - EdPx(4), first->top - EdPx(4),
-                 last->right + EdPx(4), last->bottom + EdPx(4) };
+    if (!EdRegionRect(EdHit::PickItem, 0)) return;
+    RECT box = g_edPickBox;
+    InflateRect(&box, EdPx(4), EdPx(4));
     Gdiplus::Color shadow(60, 0, 0, 0);
     RECT sh = box;
     OffsetRect(&sh, 0, EdPx(2));
     EdFillRound(g, sh, (float)EdPx(8), &shadow, nullptr);
     Gdiplus::Color fill = EdC(t.chrome), bd = EdC(t.border);
     EdFillRound(g, box, (float)EdPx(8), &fill, &bd);
-    const int cur = EdPickValue(g_edPickOpen);
     const int n = EdPickCount(g_edPickOpen);
+    const bool ends = (g_edPickOpen == kEdPickEnds), corners = (g_edPickOpen == kEdPickCorners);
+    if (ends) {
+        // Підписи рядків: без них три рядки стрілок знову виглядали б однаково.
+        const Str labs[3] = { Str::EdEndsStart, Str::EdEndsEnd, Str::EdEndsSize };
+        const int firsts[3] = { 0, 4, 8 };
+        for (int row = 0; row < 3; ++row)
+            if (const RECT* c0 = EdRegionRect(EdHit::PickItem, firsts[row])) {
+                RECT lr = { g_edPickBox.left + EdPx(8), c0->top, c0->left - EdPx(4), c0->bottom };
+                EdDrawText(dc, lr, S(labs[row]), g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            }
+    }
     for (int i = 0; i < n; ++i) {
         const RECT* r = EdRegionRect(EdHit::PickItem, i);
         if (!r) break;
+        // Поточне значення — своє в кожному рядку «Кінців».
+        int cur, v = i;
+        if (ends) {
+            const int row = i < 4 ? 0 : i < 8 ? 1 : 2;
+            v = i - (row == 0 ? 0 : row == 1 ? 4 : 8);
+            cur = EdPickValue(row == 0 ? 2 : row == 1 ? 1 : 3);
+        } else {
+            cur = EdPickValue(g_edPickOpen);
+        }
+        const bool on = (v == cur);
         const bool hot = (g_edHotWhat == EdHit::PickItem && g_edHotIdx == i);
-        if (i == cur || hot) {
-            Gdiplus::Color f = EdC(i == cur ? t.accentBg : t.hot);
+        if (on || hot) {
+            Gdiplus::Color f = EdC(on ? t.accentBg : t.hot);
             RECT rr = *r;
             InflateRect(&rr, -EdPx(2), -EdPx(2));
             EdFillRound(g, rr, (float)EdPx(5), &f, nullptr);
         }
-        EdPickSample(g, *r, g_edPickOpen, i, EdC(i == cur ? t.accent : t.text));
+        const Gdiplus::Color col = EdC(on ? t.accent : t.text);
+        if (ends) {
+            const int row = i < 4 ? 0 : i < 8 ? 1 : 2;
+            const int sz = EdPickValue(3);
+            if (row == 0)      EdEndsSample(g, *r, v, -1, sz, col);
+            else if (row == 1) EdEndsSample(g, *r, -1, v, sz, col);
+            else               EdEndsSample(g, *r, -1, 1, v, col);
+        } else if (corners) {
+            RECT sr = { r->left, r->top, r->left + EdPx(44), r->bottom };
+            EdCornerSample(g, sr, v, col);
+            RECT tr = { sr.right + EdPx(4), r->top, r->right - EdPx(6), r->bottom };
+            const Str names[3] = { Str::EdCorner0, Str::EdCorner1, Str::EdCorner2 };
+            EdDrawText(dc, tr, S(names[v]), on ? g_edFontBold : g_edFont, on ? t.accent : t.text,
+                       DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        } else {
+            EdPickSample(g, *r, g_edPickOpen, i, col);
+        }
     }
 }
 
@@ -13148,7 +13356,28 @@ void EdPaint(HWND hwnd, HDC dc)
 // в типові значення, щоб наступна позначка успадкувала те саме.
 void EdPickApply(int group, int value)
 {
+    // CAPS-64: одна панель — три властивості; номер клітинки каже, яка саме.
+    if (group == kEdPickEnds) {
+        if (value < 0) return;
+        if (value < 4)      EdPickApply(2, value);       // початок = задній наконечник
+        else if (value < 8) EdPickApply(1, value - 4);   // кінець = передній
+        else                EdPickApply(3, value - 8);   // розмір
+        return;
+    }
     const bool sel = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size());
+    if (group == kEdPickCorners) {                        // CAPS-58
+        if (value < 0 || value > 2) return;
+        if (sel) {
+            EdObj& o = g_edObjs[g_edSel];
+            if (o.kind == EdKind::Rect || o.kind == EdKind::Image) {
+                const int px = EdCornerPx(value);
+                if (o.corners != value || o.crpx != px) { EdPushUndo(); o.corners = value; o.crpx = px; }
+            }
+            if (o.kind == EdKind::Image) return;         // типове — лише для прямокутників
+        }
+        g_edCorners = value;
+        return;
+    }
     if (sel) {
         EdObj& o = g_edObjs[g_edSel];
         int* dst = (group == 0) ? &o.dash : (group == 1) ? &o.headFront
@@ -14345,6 +14574,8 @@ Str EdTipFor(EdHit what, int idx)
         }
     case EdHit::Swatch:  return EdCounterKind() ? Str::EdTipColorGroup : Str::EdTipColor;
     case EdHit::Pick:
+        if (idx == kEdPickEnds) return Str::EdTipEnds;          // CAPS-64
+        if (idx == kEdPickCorners) return Str::EdTipCorners;    // CAPS-58
         return idx == 0 ? Str::EdTipDash : idx == 1 ? Str::EdTipHeadFront
              : idx == 2 ? Str::EdTipHeadBack : Str::EdTipHeadSize;
     case EdHit::SelAlign: {
@@ -15946,8 +16177,11 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         case EdHit::PickItem:
+            if (r->idx < 0) return 0;          // тло панелі між клітинками
             EdPickApply(g_edPickOpen, r->idx);
-            g_edPickOpen = -1;
+            // «Кінці» лишаються відкритими: там три властивості, і людина
+            // зазвичай ставить і початок, і кінець. Закриває клік повз панель.
+            if (g_edPickOpen != kEdPickEnds) g_edPickOpen = -1;
             EdLayout(hwnd);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -16163,6 +16397,8 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_edNew.headFront = g_edHeadFront;
             g_edNew.headBack = g_edHeadBack;
             g_edNew.headSize = g_edHeadSize;
+            g_edNew.corners = (g_edNew.kind == EdKind::Rect) ? g_edCorners : 0;   // CAPS-58
+            g_edNew.crpx = EdCornerPx(g_edNew.corners);
             g_edNewOrigin = img;
             if (g_edNew.kind == EdKind::Mark) {
                 // Смуга маркера має сталу висоту й тягнеться лише вшир, тому
@@ -16649,6 +16885,8 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edCropping = false;
     g_edCounterGroup = 0;               // новий знімок — нумерація з початку сама
     g_edSeq = 0;
+    g_edShotScale = g_capNextScale;     // CAPS-58: масштаб монітора, з якого знято
+    g_capNextScale = 1.0;
 
     if (g_edWnd) {                      // уже відкрите — просто новий вміст
         EdFitView();
@@ -17297,6 +17535,7 @@ void EdWriteObj(EdWr& w, const EdObj& o)
     if (EdIsSegment(o.kind) || EdHasDash(o.kind)) fi("dash", o.dash);
     if (EdIsSegment(o.kind)) { fi("hdf ", o.headFront); fi("hdb ", o.headBack); fi("hds ", o.headSize); }
     if (o.kind == EdKind::Image) fi("img ", o.img);
+    if (o.kind == EdKind::Rect || o.kind == EdKind::Image) { fi("crnr", o.corners); fi("crpx", o.crpx); }
 
     w.close(obj);
 }
@@ -17436,6 +17675,10 @@ bool EdDocWrite(const wchar_t* path, const std::wstring& name)
         w.i32v(g_edCrop.left); w.i32v(g_edCrop.top); w.i32v(g_edCrop.right); w.i32v(g_edCrop.bottom);
         w.close(at);
     }
+    {   const size_t at = w.open("SCAL");      // CAPS-58: масштаб монітора зйомки
+        w.i32v((int)(g_edShotScale * 1000.0 + 0.5));
+        w.close(at);
+    }
     {   const size_t at = w.open("NUMS");
         w.i32v(g_edSeq); w.i32v(g_edStartNum); w.i32v(g_edCounterGroup); w.i32v(g_edNextGrp);
         w.close(at);
@@ -17504,6 +17747,8 @@ void EdReadObj(EdRd& r, size_t end, EdObj& o)
         else if (!memcmp(t, "hdb ", 4)) o.headBack = r.i32v();
         else if (!memcmp(t, "hds ", 4)) o.headSize = r.i32v();
         else if (!memcmp(t, "img ", 4)) o.img = r.i32v();
+        else if (!memcmp(t, "crnr", 4)) o.corners = r.i32v();   // CAPS-58
+        else if (!memcmp(t, "crpx", 4)) o.crpx = r.i32v();
         else if (!memcmp(t, "text", 4)) o.text = r.str();
         else if (!memcmp(t, "pts ", 4)) {
             const DWORD n = r.u32v();
@@ -17525,6 +17770,7 @@ struct EdDoc {
     bool mirror = false;
     RECT crop = { 0, 0, 0, 0 };
     int seq = 0, startNum = 1, counterGroup = 0, nextGrp = 1;
+    int scale1000 = 1000;               // CAPS-58: масштаб монітора зйомки × 1000
     std::wstring name, source;
     void free()
     {
@@ -17585,6 +17831,9 @@ int EdDocRead(const wchar_t* path, EdDoc& d)
         } else if (!memcmp(t, "CROP", 4)) {
             d.crop.left = r.i32v(); d.crop.top = r.i32v();
             d.crop.right = r.i32v(); d.crop.bottom = r.i32v();
+        } else if (!memcmp(t, "SCAL", 4)) {       // CAPS-58
+            const int v = r.i32v();
+            if (v >= 250 && v <= 8000) d.scale1000 = v;
         } else if (!memcmp(t, "NUMS", 4)) {
             d.seq = r.i32v(); d.startNum = r.i32v();
             d.counterGroup = r.i32v(); d.nextGrp = r.i32v();
@@ -17639,6 +17888,7 @@ void EdDocApply(EdDoc& d, const wchar_t* path)
     g_edCropping = false;
     g_edSeq = d.seq;
     g_edStartNum = d.startNum;
+    g_edShotScale = d.scale1000 / 1000.0;   // CAPS-58
     g_edCounterGroup = d.counterGroup;
     g_edNextGrp = d.nextGrp > 0 ? d.nextGrp : 1;
 
@@ -18529,11 +18779,26 @@ LRESULT CALLBACK CapHkSubclass(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR 
     return DefSubclassProc(h, msg, wp, lp);
 }
 
+// CAPS-58: масштаб монітора (DPI / 96) — для радіуса кутів у пікселях знімка.
+double CapMonitorScale(HMONITOR mon)
+{
+    UINT dx = 96, dy = 96;
+    if (mon && SUCCEEDED(GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &dx, &dy)) && dx >= 48) return dx / 96.0;
+    return 1.0;
+}
+
 void CapTake(HINSTANCE hInst, HWND owner, CapMode mode, HWND target)
 {
     CapShot shot = {};
     bool ok = false;
     g_capCancelled = false;
+    {
+        POINT cp = {};
+        GetCursorPos(&cp);
+        HMONITOR m = (mode == CapMode::Window && target) ? MonitorFromWindow(target, MONITOR_DEFAULTTONEAREST)
+                                                        : MonitorFromPoint(cp, MONITOR_DEFAULTTONEAREST);
+        g_capNextScale = (mode == CapMode::Clipboard) ? 1.0 : CapMonitorScale(m);
+    }
     // Дія: для ділянки — за жестом; для екрана з гарячої клавіші — «без
     // клавіші» (рішення власника 22.09); буфер і вікно з трею — редактор.
     int act = (int)CapAct::Editor;
