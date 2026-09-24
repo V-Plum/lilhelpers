@@ -85,6 +85,7 @@
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
+#include <mfmediaengine.h>   // CAPS-78: відтворення в редакторі
 // CAPS-16: docx — читаємо пакет системним OPC, а не власним розпакувальником zip.
 #include <msopc.h>
 // CAPS-16: PDF — вбудований Windows.Data.Pdf (WinRT). Заголовка windows.data.pdf.h
@@ -577,6 +578,37 @@ X(EdLibEmptyBody,     L"Натисніть «Зберегти» (Ctrl+S) у ре
                       L"Press Save (Ctrl+S) in the editor — the snapshot lands here together with "     \
                       L"its marks, and you can come back to it.")                                      \
 X(EdLibOpenBtn,       L"Відкрити",                      L"Open")                                       \
+X(EdTitleVideo,       L"Редактор відео",                L"Video editor")                               \
+X(VidPlayback,        L"Відтворення",                   L"Playback")                                   \
+X(VidSpeedL,          L"Швидкість",                     L"Speed")                                      \
+X(VidNoAudio,         L"без звуку",                     L"no sound")                                   \
+X(VidSecVideo,        L"ВІДЕО",                         L"VIDEO")                                      \
+X(VidSecFrame,        L"ПОТОЧНИЙ КАДР",                 L"CURRENT FRAME")                              \
+X(VidFactFps,         L"Кадрів/с",                      L"Frames/s")                                   \
+X(VidFactFrames,      L"Кадрів",                        L"Frames")                                     \
+X(VidFactAudio,       L"Звук",                          L"Sound")                                      \
+X(VidAudioYes,        L"є",                             L"yes")                                        \
+X(VidAudioNo,         L"немає",                         L"none")                                       \
+X(VidFrameShot,       L"Відкрити кадр як знімок",       L"Open frame as a shot")                       \
+X(VidFrameOf,         L"Кадр %d з %d",                  L"Frame %d of %d")                             \
+X(VidFrameLabel,      L"%s · кадр %s",                  L"%s · frame %s")                              \
+X(VidTlHint,          L"Коліщатко — масштаб таймлайну · тягніть — перемотка",                          \
+                      L"Wheel zooms the timeline · drag to seek")                                     \
+X(VidFrameCopied,     L"Кадр скопійовано",              L"Frame copied")                               \
+X(VidAskFrameShot,    L"Кадр відкриється як знімок, а відео в редакторі закриється.\n\nСам запис лишається у файлі й у бібліотеці.", \
+                      L"The frame opens as a shot and the video closes in the editor.\n\nThe recording itself stays in its file and in the library.") \
+X(VidErrOpen,         L"Не вдалося відкрити відео.",    L"Could not open the video.")                  \
+X(VidTipStart,        L"На початок (Home)",             L"To start (Home)")                            \
+X(VidTipBack,         L"Кадр назад (←)",                L"Frame back (←)")                             \
+X(VidTipRev,          L"Відтворити назад (J)",          L"Play backwards (J)")                         \
+X(VidTipPlay,         L"Відтворити / пауза (Space)",    L"Play / pause (Space)")                       \
+X(VidTipFwd,          L"Кадр уперед (→)",               L"Frame forward (→)")                          \
+X(VidTipEnd,          L"У кінець (End)",                L"To end (End)")                               \
+X(VidTipLoop,         L"Повтор по колу",                L"Loop")                                       \
+X(VidTipMute,         L"Звук: увімкнути / вимкнути",    L"Sound on / off")                             \
+X(VidTipCopyFrame,    L"Копіювати кадр (Ctrl+C)",       L"Copy frame (Ctrl+C)")                        \
+X(VidToolLater,       L"У відео — з наступного етапу",  L"For video — in the next stage")              \
+X(LibPlayerBtn,       L"У програвачі",                  L"In player")                                  \
 X(EdLibFilterAll,     L"Усе",                           L"All")                                        \
 X(EdLibFactDur,       L"Тривалість",                    L"Duration")                                   \
 X(EdLibVidChipMb,     L"%d відео · %d МБ",              L"%d videos · %d MB")                          \
@@ -8582,7 +8614,9 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    LibDelYes, LibDelNo, OvCopy, OvWindow, OvHandle,
                    Swap, StripSep,     // CAPS-65: ⇄ кольорів і риски між групами смуги
                    InsertImg,          // CAPS-69: «Зображення» на рейці
-                   LibFilter };        // CAPS-74: «Усе / Знімки / Відео»; ⚠ нові — лише в кінець
+                   LibFilter,          // CAPS-74: «Усе / Знімки / Відео»; ⚠ нові — лише в кінець
+                   VidBtn, VidTrack, VidSpeed, VidLoop, VidMute, VidFrameShot, VidShowFile,   // CAPS-78
+                   LibPlayer };
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -8679,6 +8713,15 @@ int EdLibRetLimit()
                                : RegLoadInt(kRegLibRetMB, 500, 1, 1000000);
 }
 bool     g_edHdr = false, g_edToneMapped = false;   // CAPS-21: звідки прийшов кадр
+// CAPS-78: режим «Відео». Стан оголошено тут — ним користуються розкладка,
+// малювання й обробник вікна, що стоять у файлі раніше за сам модуль.
+bool      g_edVideo = false;
+RECT      g_edRcTimeline = {};
+wchar_t   g_evPath[MAX_PATH] = {}, g_evName[128] = {};
+double    g_evDur = 0, g_evPos = 0, g_evFps = 30, g_evRate = 1.0, g_evTlZoom = 1.0, g_evTlOff = 0;
+int       g_evW = 0, g_evH = 0, g_evRev = 0;
+bool      g_evAudio = false, g_evPlaying = false, g_evLoop = false, g_evMuted = false, g_evScrub = false;
+ULONGLONG g_evBytes = 0, g_evCreated = 0;
 float    g_edSdrWhite = -1.0f;                      // ніт; -1 = система не сказала
 
 // CAPS-28. Оригінал лишається недоторканим, а все, що робить права панель, —
@@ -8726,6 +8769,25 @@ void EdLibToggle(HWND hwnd);
 void EdLibClose(HWND hwnd);
 void EdLibOpenSel(HWND hwnd);
 void EdLibScan();                 // CAPS-74: фільтр перечитує бібліотеку з обробника кліку
+// CAPS-78: модуль режиму «Відео» стоїть нижче за редактор
+constexpr UINT WMAPP_EVENT_FWD = WM_APP + 13, WMAPP_EVTHUMB_FWD = WM_APP + 14, kEvTimerFwd = 41;
+void EvLayout(HWND hwnd);
+void EvPaintTimeline(HDC dc, Gdiplus::Graphics& g, const EdTheme& t);
+void EvPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t);
+void EvPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t);
+bool EvClick(HWND hwnd, const EdRegion* r, POINT pt);
+bool EvMouseMove(HWND hwnd, POINT pt);
+void EvScrubEnd();
+bool EvKey(HWND hwnd, WPARAM vk, LPARAM lp);
+void EvTick();
+void EvOnEvent(DWORD e);
+void EvPresent();
+void EvClose();
+void EvWheel(POINT pt, int delta, bool pan);
+void EvHoverHide();
+void EvThumbReady(LPARAM lp);
+void EvStatusText(wchar_t* buf, int n);
+bool EvOpen(HINSTANCE hInst, const wchar_t* path);
 void EdLibShowSel();
 void EdLibAskDelete(HWND hwnd, bool permanent);
 void EdLibDeleteSel(HWND hwnd);
@@ -10164,6 +10226,13 @@ void EdLayout(HWND hwnd)
         g_edRcStrip   = { 0, 0, rc.right, strip };   // уявне місце; нижче переїде до рамки
     }
 
+    // CAPS-78: у відео під полотном — таймлайн; полотно (і вікно кадру) коротше.
+    if (g_edVideo && !g_edOverlay) {
+        const int tlh = EdPx(132);
+        g_edRcTimeline = { g_edRcCanvas.left, g_edRcCanvas.bottom - tlh, g_edRcCanvas.right, g_edRcCanvas.bottom };
+        g_edRcCanvas.bottom -= tlh;
+    }
+
     // Клацнули по кружечку — його група стає поточною: так до старої групи
     // повертаються без жодних кнопок.
     if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() && g_edObjs[g_edSel].kind == EdKind::Counter)
@@ -10280,8 +10349,8 @@ void EdLayout(HWND hwnd)
         }
     }
 
-    // смуга властивостей
-    {
+    // смуга властивостей (CAPS-78: у відео смуга своя — EvLayout)
+    if (!g_edVideo) {
         HDC dc = GetDC(hwnd);
         const size_t stripFirst = g_edRegions.size();   // CAPS-33: ділянки смуги їдуть до рамки
         const int cy = (g_edRcStrip.top + g_edRcStrip.bottom) / 2;
@@ -10578,7 +10647,7 @@ void EdLayout(HWND hwnd)
         x = om.right;
         // CAPS-70: «Зберегти» — одразу праворуч від «Відкрити»: обидві про файли,
         // а «Копіювати» переїхала вниз рейки, до тієї самої, що й в оверлеї.
-        if (!g_edLibOpen) {
+        if (!g_edLibOpen && !g_edVideo) {   // CAPS-78: зберігати відео — з CAPS-79 (експорт)
             const int sw = ico + EdPx(8) + EdTextWidth(dc, S(Str::EdStore), g_edFont) + EdPx(22);
             RECT rcStore = EdPill(x + EdPx(8), cy, sw, bh);
             EdAdd(rcStore, EdHit::Store, 0);
@@ -10633,6 +10702,8 @@ void EdLayout(HWND hwnd)
         }
     }
 
+    if (g_edVideo && !g_edOverlay) EvLayout(hwnd);   // CAPS-78
+
     // CAPS-39: бібліотека — поверх смуги, полотна й панелі; додається ОСТАННЬОЮ,
     // щоб EdFind (він іде з кінця) бачив її ділянки раніше за все під нею.
     if (g_edLibOpen) {
@@ -10674,6 +10745,13 @@ void EdLayout(HWND hwnd)
             } else {
                 RECT del = { area.right - pad - EdPx(96), by - EdPx(32), area.right - pad, by };
                 RECT sh  = { cx0 + pad, by - EdPx(32), del.left - EdPx(8), by };
+                // CAPS-78: відео відкривається в редакторі, програвач — другорядна дія поруч
+                if (g_edLibSel >= 0 && g_edLibSel < (int)g_edLib.size() && g_edLib[g_edLibSel].video) {
+                    const int mid = (sh.left + sh.right) / 2;
+                    RECT pl = { mid + EdPx(4), sh.top, sh.right, sh.bottom };
+                    sh.right = mid - EdPx(4);
+                    EdAdd(pl, EdHit::LibPlayer, 0);
+                }
                 EdAdd(sh,  EdHit::LibShow, 0);
                 EdAdd(del, EdHit::LibDel, 0);
                 by -= EdPx(32) + EdPx(8);
@@ -10714,7 +10792,7 @@ void EdLayout(HWND hwnd)
 
     // CAPS-28: геометрія знімка і тон. Живуть у правій панелі, бо стосуються
     // САМОГО ЗНІМКА, а не позначки — це і є межа між панеллю і смугою.
-    if (g_edPanelOpen && !g_edOverlay) {
+    if (g_edPanelOpen && !g_edOverlay && !g_edVideo) {   // CAPS-78: у відео панель своя
         const int px = g_edRcPanel.left + EdPx(14);
         const int pr = g_edRcPanel.right - EdPx(14);
         int y = EdPanelInfoBottom() + EdPx(16);
@@ -10868,7 +10946,7 @@ void EdPaintCaption(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         x += side + EdPx(10);
     }
     wchar_t cap[160];
-    wsprintfW(cap, L"%s — %s", S(Str::EdTitle), kAppName);
+    wsprintfW(cap, L"%s — %s", S(g_edVideo ? Str::EdTitleVideo : Str::EdTitle), kAppName);   // CAPS-78
     RECT tr = { x, g_edRcCaption.top, g_edCapLimit > x ? g_edCapLimit : g_edRcCaption.right,
                 g_edRcCaption.bottom };
     EdDrawText(dc, tr, cap, g_edFont, g_edActive ? t.text : t.text2,
@@ -11496,6 +11574,18 @@ Str EdStripHint()
 void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     struct FlatScope { FlatScope() { g_edFlatNow = true; } ~FlatScope() { g_edFlatNow = false; } } flat;
+    if (g_edVideo && !g_edOverlay) {   // CAPS-78: смуга відтворення
+        HBRUSH sb = CreateSolidBrush(t.surface);
+        FillRect(dc, &g_edRcStrip, sb);
+        DeleteObject(sb);
+        if (g_edLibOpen) return;
+        RECT sl = { g_edRcStrip.left, g_edRcStrip.bottom - 1, g_edRcStrip.right, g_edRcStrip.bottom };
+        sb = CreateSolidBrush(t.border);
+        FillRect(dc, &sl, sb);
+        DeleteObject(sb);
+        EvPaintStrip(dc, g, t);
+        return;
+    }
     if (g_edOverlay) {
         if (g_edRcStrip.right <= g_edRcStrip.left) return;   // порожня смуга в оверлеї схована
         Gdiplus::Color pf = EdC(t.surface), pb = EdC(t.border);
@@ -11837,15 +11927,17 @@ void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
             DeleteObject(sb);
         }
         const bool active = ((int)g_edTool == i);
-        const bool hot = (g_edHotWhat == EdHit::Tool && g_edHotIdx == i);
+        // CAPS-78: у відео поки працює лише «Вибір»; решта — сірі, на своїх місцях (CAPS-80)
+        const bool off = g_edVideo && i > 0;
+        const bool hot = (g_edHotWhat == EdHit::Tool && g_edHotIdx == i) && !off;
         EdPaintButton(g, *r, t, active, hot, !active);
-        EdIcon(g, icos[i], EdIconBox(*r), EdC(active ? t.accent : t.text), 1.5f);
+        EdIcon(g, icos[i], EdIconBox(*r), EdC(active ? t.accent : (off ? t.text2 : t.text), off ? 110 : 255), 1.5f);
     }
     // CAPS-69: «Зображення» — не інструмент, а дія (вибрати файл), тож ніколи
     // не буває «увімкненою».
     if (const RECT* ri = EdRegionRect(EdHit::InsertImg, 0)) {
-        EdPaintButton(g, *ri, t, false, g_edHotWhat == EdHit::InsertImg, true);
-        EdIcon(g, IcoImage, EdIconBox(*ri), EdC(t.text), 1.5f);
+        EdPaintButton(g, *ri, t, false, g_edHotWhat == EdHit::InsertImg && !g_edVideo, true);
+        EdIcon(g, IcoImage, EdIconBox(*ri), EdC(g_edVideo ? t.text2 : t.text, g_edVideo ? 110 : 255), 1.5f);
     }
     // CAPS-70: низ рейки — риска, далі (в оверлеї) «У вікно», найнижче «Копіювати».
     const RECT* firstBottom = g_edOverlay ? EdRegionRect(EdHit::OvWindow, 0) : EdRegionRect(EdHit::Copy, 0);
@@ -13725,7 +13817,11 @@ void EdPaintLib(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
     if (const RECT* sh = EdRegionRect(EdHit::LibShow, 0)) {
         EdPaintButton(g, *sh, t, false, g_edHotWhat == EdHit::LibShow, false);
-        EdDrawText(dc, *sh, S(Str::EdLibShowBtn), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        EdDrawText(dc, *sh, S(Str::EdLibShowBtn), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+    if (const RECT* pl = EdRegionRect(EdHit::LibPlayer, 0)) {   // CAPS-78
+        EdPaintButton(g, *pl, t, false, g_edHotWhat == EdHit::LibPlayer, false);
+        EdDrawText(dc, *pl, S(Str::LibPlayerBtn), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
     if (const RECT* dl = EdRegionRect(EdHit::LibDel, 0)) {
         EdPaintButton(g, *dl, t, false, g_edHotWhat == EdHit::LibDel, false);
@@ -13750,6 +13846,7 @@ void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         EdIcon(g, g_edPanelOpen ? IcoChevR : IcoChevL, EdIconBox(*r), EdC(t.text2), 1.5f);
     }
     if (!g_edPanelOpen) return;
+    if (g_edVideo) { EvPaintPanel(dc, g, t); return; }   // CAPS-78
 
     const int x = g_edRcPanel.left + EdPx(14);
     int y = g_edRcPanel.top + EdPx(14);
@@ -14059,6 +14156,8 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     const bool toast = (g_edToast != Str::Empty) && (int)(g_edToastUntil - GetTickCount()) > 0;
     if (toast)
         lstrcpynW(buf, S(g_edToast), 128);
+    else if (g_edVideo)                                     // CAPS-78: «Кадр N з M»
+        EvStatusText(buf, 128);
     else if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())
         wsprintfW(buf, S(Str::EdFmtSel), g_edObjs[g_edSel].w, g_edObjs[g_edSel].h);
     else if (EdOutsideCount() > 0)
@@ -14119,6 +14218,7 @@ void EdPaint(HWND hwnd, HDC dc)
     EdPaintRail(dc, g, t);
     EdPaintPanel(dc, g, t);
     EdPaintStrip(dc, g, t);
+    EvPaintTimeline(dc, g, t); // CAPS-78: таймлайн під полотном (бібліотека накриває і його)
     EdPaintLib(dc, g, t);      // бібліотека накриває смугу, полотно й панель
     EdPaintStatus(dc, g, t);
     EdPaintPick(dc, g, t);     // розкритий селект — поверх усього
@@ -15124,7 +15224,7 @@ bool EdPickFile(HWND owner, wchar_t* out, size_t cch, bool imagesOnly)
     // бути видні одразу, а не губитися серед чужих картинок. Для вставки
     // (CAPS-69) документ не годиться — лише картинки.
     fs[0].pszSpec = imagesOnly ? L"*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp"
-                               : L"*.lhshot;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp";
+                               : L"*.lhshot;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp;*.mp4;*.m4v;*.mov;*.wmv;*.avi;*.mkv";
     dlg->SetFileTypes(1, fs);
     dlg->SetTitle(S(imagesOnly ? Str::EdInsertTitle : Str::EdOpenTitle));
     if (SUCCEEDED(dlg->Show(owner))) {
@@ -15534,6 +15634,14 @@ constexpr UINT kEdTipDelay = 450;
 // перекладів означало б перекладати клавіші, яких ніхто не перекладає.
 Str EdTipFor(EdHit what, int idx)
 {
+    if (g_edVideo) {                                       // CAPS-78
+        const Str vb[6] = { Str::VidTipStart, Str::VidTipBack, Str::VidTipRev, Str::VidTipPlay, Str::VidTipFwd, Str::VidTipEnd };
+        if (what == EdHit::VidBtn && idx >= 0 && idx < 6) return vb[idx];
+        if (what == EdHit::VidLoop) return Str::VidTipLoop;
+        if (what == EdHit::VidMute) return Str::VidTipMute;
+        if (what == EdHit::Copy) return Str::VidTipCopyFrame;
+        if ((what == EdHit::Tool && idx > 0) || what == EdHit::InsertImg) return Str::VidToolLater;
+    }
     switch (what) {
     case EdHit::OvCopy:   return Str::EdTipOvCopy;
     case EdHit::OvWindow: return Str::EdTipOvWindow;
@@ -15929,6 +16037,10 @@ void EdOpenFileHere(HWND hwnd)
     if (!EdConfirmReplace()) return;
     wchar_t path[MAX_PATH] = {};
     if (!EdPickFile(hwnd, path, MAX_PATH)) return;
+    if (IsVideoExt(PathFindExtensionW(path))) {             // CAPS-78
+        EvOpen((HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), path);
+        return;
+    }
     if (EdIsDocFile(path)) {
         const int rc = EdDocOpen(path);
         if (rc == 2)      MessageBoxW(hwnd, S(Str::EdErrDocNew), kAppName, MB_OK | MB_ICONWARNING);
@@ -16678,12 +16790,14 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             DeleteDC(mem);
         }
         EndPaint(hwnd, &ps);
+        if (g_edVideo) EvPresent();   // CAPS-78: масштаб чи розмір змінились — кадр перемалювати
         if (upd) DeleteObject(upd);
         return 0;
     }
 
     case WM_MOUSEMOVE: {
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        if (g_edVideo && !g_edOverlay && EvMouseMove(hwnd, pt)) return 0;   // CAPS-78: перемотка тягненням
         if (g_edDrag == EdDrag::OvSel) {          // CAPS-33: тягнуть ручку рамки
             RECT n = g_edCropOrig;
             switch (g_edHandle) {
@@ -16898,6 +17012,13 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         POINT pt = {};
         DragQueryPoint(drop, &pt);
         const UINT n = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+        // CAPS-78: відео не лягає позначкою — воно відкривається, як через «Відкрити».
+        if (n >= 1 && DragQueryFileW(drop, 0, path, MAX_PATH) && IsVideoExt(PathFindExtensionW(path))) {
+            DragFinish(drop);
+            SetForegroundWindow(hwnd);
+            if (EdConfirmReplace()) EvOpen((HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), path);
+            return 0;
+        }
         // Кілька файлів кладемо сходинкою: рівно один на одного вони лягли б
         // так, ніби вкинувся лише останній.
         int step = 0;
@@ -16918,6 +17039,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_MOUSELEAVE:
+        if (!g_evScrub) EvHoverHide();   // CAPS-78
         g_edTracking = false;
         EdTipHide();
         KillTimer(hwnd, kEdTipTimer);
@@ -16951,6 +17073,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SetFocus(hwnd);
         const EdRegion* r = EdFind(pt);
         if (!r) return 0;
+        if (g_edVideo && !g_edLibOpen && EvClick(hwnd, r, pt)) return 0;   // CAPS-78
         // Бібліотека відкрита: живуть лише її ділянки, кнопки заголовка й «Відкрити».
         if (g_edLibOpen) {
             switch (r->what) {
@@ -16969,6 +17092,9 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 return 0;
             case EdHit::LibOpen:   EdLibOpenSel(hwnd); return 0;
             case EdHit::LibShow:   EdLibShowSel(); return 0;
+            case EdHit::LibPlayer:                                  // CAPS-78: системний програвач
+                if (g_edLibSel >= 0 && g_edLibSel < (int)g_edLib.size()) VidOpenFile(g_edLib[g_edLibSel].path.c_str());
+                return 0;
             case EdHit::LibDel:    EdLibAskDelete(hwnd, (wp & MK_SHIFT) != 0); return 0;
             case EdHit::LibDelYes: EdLibDeleteSel(hwnd); return 0;
             case EdHit::LibDelNo:  g_edLibConfirm = false; EdLayout(hwnd); InvalidateRect(hwnd, nullptr, FALSE); return 0;
@@ -17441,6 +17567,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_LBUTTONUP: {
+        if (g_evScrub) { EvScrubEnd(); return 0; }   // CAPS-78: відпустили покажчик таймлайну
         g_edDynValid = false;               // CAPS-60
         if (g_edDrag == EdDrag::OvSel) {
             g_edDrag = EdDrag::None;
@@ -17596,6 +17723,10 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             return 0;
         }
+        if (g_edVideo && PtInRect(&g_edRcTimeline, pt)) {   // CAPS-78: масштаб таймлайну
+            EvWheel(pt, GET_WHEEL_DELTA_WPARAM(wp), (LOWORD(wp) & (MK_CONTROL | MK_SHIFT)) != 0);
+            return 0;
+        }
         if (!PtInRect(&g_edRcCanvas, pt)) return 0;
         const int delta = GET_WHEEL_DELTA_WPARAM(wp);
         if (GetKeyState(VK_MENU) < 0) { EdZoomAt(pt, delta > 0); return 0; }
@@ -17616,6 +17747,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_MOUSEHWHEEL: {
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         ScreenToClient(hwnd, &pt);
+        if (g_edVideo && PtInRect(&g_edRcTimeline, pt)) { EvWheel(pt, -GET_WHEEL_DELTA_WPARAM(wp), true); return 0; }   // CAPS-78
         if (!PtInRect(&g_edRcCanvas, pt)) return 0;
         EdScrollBy(-EdWheelStep(GET_WHEEL_DELTA_WPARAM(wp)), 0);
         return 0;
@@ -17644,6 +17776,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             default: return 0;
             }
         }
+        if (g_edVideo && !g_edOverlay && EvKey(hwnd, wp, lp)) return 0;   // CAPS-78: клавіші відтворення
         // CAPS-33: в оверлеї Enter і Ctrl+C — скопіювати й закрити, Ctrl+S —
         // зберегти й закрити, останній Esc — за налаштуванням. Кадру,
         // «Відкрити» й експорту тут немає.
@@ -17832,6 +17965,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             EdTipShow(hwnd);
             return 0;
         }
+        if (wp == kEvTimerFwd) { EvTick(); return 0; }   // CAPS-78
         if (wp == 7) {
             const bool toastOver = (int)(g_edToastUntil - GetTickCount()) <= 0;
             const bool tickOver  = (int)(g_edTickUntil  - GetTickCount()) <= 0;
@@ -17842,7 +17976,15 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
 
+    case WMAPP_EVENT_FWD:    // CAPS-78: подія рушія відтворення
+        EvOnEvent((DWORD)wp);
+        return 0;
+    case WMAPP_EVTHUMB_FWD:  // CAPS-78: мініатюра стрічки готова
+        EvThumbReady(lp);
+        return 0;
+
     case WM_DESTROY:
+        EvClose();          // CAPS-78: рушій і вікно кадру — разом із редактором
         EdTextCancel();
         if (g_edEmojiWnd) { DestroyWindow(g_edEmojiWnd); g_edEmojiWnd = nullptr; }
         KillTimer(hwnd, kEdTipTimer);
@@ -17885,6 +18027,7 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
                   bool hdr, bool toneMapped, float sdrWhite = -1.0f)
 {
     if (!bmp) return;
+    if (g_edVideo) EvClose();          // CAPS-78: новий документ-зображення — режим «Знімок»
 
     static bool registered = false;
     if (!registered) {
@@ -19413,6 +19556,1249 @@ void VidLibBadge(HDC dc, Gdiplus::Graphics& g, const RECT& box, LONGLONG dur)
     EdDrawText(dc, tr, t, g_edFontSmall, RGB(255, 255, 255), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
+// ===================== CAPS-78: режим «Відео» в редакторі =====================
+// Той самий редактор, режим — за документом (рішення власника 24.09.2026):
+// відкрили відео — заголовок «Редактор відео», під полотном таймлайн, смуга —
+// параметри відтворення, права панель — відомості про відео. Каркас, розміри
+// зон, масштаб «Вписати / 100 %» і бібліотека — спільні зі знімками.
+//
+// Виміряно пробами (_design_preview\caps78), а не вгадано:
+//  1. Програмне декодування 4K — 18 кадрів/с і перемотка понад секунду; навіть
+//     апаратне з копією кадру в пам'ять — 27,5 кадрів/с. Масштаб через GDI
+//     (HALFTONE) — 25 мс на кадр. Тому кадр НЕ виходить із відеопам'яті.
+//  2. IMFMediaEngine у режимі frame-server: 4K рівно з частотою файлу,
+//     TransferVideoFrame з масштабом на GPU — ~1 мс, точна перемотка 16–125 мс;
+//     звук і синхронізація — його.
+//  3. ⚠ Від'ємну швидкість рушій «підтримує» (IsPlaybackRateSupported = так), але
+//     MP4 грає ВПЕРЕД. Реверс тому свій: перемотка на кадр назад у темпі.
+//
+// Кадр малюється в дочірньому вікні зі swap chain поверх полотна; мишу воно
+// пропускає до редактора (HTTRANSPARENT), тож масштаб і прокрутка — ті самі.
+// Документ під ним — перший кадр як звичайне зображення: так уся геометрія
+// редактора (розміри, «Вписати», EdImageRect) працює без окремої гілки.
+
+constexpr UINT WMAPP_EVENT   = WM_APP + 13;  // подія Media Engine: wp = код
+constexpr UINT WMAPP_EVTHUMB = WM_APP + 14;  // мініатюра стрічки: lp = EvThumbMsg*
+constexpr UINT kEvTimer      = 41;           // опитування кадрів, поки щось рухається
+
+struct EvNotify : IMFMediaEngineNotify {
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** p) override {
+        if (id == __uuidof(IUnknown) || id == __uuidof(IMFMediaEngineNotify)) { *p = this; return S_OK; }
+        *p = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return 2; }    // статичний об'єкт
+    ULONG STDMETHODCALLTYPE Release() override { return 1; }
+    // Події приходять із потоків MF — у вікно лише повідомленням.
+    HRESULT STDMETHODCALLTYPE EventNotify(DWORD e, DWORD_PTR, DWORD) override {
+        if (g_edWnd) PostMessageW(g_edWnd, WMAPP_EVENT, (WPARAM)e, 0);
+        return S_OK;
+    }
+};
+EvNotify g_evNotify;
+
+ID3D11Device*          g_evDev = nullptr;
+ID3D11DeviceContext*   g_evCtx = nullptr;
+IMFDXGIDeviceManager*  g_evDm  = nullptr;
+UINT                   g_evTok = 0;
+IMFMediaEngine*        g_evMe  = nullptr;
+IDXGISwapChain1*       g_evSc  = nullptr;
+HWND                   g_evView = nullptr;
+UINT                   g_evScW = 0, g_evScH = 0;
+bool                   g_evReady = false;      // рушій готовий (CANPLAY)
+bool                   g_evSeeking = false;    // перемотка ще не завершилась
+double                 g_evSeekQueued = -1.0;  // наступна ціль, поки йде попередня
+ULONGLONG              g_evRevT0 = 0;
+double                 g_evRevPos0 = 0;
+int                    g_evIdle = 0;           // тіків без руху — тоді таймер гасне
+volatile LONG          g_evThumbGen = 0;
+std::vector<Gdiplus::Bitmap*> g_evThumbs;
+int                    g_evThumbW = 0, g_evThumbH = 0;
+HWND                   g_evHover = nullptr;
+double                 g_evHoverT = -1;
+RECT                   g_evRcRuler = {}, g_evRcFilm = {}, g_evRcChip = {}, g_evRcFacts = {};
+const double           kEvRates[3] = { 0.5, 1.0, 2.0 };
+
+void EvFmtTime(double s, wchar_t* out, int n)
+{
+    if (s < 0) s = 0;
+    const long long cs = (long long)(s * 100.0 + 0.5);
+    const long long m = cs / 6000;
+    const int sec = (int)((cs / 100) % 60), c = (int)(cs % 100);
+    if (m >= 60) swprintf(out, n, L"%lld:%02lld:%02d.%02d", m / 60, m % 60, sec, c);
+    else         swprintf(out, n, L"%lld:%02d.%02d", m, sec, c);
+}
+
+int EvFrames() { return g_evDur > 0 && g_evFps > 0 ? (int)(g_evDur * g_evFps + 0.5) : 0; }
+
+int EvFrameIdx(double t)
+{
+    int i = (int)(t * g_evFps + 1e-4);
+    const int n = EvFrames();
+    if (i >= n) i = n - 1;
+    if (i < 0) i = 0;
+    return i;
+}
+
+// Частота кадрів і наявність звуку: Media Engine їх не каже, а для кроку на
+// кадр і «Кадр N з M» частота потрібна точна.
+void EvProbeFile(const wchar_t* path)
+{
+    g_evFps = 30.0; g_evAudio = false;
+    IMFSourceReader* r = nullptr;
+    if (FAILED(MFCreateSourceReaderFromURL(path, nullptr, &r)) || !r) return;
+    IMFMediaType* t = nullptr;
+    if (SUCCEEDED(r->GetNativeMediaType((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &t)) && t) {
+        UINT32 n = 0, d = 0;
+        if (SUCCEEDED(MFGetAttributeRatio(t, MF_MT_FRAME_RATE, &n, &d)) && n && d) g_evFps = (double)n / d;
+        UINT32 w = 0, h = 0;
+        if (SUCCEEDED(MFGetAttributeSize(t, MF_MT_FRAME_SIZE, &w, &h))) { g_evW = (int)w; g_evH = (int)h; }
+        t->Release();
+    }
+    IMFMediaType* a = nullptr;
+    if (SUCCEEDED(r->GetNativeMediaType((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, &a)) && a) {
+        g_evAudio = true;
+        a->Release();
+    }
+    PROPVARIANT pv;
+    PropVariantInit(&pv);
+    if (SUCCEEDED(r->GetPresentationAttribute((DWORD)MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION, &pv)) && pv.vt == VT_UI8)
+        g_evDur = pv.uhVal.QuadPart / 1e7;
+    PropVariantClear(&pv);
+    r->Release();
+}
+
+// ---- вікно кадру --------------------------------------------------------
+
+void EvPresent();
+
+LRESULT CALLBACK EvViewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_NCHITTEST: return HTTRANSPARENT;   // миша — редактору: масштаб і прокрутка ті самі
+    case WM_ERASEBKGND: return 1;
+    case WM_PAINT: ValidateRect(hwnd, nullptr); EvPresent(); return 0;
+    default: break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+bool EvEnsureSwap(UINT w, UINT h)
+{
+    if (!g_evDev || !g_evView || !w || !h) return false;
+    if (g_evSc && g_evScW == w && g_evScH == h) return true;
+    if (g_evSc) {
+        if (SUCCEEDED(g_evSc->ResizeBuffers(0, w, h, DXGI_FORMAT_UNKNOWN, 0))) { g_evScW = w; g_evScH = h; return true; }
+        g_evSc->Release();
+        g_evSc = nullptr;
+    }
+    IDXGIDevice* dd = nullptr;
+    IDXGIAdapter* ad = nullptr;
+    IDXGIFactory2* f = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(g_evDev->QueryInterface(__uuidof(IDXGIDevice), (void**)&dd)) && dd &&
+        SUCCEEDED(dd->GetAdapter(&ad)) && ad &&
+        SUCCEEDED(ad->GetParent(__uuidof(IDXGIFactory2), (void**)&f)) && f) {
+        DXGI_SWAP_CHAIN_DESC1 d = {};
+        d.Width = w; d.Height = h;
+        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        d.SampleDesc.Count = 1;
+        d.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        d.BufferCount = 2;
+        d.Scaling = DXGI_SCALING_STRETCH;
+        d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        d.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+        HRESULT hr = f->CreateSwapChainForHwnd(g_evDev, g_evView, &d, nullptr, nullptr, &g_evSc);
+        if (FAILED(hr)) {             // старіші системи — послідовний flip
+            d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+            hr = f->CreateSwapChainForHwnd(g_evDev, g_evView, &d, nullptr, nullptr, &g_evSc);
+        }
+        ok = SUCCEEDED(hr) && g_evSc;
+        if (ok) { g_evScW = w; g_evScH = h; }
+    }
+    if (f) f->Release();
+    if (ad) ad->Release();
+    if (dd) dd->Release();
+    return ok;
+}
+
+// Поточний кадр — у вікно, на тому місці й у тому масштабі, де редактор
+// поставив би зображення. Тло — колір полотна теми.
+void EvPresent()
+{
+    if (!g_edVideo || !g_evMe || !g_evReady || !g_evView || !IsWindowVisible(g_evView)) return;
+    RECT cr;
+    GetClientRect(g_evView, &cr);
+    if (cr.right <= 0 || cr.bottom <= 0 || !EvEnsureSwap((UINT)cr.right, (UINT)cr.bottom)) return;
+    ID3D11Texture2D* bb = nullptr;
+    if (FAILED(g_evSc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
+    const EdTheme t = EdColors(g_edDark);
+    ID3D11RenderTargetView* rtv = nullptr;
+    if (SUCCEEDED(g_evDev->CreateRenderTargetView(bb, nullptr, &rtv)) && rtv) {
+        const float c[4] = { GetRValue(t.canvas) / 255.0f, GetGValue(t.canvas) / 255.0f, GetBValue(t.canvas) / 255.0f, 1.0f };
+        g_evCtx->ClearRenderTargetView(rtv, c);
+        rtv->Release();
+    }
+    RECT ir = EdImageRect();
+    OffsetRect(&ir, -g_edRcCanvas.left, -g_edRcCanvas.top);
+    RECT vis;
+    const int iw = ir.right - ir.left, ih = ir.bottom - ir.top;
+    if (iw > 0 && ih > 0 && IntersectRect(&vis, &ir, &cr)) {
+        MFVideoNormalizedRect src = { (float)(vis.left - ir.left) / iw, (float)(vis.top - ir.top) / ih,
+                                      (float)(vis.right - ir.left) / iw, (float)(vis.bottom - ir.top) / ih };
+        MFARGB border = { GetBValue(t.canvas), GetGValue(t.canvas), GetRValue(t.canvas), 255 };
+        g_evMe->TransferVideoFrame(bb, &src, &vis, &border);
+    }
+    bb->Release();
+    g_evSc->Present(0, 0);
+}
+
+// ---- мініатюри стрічки: окремий потік зі своїм Source Reader ----------------
+
+struct EvThumbJob { wchar_t path[MAX_PATH]; int n; double dur; int tw, th; LONG gen; };
+struct EvThumbMsg { LONG gen; int idx; Gdiplus::Bitmap* bmp; };
+
+Gdiplus::Bitmap* EvSampleToBitmap(IMFSample* s, UINT32 w, UINT32 h)
+{
+    IMFMediaBuffer* b = nullptr;
+    if (FAILED(s->GetBufferByIndex(0, &b)) || !b) return nullptr;
+    Gdiplus::Bitmap* bmp = nullptr;
+    BYTE* p = nullptr;
+    LONG pitch = 0;
+    DWORD len = 0;
+    IMF2DBuffer* b2 = nullptr;
+    // ⚠ Крок рядка — лише зі справжнього буфера (урок CAPS-16 і CAPS-73):
+    // декодер вирівнює рядки, і ширина×4 дала б скошену мініатюру.
+    bool l2 = SUCCEEDED(b->QueryInterface(IID_IMF2DBuffer, (void**)&b2)) && b2 && SUCCEEDED(b2->Lock2D(&p, &pitch));
+    if (!l2) {
+        if (b2) { b2->Release(); b2 = nullptr; }
+        if (FAILED(b->Lock(&p, nullptr, &len))) { b->Release(); return nullptr; }
+        pitch = (LONG)DeriveVideoStride(len, w, h, w * 4);
+    }
+    const bool up = pitch < 0;
+    const LONG ap = up ? -pitch : pitch;
+    bmp = new Gdiplus::Bitmap((INT)w, (INT)h, PixelFormat32bppPARGB);
+    Gdiplus::BitmapData bd = {};
+    Gdiplus::Rect all(0, 0, (INT)w, (INT)h);
+    if (bmp->GetLastStatus() == Gdiplus::Ok &&
+        bmp->LockBits(&all, Gdiplus::ImageLockModeWrite, PixelFormat32bppPARGB, &bd) == Gdiplus::Ok) {
+        for (UINT32 y = 0; y < h; ++y) {
+            const DWORD* src = (const DWORD*)(p + (size_t)(up ? (h - 1 - y) : y) * ap);
+            DWORD* dst = (DWORD*)((BYTE*)bd.Scan0 + (size_t)y * bd.Stride);
+            for (UINT32 x = 0; x < w; ++x) dst[x] = src[x] | 0xFF000000u;
+        }
+        bmp->UnlockBits(&bd);
+    } else { delete bmp; bmp = nullptr; }
+    if (l2) { b2->Unlock2D(); b2->Release(); } else b->Unlock();
+    b->Release();
+    return bmp;
+}
+
+DWORD WINAPI EvThumbThread(LPVOID param)
+{
+    EvThumbJob* j = (EvThumbJob*)param;
+    const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+    const bool mf = SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_LITE));
+    ID3D11Device* dev = nullptr;
+    IMFDXGIDeviceManager* dm = nullptr;
+    UINT tok = 0;
+    IMFSourceReader* r = nullptr;
+    // Апаратне декодування з масштабом на GPU — 4K програмно перемотувалось би
+    // секунду на мініатюру. Не вийшло — програмне з тим самим масштабом.
+    for (int pass = 0; pass < 2 && !r && mf; ++pass) {
+        IMFAttributes* a = nullptr;
+        if (FAILED(MFCreateAttributes(&a, 3))) break;
+        if (pass == 0 &&
+            SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+                                        D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                                        nullptr, 0, D3D11_SDK_VERSION, &dev, nullptr, nullptr))) {
+            ID3D10Multithread* mt = nullptr;
+            if (SUCCEEDED(dev->QueryInterface(__uuidof(ID3D10Multithread), (void**)&mt)) && mt) { mt->SetMultithreadProtected(TRUE); mt->Release(); }
+            if (SUCCEEDED(MFCreateDXGIDeviceManager(&tok, &dm)) && SUCCEEDED(dm->ResetDevice(dev, tok))) {
+                a->SetUnknown(MF_SOURCE_READER_D3D_MANAGER, dm);
+                a->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
+            }
+        }
+        a->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE);
+        if (FAILED(MFCreateSourceReaderFromURL(j->path, a, &r))) r = nullptr;
+        a->Release();
+        if (r) {
+            IMFMediaType* t = nullptr;
+            MFCreateMediaType(&t);
+            t->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+            t->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+            MFSetAttributeSize(t, MF_MT_FRAME_SIZE, (UINT32)j->tw, (UINT32)j->th);
+            const HRESULT hr = r->SetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, t);
+            t->Release();
+            if (FAILED(hr)) { r->Release(); r = nullptr; }
+        }
+        if (!r) {
+            if (dm) { dm->Release(); dm = nullptr; }
+            if (dev) { dev->Release(); dev = nullptr; }
+        }
+    }
+    const double frame = 1.0 / (g_evFps > 0 ? g_evFps : 30.0);
+    for (int i = 0; r && i < j->n; ++i) {
+        if (InterlockedCompareExchange(&g_evThumbGen, 0, 0) != j->gen) break;   // документ змінився
+        const double t = j->dur * (i + 0.5) / j->n;
+        PROPVARIANT pos;
+        PropVariantInit(&pos);
+        pos.vt = VT_I8;
+        pos.hVal.QuadPart = (LONGLONG)(t * 1e7);
+        r->SetCurrentPosition(GUID_NULL, pos);
+        IMFSample* best = nullptr;
+        for (int k = 0; k < 120; ++k) {
+            DWORD si, fl;
+            LONGLONG ts = 0;
+            IMFSample* s = nullptr;
+            if (FAILED(r->ReadSample((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &si, &fl, &ts, &s)) ||
+                (fl & MF_SOURCE_READERF_ENDOFSTREAM)) { if (s) s->Release(); break; }
+            if (!s) continue;
+            if (best) best->Release();
+            best = s;
+            if (ts / 1e7 + frame / 2 >= t) break;
+        }
+        Gdiplus::Bitmap* bmp = best ? EvSampleToBitmap(best, (UINT32)j->tw, (UINT32)j->th) : nullptr;
+        if (best) best->Release();
+        if (!bmp) continue;
+        EvThumbMsg* m = new EvThumbMsg{ j->gen, i, bmp };
+        if (!g_edWnd || !PostMessageW(g_edWnd, WMAPP_EVTHUMB, 0, (LPARAM)m)) { delete bmp; delete m; }
+    }
+    if (r) r->Release();
+    if (dm) dm->Release();
+    if (dev) dev->Release();
+    if (mf) MFShutdown();
+    if (com) CoUninitialize();
+    delete j;
+    return 0;
+}
+
+void EvThumbsClear()
+{
+    for (size_t i = 0; i < g_evThumbs.size(); ++i) delete g_evThumbs[i];
+    g_evThumbs.clear();
+}
+
+void EvThumbsStart()
+{
+    EvThumbsClear();
+    const LONG gen = InterlockedIncrement(&g_evThumbGen);
+    const int fh = g_evRcFilm.bottom - g_evRcFilm.top, fw = g_evRcFilm.right - g_evRcFilm.left;
+    if (fh <= 0 || fw <= 0 || g_evW <= 0 || g_evH <= 0 || g_evDur <= 0) return;
+    int tw = fh * g_evW / g_evH;
+    if (tw < 16) tw = 16;
+    tw &= ~1;
+    int n = (fw + tw - 1) / tw;
+    if (n < 4) n = 4;
+    if (n > 60) n = 60;
+    g_evThumbW = tw;
+    g_evThumbH = fh & ~1;
+    g_evThumbs.assign((size_t)n, nullptr);
+    EvThumbJob* j = new EvThumbJob{};
+    lstrcpynW(j->path, g_evPath, MAX_PATH);
+    j->n = n; j->dur = g_evDur; j->tw = g_evThumbW; j->th = g_evThumbH; j->gen = gen;
+    HANDLE th = CreateThread(nullptr, 0, EvThumbThread, j, 0, nullptr);
+    if (th) CloseHandle(th); else delete j;
+}
+
+// ---- рушій ----------------------------------------------------------------
+
+void EvTimerOn()
+{
+    g_evIdle = 0;
+    if (g_edWnd) SetTimer(g_edWnd, kEvTimer, 10, nullptr);
+}
+
+void EvSeekNow(double t)
+{
+    if (!g_evMe) return;
+    g_evSeeking = true;
+    g_evMe->SetCurrentTime(t);
+    EvTimerOn();
+}
+
+// Перемотка «доганяє» миш: поки попередня не завершилась, нова ціль лише
+// запам'ятовується — інакше черга перемоток відставала б на секунди.
+void EvSeek(double t)
+{
+    if (t < 0) t = 0;
+    if (g_evDur > 0 && t > g_evDur) t = g_evDur;
+    g_evPos = t;
+    if (g_evSeeking) { g_evSeekQueued = t; return; }
+    EvSeekNow(t);
+}
+
+void EvInvalidateInfo()
+{
+    if (!g_edWnd) return;
+    RECT r = g_edRcTimeline;
+    InvalidateRect(g_edWnd, &r, FALSE);
+    InvalidateRect(g_edWnd, &g_edRcStatus, FALSE);
+}
+
+void EvPause()
+{
+    if (g_evMe) g_evMe->Pause();
+    g_evPlaying = false;
+    g_evRev = 0;
+    EvInvalidateInfo();
+}
+
+void EvPlay()
+{
+    if (!g_evMe || !g_evReady) return;
+    g_evRev = 0;
+    if (g_evDur > 0 && g_evPos >= g_evDur - 1.0 / g_evFps) EvSeek(0);   // з кінця — з початку
+    // ⚠ Play() вертає швидкість до «типової» — тому задаємо обидві, і поточну
+    // вже після Play() (виміряно: без цього 2× грало як 1×).
+    g_evMe->SetDefaultPlaybackRate(g_evRate);
+    g_evMe->Play();
+    g_evMe->SetPlaybackRate(g_evRate);
+    g_evPlaying = true;
+    EvTimerOn();
+    EvInvalidateInfo();
+}
+
+void EvTogglePlay() { if (g_evPlaying) EvPause(); else EvPlay(); }
+
+// Реверс — перемоткою назад у темпі відтворення (рушій MP4 назад не грає).
+void EvToggleReverse()
+{
+    if (!g_evMe || !g_evReady) return;
+    if (g_evRev) { EvPause(); return; }
+    if (g_evPlaying) { g_evMe->Pause(); g_evPlaying = false; }
+    if (g_evPos <= 1.0 / g_evFps) g_evPos = g_evDur;               // з початку — з кінця
+    g_evRev = 1;
+    g_evRevT0 = GetTickCount64();
+    g_evRevPos0 = g_evPos;
+    EvTimerOn();
+    EvInvalidateInfo();
+}
+
+void EvRevStep()
+{
+    double t = g_evRevPos0 - (GetTickCount64() - g_evRevT0) / 1000.0 * g_evRate;
+    if (t <= 0) {
+        if (g_evLoop) { g_evRevPos0 = g_evDur; g_evRevT0 = GetTickCount64(); t = g_evDur; }
+        else { t = 0; g_evRev = 0; }
+    }
+    const double ft = (EvFrameIdx(t) + 0.25) / g_evFps;
+    g_evPos = t;
+    if (!g_evSeeking) EvSeekNow(ft);
+    else g_evSeekQueued = ft;
+}
+
+void EvStep(int n)
+{
+    if (!g_evReady) return;
+    if (g_evPlaying || g_evRev) EvPause();
+    const int idx = EvFrameIdx(g_evPos) + n;
+    const int last = EvFrames() - 1;
+    EvSeek(((idx < 0 ? 0 : (idx > last ? last : idx)) + 0.25) / g_evFps);
+    EvInvalidateInfo();
+}
+
+void EvJump(double t)
+{
+    if (g_evPlaying || g_evRev) EvPause();
+    EvSeek(t);
+    EvInvalidateInfo();
+}
+
+void EvAutoScroll()
+{
+    const double vis = g_evDur / g_evTlZoom;
+    if (g_evTlZoom <= 1.0 || vis <= 0) { g_evTlOff = 0; return; }
+    if (g_evPos < g_evTlOff || g_evPos > g_evTlOff + vis * 0.95) g_evTlOff = g_evPos - vis * 0.1;
+    if (g_evTlOff < 0) g_evTlOff = 0;
+    if (g_evTlOff > g_evDur - vis) g_evTlOff = g_evDur - vis;
+}
+
+void EvTick()
+{
+    if (!g_evMe || !g_evReady) { KillTimer(g_edWnd, kEvTimer); return; }
+    LONGLONG pts = 0;
+    bool moved = false;
+    if (g_evMe->OnVideoStreamTick(&pts) == S_OK) { EvPresent(); moved = true; }
+    if (g_evRev) { EvRevStep(); moved = true; }
+    if (g_evPlaying) {
+        const double p = g_evMe->GetCurrentTime();
+        if (p != g_evPos) { g_evPos = p; moved = true; }
+    }
+    if (moved) { EvAutoScroll(); EvInvalidateInfo(); g_evIdle = 0; }
+    else if (!g_evPlaying && !g_evRev && !g_evSeeking && ++g_evIdle > 50) KillTimer(g_edWnd, kEvTimer);
+}
+
+void EvLayout(HWND hwnd);
+
+void EvOnEvent(DWORD e)
+{
+    if (!g_evMe) return;
+    switch (e) {
+    case MF_MEDIA_ENGINE_EVENT_CANPLAY:
+    case MF_MEDIA_ENGINE_EVENT_LOADEDDATA:
+        if (!g_evReady) {
+            g_evReady = true;
+            const double d = g_evMe->GetDuration();
+            if (d > 0 && d == d) g_evDur = d;
+            EvLayout(g_edWnd);             // вікно кадру з'являється лише тепер
+            EvSeek(0.25 / g_evFps);        // перший кадр — рівно перший
+            EvThumbsStart();
+            InvalidateRect(g_edWnd, nullptr, FALSE);
+        }
+        break;
+    case MF_MEDIA_ENGINE_EVENT_SEEKED:
+        g_evSeeking = false;
+        if (g_evSeekQueued >= 0) { const double q = g_evSeekQueued; g_evSeekQueued = -1; EvSeekNow(q); }
+        EvTimerOn();
+        break;
+    case MF_MEDIA_ENGINE_EVENT_ENDED:
+        if (!g_evLoop) { g_evPlaying = false; g_evPos = g_evDur; EvInvalidateInfo(); }
+        break;
+    case MF_MEDIA_ENGINE_EVENT_ERROR:
+        g_evPlaying = false;
+        g_evRev = 0;
+        EvInvalidateInfo();
+        break;
+    default: break;
+    }
+}
+
+bool EvStart(const wchar_t* path)
+{
+    if (!VideoEnsureMf()) return false;
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+                                   D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                                   nullptr, 0, D3D11_SDK_VERSION, &g_evDev, nullptr, &g_evCtx);
+    if (FAILED(hr))   // без відеокарти (віртуалка) — програмний рушій D3D
+        hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                               nullptr, 0, D3D11_SDK_VERSION, &g_evDev, nullptr, &g_evCtx);
+    if (FAILED(hr)) return false;
+    ID3D10Multithread* mt = nullptr;
+    if (SUCCEEDED(g_evDev->QueryInterface(__uuidof(ID3D10Multithread), (void**)&mt)) && mt) { mt->SetMultithreadProtected(TRUE); mt->Release(); }
+    if (FAILED(MFCreateDXGIDeviceManager(&g_evTok, &g_evDm)) || FAILED(g_evDm->ResetDevice(g_evDev, g_evTok))) return false;
+    IMFMediaEngineClassFactory* cf = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_MFMediaEngineClassFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                __uuidof(IMFMediaEngineClassFactory), (void**)&cf)) || !cf) return false;
+    IMFAttributes* a = nullptr;
+    MFCreateAttributes(&a, 3);
+    a->SetUnknown(MF_MEDIA_ENGINE_CALLBACK, &g_evNotify);
+    a->SetUnknown(MF_MEDIA_ENGINE_DXGI_MANAGER, g_evDm);
+    a->SetUINT32(MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM);
+    hr = cf->CreateInstance(0, a, &g_evMe);
+    a->Release();
+    cf->Release();
+    if (FAILED(hr) || !g_evMe) { g_evMe = nullptr; return false; }
+    g_evMe->SetAutoPlay(FALSE);
+    g_evMe->SetLoop(g_evLoop ? TRUE : FALSE);
+    g_evMe->SetMuted(g_evMuted ? TRUE : FALSE);
+    static bool reg = false;
+    if (!reg) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = EvViewProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"lilhelpers_evview";
+        RegisterClassW(&wc);
+        reg = true;
+    }
+    g_evView = CreateWindowExW(0, L"lilhelpers_evview", L"", WS_CHILD | WS_CLIPSIBLINGS,
+                               0, 0, 1, 1, g_edWnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+    BSTR url = SysAllocString(path);
+    hr = g_evMe->SetSource(url);
+    SysFreeString(url);
+    return SUCCEEDED(hr) && g_evView;
+}
+
+void EvHoverHide();
+
+void EvClose()
+{
+    if (!g_edVideo && !g_evMe && !g_evView) return;
+    if (g_edWnd) KillTimer(g_edWnd, kEvTimer);
+    InterlockedIncrement(&g_evThumbGen);   // потік мініатюр побачить і зупиниться
+    EvThumbsClear();
+    EvHoverHide();
+    if (g_evMe) { g_evMe->Shutdown(); g_evMe->Release(); g_evMe = nullptr; }
+    if (g_evSc) { g_evSc->Release(); g_evSc = nullptr; }
+    if (g_evView) { DestroyWindow(g_evView); g_evView = nullptr; }
+    if (g_evDm) { g_evDm->Release(); g_evDm = nullptr; }
+    if (g_evCtx) { g_evCtx->ClearState(); g_evCtx->Release(); g_evCtx = nullptr; }
+    if (g_evDev) { g_evDev->Release(); g_evDev = nullptr; }
+    g_evScW = g_evScH = 0;
+    g_evReady = g_evPlaying = g_evSeeking = g_evScrub = false;
+    g_evRev = 0;
+    g_evSeekQueued = -1;
+    g_edVideo = false;
+    g_edRcTimeline = RECT{ 0, 0, 0, 0 };
+    if (g_edWnd) {
+        wchar_t cap[160];
+        wsprintfW(cap, L"%s — %s", S(Str::EdTitle), kAppName);
+        SetWindowTextW(g_edWnd, cap);
+    }
+}
+
+// Відео в редакторі. Назву беремо з бібліотеки (.lhmeta), інакше — ім'я файлу.
+bool EvOpen(HINSTANCE hInst, const wchar_t* path)
+{
+    Gdiplus::Bitmap* poster = nullptr;
+    LONGLONG dur = 0;
+    if (!VideoGrabFrame(path, &poster, &dur) || !poster) {
+        delete poster;
+        MessageBoxW(g_edWnd, S(Str::VidErrOpen), kAppName, MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    EvClose();
+    std::wstring name;
+    VidMeta m;
+    if (VidMetaRead(path, m) && !m.name.empty()) name = m.name;
+    else {
+        name = PathFindFileNameW(path);
+        const size_t dot = name.rfind(L'.');
+        if (dot != std::wstring::npos) name.resize(dot);
+    }
+    EdOpenBitmap(hInst, poster, name.c_str(), false, false);   // редактор бере власність над кадром
+    if (!g_edWnd) return false;
+    lstrcpynW(g_evPath, path, MAX_PATH);
+    lstrcpynW(g_evName, name.c_str(), 128);
+    WIN32_FILE_ATTRIBUTE_DATA fa = {};
+    g_evBytes = 0;
+    g_evCreated = m.created;
+    if (GetFileAttributesExW(path, GetFileExInfoStandard, &fa)) {
+        g_evBytes = ((ULONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+        if (!g_evCreated) g_evCreated = ((ULONGLONG)fa.ftLastWriteTime.dwHighDateTime << 32) | fa.ftLastWriteTime.dwLowDateTime;
+    }
+    g_evDur = dur / 1e7;
+    g_evW = (int)poster->GetWidth();
+    g_evH = (int)poster->GetHeight();
+    EvProbeFile(path);
+    g_evPos = 0;
+    g_evTlZoom = 1.0;
+    g_evTlOff = 0;
+    g_evRate = 1.0;
+    g_edTool = EdTool::Select;            // CAPS-78: у відео поки лише «Вибір» (позначки — CAPS-80)
+    g_edVideo = true;
+    wchar_t cap[160];
+    wsprintfW(cap, L"%s — %s", S(Str::EdTitleVideo), kAppName);
+    SetWindowTextW(g_edWnd, cap);
+    if (!EvStart(path)) {
+        EvClose();
+        MessageBoxW(g_edWnd, S(Str::VidErrOpen), kAppName, MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    EdLayout(g_edWnd);
+    InvalidateRect(g_edWnd, nullptr, TRUE);
+    return true;
+}
+
+// Поточний кадр у повному розмірі — для «Копіювати» і «Відкрити кадр як знімок».
+Gdiplus::Bitmap* EvGrabFrame()
+{
+    if (!g_evMe || !g_evReady || g_evW <= 0 || g_evH <= 0) return nullptr;
+    D3D11_TEXTURE2D_DESC d = {};
+    d.Width = (UINT)g_evW; d.Height = (UINT)g_evH; d.MipLevels = 1; d.ArraySize = 1;
+    d.Format = DXGI_FORMAT_B8G8R8A8_UNORM; d.SampleDesc.Count = 1;
+    d.BindFlags = D3D11_BIND_RENDER_TARGET;
+    ID3D11Texture2D* tex = nullptr;
+    ID3D11Texture2D* stage = nullptr;
+    Gdiplus::Bitmap* bmp = nullptr;
+    if (SUCCEEDED(g_evDev->CreateTexture2D(&d, nullptr, &tex)) && tex) {
+        d.BindFlags = 0; d.Usage = D3D11_USAGE_STAGING; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (SUCCEEDED(g_evDev->CreateTexture2D(&d, nullptr, &stage)) && stage) {
+            MFVideoNormalizedRect src = { 0, 0, 1, 1 };
+            RECT dst = { 0, 0, g_evW, g_evH };
+            MFARGB border = { 0, 0, 0, 255 };
+            if (SUCCEEDED(g_evMe->TransferVideoFrame(tex, &src, &dst, &border))) {
+                g_evCtx->CopyResource(stage, tex);
+                D3D11_MAPPED_SUBRESOURCE mp = {};
+                if (SUCCEEDED(g_evCtx->Map(stage, 0, D3D11_MAP_READ, 0, &mp))) {
+                    bmp = new Gdiplus::Bitmap(g_evW, g_evH, PixelFormat32bppPARGB);
+                    Gdiplus::BitmapData bd = {};
+                    Gdiplus::Rect all(0, 0, g_evW, g_evH);
+                    if (bmp->LockBits(&all, Gdiplus::ImageLockModeWrite, PixelFormat32bppPARGB, &bd) == Gdiplus::Ok) {
+                        for (int y = 0; y < g_evH; ++y) {
+                            const DWORD* s = (const DWORD*)((const BYTE*)mp.pData + (size_t)y * mp.RowPitch);
+                            DWORD* o = (DWORD*)((BYTE*)bd.Scan0 + (size_t)y * bd.Stride);
+                            for (int x = 0; x < g_evW; ++x) o[x] = s[x] | 0xFF000000u;
+                        }
+                        bmp->UnlockBits(&bd);
+                    } else { delete bmp; bmp = nullptr; }
+                    g_evCtx->Unmap(stage, 0);
+                }
+            }
+            stage->Release();
+        }
+        tex->Release();
+    }
+    return bmp;
+}
+
+void EvCopyFrame(HWND hwnd)
+{
+    Gdiplus::Bitmap* b = EvGrabFrame();
+    if (!b) return;
+    const bool ok = EdClipPut(b, hwnd);
+    delete b;
+    EdToast(ok ? Str::VidFrameCopied : Str::EdErrCopy);
+}
+
+// Документ у редакторі один: кадр ЗАМІНЮЄ відео — тому спершу питаємо
+// (рішення власника 24.09). Саме відео лишається у файлі й бібліотеці.
+void EvFrameToShot(HWND hwnd)
+{
+    Gdiplus::Bitmap* b = EvGrabFrame();
+    if (!b) return;
+    if (MessageBoxW(hwnd, S(Str::VidAskFrameShot), kAppName, MB_OKCANCEL | MB_ICONINFORMATION) != IDOK) { delete b; return; }
+    wchar_t t[32], label[200];
+    EvFmtTime(g_evPos, t, 32);
+    swprintf(label, 200, S(Str::VidFrameLabel), g_evName, t);
+    EdOpenBitmap((HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), b, label, false, false);   // закриває відео
+}
+
+// ---- таймлайн ---------------------------------------------------------------
+
+double EvVisDur() { return g_evTlZoom > 0 ? g_evDur / g_evTlZoom : g_evDur; }
+
+double EvXToTime(int x)
+{
+    const int w = g_evRcFilm.right - g_evRcFilm.left;
+    if (w <= 0) return 0;
+    double t = g_evTlOff + (double)(x - g_evRcFilm.left) * EvVisDur() / w;
+    if (t < 0) t = 0;
+    if (t > g_evDur) t = g_evDur;
+    return t;
+}
+
+int EvTimeToX(double t)
+{
+    const int w = g_evRcFilm.right - g_evRcFilm.left;
+    const double vis = EvVisDur();
+    return g_evRcFilm.left + (vis > 0 ? (int)((t - g_evTlOff) * w / vis + 0.5) : 0);
+}
+
+// Колесо над таймлайном — масштаб навколо курсора; Shift або горизонтальне —
+// прокрутка. Найближче — 12 точок на кадр: далі кадри вже не розрізнити.
+void EvWheel(POINT pt, int delta, bool pan)
+{
+    if (g_evDur <= 0) return;
+    const int w = g_evRcFilm.right - g_evRcFilm.left;
+    if (w <= 0) return;
+    if (pan) {
+        g_evTlOff -= EvVisDur() * 0.1 * delta / WHEEL_DELTA;
+    } else {
+        const double anchor = EvXToTime(pt.x);
+        double zmax = g_evDur * g_evFps * EdPx(12) / w;
+        if (zmax < 1) zmax = 1;
+        double z = g_evTlZoom * pow(1.25, (double)delta / WHEEL_DELTA);
+        if (z < 1) z = 1;
+        if (z > zmax) z = zmax;
+        g_evTlZoom = z;
+        g_evTlOff = anchor - (double)(pt.x - g_evRcFilm.left) * EvVisDur() / w;
+    }
+    const double vis = EvVisDur();
+    if (g_evTlOff > g_evDur - vis) g_evTlOff = g_evDur - vis;
+    if (g_evTlOff < 0) g_evTlOff = 0;
+    EvInvalidateInfo();
+}
+
+// Прев'ю під курсором: найближча мініатюра й точний час. Окреме вікно — щоб
+// стояти над полотном, де лежить вікно кадру.
+LRESULT CALLBACK EvHoverProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH b = CreateSolidBrush(RGB(28, 28, 32));
+        FillRect(dc, &rc, b);
+        DeleteObject(b);
+        const int tw = rc.right - EdPx(8), th = tw * (g_evH > 0 ? g_evH : 9) / (g_evW > 0 ? g_evW : 16);
+        const int n = (int)g_evThumbs.size();
+        if (n > 0 && g_evDur > 0) {
+            int i = (int)(g_evHoverT / g_evDur * n);
+            if (i >= n) i = n - 1;
+            if (i < 0) i = 0;
+            if (g_evThumbs[(size_t)i]) {
+                Gdiplus::Graphics g(dc);
+                g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+                Gdiplus::Bitmap* tb = g_evThumbs[(size_t)i];
+                g.DrawImage(tb, Gdiplus::Rect(EdPx(4), EdPx(4), tw, th), 0, 0, (INT)tb->GetWidth(), (INT)tb->GetHeight(), Gdiplus::UnitPixel);
+            }
+        }
+        wchar_t t[32];
+        EvFmtTime(g_evHoverT, t, 32);
+        RECT tr = { 0, EdPx(4) + th, rc.right, rc.bottom };
+        EdDrawText(dc, tr, t, g_edFontBold, RGB(255, 255, 255), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    if (msg == WM_NCHITTEST) return HTTRANSPARENT;
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void EvHoverShow(HWND hwnd, POINT pt)
+{
+    static bool reg = false;
+    if (!reg) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = EvHoverProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"lilhelpers_evhover";
+        RegisterClassW(&wc);
+        reg = true;
+    }
+    g_evHoverT = EvXToTime(pt.x);
+    const int w = EdPx(168), th = (w - EdPx(8)) * (g_evH > 0 ? g_evH : 9) / (g_evW > 0 ? g_evW : 16);
+    const int h = EdPx(4) + th + EdPx(24);
+    POINT sp = { pt.x - w / 2, g_evRcRuler.top - h - EdPx(8) };
+    ClientToScreen(hwnd, &sp);
+    if (!g_evHover)
+        g_evHover = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"lilhelpers_evhover", L"",
+                                    WS_POPUP, sp.x, sp.y, w, h, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!g_evHover) return;
+    SetWindowPos(g_evHover, nullptr, sp.x, sp.y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    InvalidateRect(g_evHover, nullptr, FALSE);
+}
+
+void EvHoverHide()
+{
+    if (g_evHover) { DestroyWindow(g_evHover); g_evHover = nullptr; }
+    g_evHoverT = -1;
+}
+
+// Розкладка режиму: таймлайн під полотном, кнопки смуги й панелі. Кличеться
+// з EdLayout ПІСЛЯ того, як полотну вже відрізано місце під таймлайн.
+void EvLayout(HWND hwnd)
+{
+    if (!g_edVideo) return;
+    // вікно кадру — рівно на полотні; бібліотека його ховає
+    if (g_evView) {
+        const bool show = g_evReady && !g_edLibOpen;
+        const RECT& c = g_edRcCanvas;
+        RECT cur;
+        GetWindowRect(g_evView, &cur);
+        MapWindowPoints(nullptr, hwnd, (POINT*)&cur, 2);
+        if (!EqualRect(&cur, &c))
+            SetWindowPos(g_evView, nullptr, c.left, c.top, c.right - c.left, c.bottom - c.top, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (show != (IsWindowVisible(g_evView) != FALSE)) ShowWindow(g_evView, show ? SW_SHOWNA : SW_HIDE);
+    }
+    if (g_edLibOpen) return;
+
+    // таймлайн: ряд кнопок, лінійка, стрічка кадрів
+    const RECT& tl = g_edRcTimeline;
+    const int row = tl.top + EdPx(6), rh = EdPx(36), cy = row + rh / 2;
+    int x = tl.left + EdPx(12);
+    for (int i = 0; i < 6; ++i) {
+        const int s = (i == 3) ? EdPx(36) : EdPx(30);
+        RECT r = EdPill(x, cy, s, s);
+        EdAdd(r, EdHit::VidBtn, i);
+        x = r.right + EdPx(i == 2 ? 6 : 4);
+        if (i == 3) x += EdPx(2);
+    }
+    g_evRcRuler = { tl.left + EdPx(16), row + rh + EdPx(4), tl.right - EdPx(16), row + rh + EdPx(18) };
+    g_evRcFilm  = { g_evRcRuler.left, g_evRcRuler.bottom + EdPx(4), g_evRcRuler.right, g_evRcRuler.bottom + EdPx(60) };
+    RECT track = { g_evRcRuler.left - EdPx(6), g_evRcRuler.top - EdPx(4), g_evRcRuler.right + EdPx(6), g_evRcFilm.bottom + EdPx(4) };
+    EdAdd(track, EdHit::VidTrack, 0);
+
+    // смуга: «Відтворення», швидкість, повтор, звук
+    {
+        HDC dc = GetDC(hwnd);
+        const int scy = (g_edRcStrip.top + g_edRcStrip.bottom) / 2;
+        int sx = EdPx(14);
+        const int cw = EdTextWidth(dc, S(Str::VidPlayback), g_edFontBold) + EdPx(20) + EdPx(22);
+        g_evRcChip = EdPill(sx, scy, cw, EdPx(26));
+        sx = g_evRcChip.right + EdPx(14) + EdTextWidth(dc, S(Str::VidSpeedL), g_edFont) + EdPx(10);
+        for (int i = 0; i < 3; ++i) {
+            RECT r = EdPill(sx, scy, EdPx(46), EdPx(28));
+            EdAdd(r, EdHit::VidSpeed, i);
+            sx = r.right;
+        }
+        sx += EdPx(20);
+        RECT rl = EdPill(sx, scy, EdPx(32), EdPx(28));
+        EdAdd(rl, EdHit::VidLoop, 0);
+        RECT rm = EdPill(rl.right + EdPx(4), scy, EdPx(32), EdPx(28));
+        EdAdd(rm, EdHit::VidMute, 0);
+        ReleaseDC(hwnd, dc);
+    }
+
+    // права панель: відомості, «Відкрити кадр як знімок», унизу «Показати в Провіднику»
+    if (g_edPanelOpen) {
+        const int px = g_edRcPanel.left + EdPx(14), pr = g_edRcPanel.right - EdPx(14);
+        int y = g_edRcPanel.top + EdPx(14) + EdPx(18) + EdPx(12);   // заголовок «Відео»
+        y += EdPx(22) + EdPx(20) + EdPx(10);                         // назва, «Записано»
+        g_evRcFacts = { px, y, pr, y + EdPx(6 * 24 + 16) };
+        y = g_evRcFacts.bottom + EdPx(20) + EdPx(22);                // «Поточний кадр»
+        RECT fb = { px, y, pr, y + EdPx(32) };
+        EdAdd(fb, EdHit::VidFrameShot, 0);
+        RECT sb = { px, g_edRcPanel.bottom - EdPx(14) - EdPx(32), pr, g_edRcPanel.bottom - EdPx(14) };
+        EdAdd(sb, EdHit::VidShowFile, 0);
+    }
+}
+
+// Гліфи транспорту — фігурами, тими самими пропорціями, що й решта піктограм.
+void EvGlyph(Gdiplus::Graphics& g, int kind, const RECT& r, Gdiplus::Color c)
+{
+    const float cx = (r.left + r.right) / 2.0f, cy = (r.top + r.bottom) / 2.0f;
+    const float s = (float)EdPx(7);
+    Gdiplus::SolidBrush br(c);
+    Gdiplus::Pen pen(c, (float)EdPx(2));
+    auto tri = [&](float x0, float dir, float half) {        // трикутник вістрям у dir
+        Gdiplus::PointF p[3] = { { x0, cy - half }, { x0, cy + half }, { x0 + dir * half * 1.6f, cy } };
+        g.FillPolygon(&br, p, 3);
+    };
+    switch (kind) {
+    case 0: g.DrawLine(&pen, cx - s, cy - s, cx - s, cy + s); tri(cx + s * 0.9f, -1, s); break;       // на початок
+    case 1: tri(cx + s * 0.4f, -1, s * 0.8f); g.DrawLine(&pen, cx - s * 0.6f, cy - s, cx - s * 0.6f, cy + s); break;  // кадр назад
+    case 2: tri(cx + s * 0.8f, -1, s); break;                                                          // назад
+    case 3: tri(cx - s * 0.6f, 1, s); break;                                                           // уперед
+    case 4: tri(cx - s * 0.4f, 1, s * 0.8f); g.DrawLine(&pen, cx + s * 0.6f, cy - s, cx + s * 0.6f, cy + s); break;   // кадр уперед
+    case 5: g.DrawLine(&pen, cx + s, cy - s, cx + s, cy + s); tri(cx - s * 0.9f, 1, s); break;         // у кінець
+    case 6: {                                                                                         // пауза
+        Gdiplus::RectF a(cx - s * 0.75f, cy - s, s * 0.5f, s * 2), b(cx + s * 0.25f, cy - s, s * 0.5f, s * 2);
+        g.FillRectangle(&br, a); g.FillRectangle(&br, b); break;
+    }
+    case 7: {                                                                                         // повтор
+        Gdiplus::Pen p2(c, (float)EdPx(2) * 0.8f);
+        g.DrawArc(&p2, cx - s, cy - s * 0.8f, s * 2, s * 1.6f, 200.0f, 300.0f);
+        tri(cx + s * 0.55f, 1, s * 0.45f);
+        break;
+    }
+    default: {                                                                                        // звук
+        Gdiplus::PointF p[6] = { { cx - s, cy - s * 0.4f }, { cx - s * 0.4f, cy - s * 0.4f }, { cx + s * 0.3f, cy - s },
+                                 { cx + s * 0.3f, cy + s }, { cx - s * 0.4f, cy + s * 0.4f }, { cx - s, cy + s * 0.4f } };
+        g.FillPolygon(&br, p, 6);
+        if (kind == 9) g.DrawLine(&pen, cx - s, cy - s, cx + s, cy + s);                            // вимкнено
+        else g.DrawArc(&pen, cx, cy - s * 0.7f, s * 0.9f, s * 1.4f, -60.0f, 120.0f);
+        break;
+    }
+    }
+}
+
+void EvPaintTimeline(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
+{
+    if (!g_edVideo || g_edLibOpen) return;
+    const RECT& tl = g_edRcTimeline;
+    HBRUSH b = CreateSolidBrush(g_edDark ? RGB(38, 38, 42) : RGB(250, 250, 250));
+    FillRect(dc, &tl, b);
+    DeleteObject(b);
+    RECT line = { tl.left, tl.top, tl.right, tl.top + 1 };
+    b = CreateSolidBrush(t.border);
+    FillRect(dc, &line, b);
+    DeleteObject(b);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+
+    // кнопки
+    for (int i = 0; i < 6; ++i) {
+        const RECT* r = EdRegionRect(EdHit::VidBtn, i);
+        if (!r) continue;
+        const bool hot = (g_edHotWhat == EdHit::VidBtn && g_edHotIdx == i);
+        if (i == 3) {
+            Gdiplus::Color f = EdC(t.accent, hot ? 225 : 255);
+            Gdiplus::SolidBrush fb(f);
+            g.FillEllipse(&fb, (float)r->left, (float)r->top, (float)(r->right - r->left), (float)(r->bottom - r->top));
+            EvGlyph(g, g_evPlaying ? 6 : 3, *r, Gdiplus::Color(255, 255, 255, 255));
+        } else {
+            const bool on = (i == 2 && g_evRev);
+            EdPaintButton(g, *r, t, on, hot, !on);
+            const int kind = (i == 0) ? 0 : (i == 1) ? 1 : (i == 2) ? (g_evRev ? 6 : 2) : (i == 4) ? 4 : 5;
+            EvGlyph(g, kind, *r, EdC(on ? t.accent : t.text));
+        }
+    }
+    // час
+    wchar_t now[32], tot[40];
+    EvFmtTime(g_evPos, now, 32);
+    wchar_t d[32];
+    EvFmtTime(g_evDur, d, 32);
+    swprintf(tot, 40, L"/ %s", d);
+    const RECT* last = EdRegionRect(EdHit::VidBtn, 5);
+    int x = last ? last->right + EdPx(14) : tl.left + EdPx(260);
+    const int rowTop = tl.top + EdPx(6), rowBot = rowTop + EdPx(36);
+    RECT tn = { x, rowTop, x + EdTextWidth(dc, L"00:00.00", g_edFontBold) + EdPx(4), rowBot };
+    EdDrawText(dc, tn, now, g_edFontBold, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    RECT tt = { tn.right + EdPx(4), rowTop, tn.right + EdPx(110), rowBot };
+    EdDrawText(dc, tt, tot, g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    RECT hint = { tt.right + EdPx(10), rowTop, tl.right - EdPx(16), rowBot };
+    EdDrawText(dc, hint, S(Str::VidTlHint), g_edFontSmall, t.text2, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    // лінійка: крок підписів — щоб між ними було не менше 70 точок
+    const double vis = EvVisDur();
+    const int fw = g_evRcFilm.right - g_evRcFilm.left;
+    if (vis > 0 && fw > 0) {
+        const double steps[] = { 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600 };
+        double step = steps[14];
+        for (double s : steps) if (s * fw / vis >= EdPx(70)) { step = s; break; }
+        const double minor = step / 5;
+        Gdiplus::Pen tick(EdC(t.text2, 150), 1.0f), tickMaj(EdC(t.text2), 1.0f);
+        for (double v = floor(g_evTlOff / minor) * minor; v <= g_evTlOff + vis + 1e-9; v += minor) {
+            if (v < -1e-9) continue;
+            const int tx = EvTimeToX(v);
+            if (tx < g_evRcRuler.left - 1 || tx > g_evRcRuler.right + 1) continue;
+            const bool major = fabs(v / step - floor(v / step + 0.5)) < 1e-6;
+            g.DrawLine(major ? &tickMaj : &tick, (float)tx, (float)g_evRcRuler.bottom - (major ? EdPx(8) : EdPx(4)),
+                       (float)tx, (float)g_evRcRuler.bottom);
+            if (major) {
+                wchar_t lb[24];
+                const int sec = (int)(v + 1e-6);
+                if (step < 1) swprintf(lb, 24, L"%d:%02d.%d", sec / 60, sec % 60, (int)((v - sec) * 10 + 0.5));
+                else          swprintf(lb, 24, L"%d:%02d", sec / 60, sec % 60);
+                RECT lr = { tx + EdPx(3), g_evRcRuler.top - EdPx(2), tx + EdPx(60), g_evRcRuler.bottom - EdPx(4) };
+                EdDrawText(dc, lr, lb, g_edFontSmall, t.text2, DT_LEFT | DT_TOP | DT_SINGLELINE);
+            }
+        }
+    }
+
+    // стрічка кадрів: слот — мініатюра найближчого до його середини моменту
+    {
+        const RECT& f = g_evRcFilm;
+        Gdiplus::SolidBrush base(g_edDark ? Gdiplus::Color(255, 26, 26, 29) : Gdiplus::Color(255, 62, 62, 68));
+        g.FillRectangle(&base, (INT)f.left, (INT)f.top, (INT)(f.right - f.left), (INT)(f.bottom - f.top));
+        g.SetClip(Gdiplus::Rect(f.left, f.top, f.right - f.left, f.bottom - f.top));
+        const int n = (int)g_evThumbs.size();
+        const int sw = g_evThumbW > 0 ? g_evThumbW : EdPx(96);
+        g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBilinear);
+        for (int sx = f.left; sx < f.right && n > 0 && g_evDur > 0; sx += sw) {
+            const double tc = EvXToTime(sx + sw / 2);
+            int i = (int)(tc / g_evDur * n);
+            if (i >= n) i = n - 1;
+            if (i < 0) i = 0;
+            if (Gdiplus::Bitmap* tb = g_evThumbs[(size_t)i])
+                g.DrawImage(tb, Gdiplus::Rect(sx, f.top, sw, f.bottom - f.top), 0, 0, (INT)tb->GetWidth(), (INT)tb->GetHeight(), Gdiplus::UnitPixel);
+            Gdiplus::Pen sep(Gdiplus::Color(90, 0, 0, 0), 1.0f);
+            g.DrawLine(&sep, (INT)(sx + sw - 1), (INT)f.top, (INT)(sx + sw - 1), (INT)f.bottom);
+        }
+        g.ResetClip();
+    }
+    // покажчик позиції
+    const int px = EvTimeToX(g_evPos);
+    if (px >= g_evRcRuler.left - 1 && px <= g_evRcRuler.right + 1) {
+        Gdiplus::SolidBrush ab(EdC(t.accent));
+        g.FillRectangle(&ab, (INT)(px - 1), (INT)g_evRcRuler.top, (INT)2, (INT)(g_evRcFilm.bottom - g_evRcRuler.top + EdPx(2)));
+        const int k = EdPx(14);
+        Gdiplus::Pen ring(EdC(g_edDark ? RGB(38, 38, 42) : RGB(250, 250, 250)), (float)EdPx(2));
+        g.FillEllipse(&ab, (INT)(px - k / 2), (INT)(g_evRcRuler.top - k / 2), (INT)k, (INT)k);
+        g.DrawEllipse(&ring, (INT)(px - k / 2), (INT)(g_evRcRuler.top - k / 2), (INT)k, (INT)k);
+    }
+}
+
+void EvPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
+{
+    // чіп — як назва інструмента в режимі знімка
+    Gdiplus::Color cf = EdC(t.accentBg);
+    EdFillRound(g, g_evRcChip, (float)EdPx(13), &cf, nullptr);
+    RECT ci = g_evRcChip;
+    ci.left += EdPx(10);
+    RECT gi = { ci.left, (ci.top + ci.bottom) / 2 - EdPx(8), ci.left + EdPx(16), (ci.top + ci.bottom) / 2 + EdPx(8) };
+    EvGlyph(g, 3, gi, EdC(t.accent));
+    ci.left = gi.right + EdPx(6);
+    EdDrawText(dc, ci, S(Str::VidPlayback), g_edFontBold, t.accent, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    const RECT* s0 = EdRegionRect(EdHit::VidSpeed, 0);
+    if (s0) {
+        RECT lr = { g_evRcChip.right + EdPx(14), g_edRcStrip.top, s0->left - EdPx(8), g_edRcStrip.bottom };
+        EdDrawText(dc, lr, S(Str::VidSpeedL), g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+    const wchar_t* sp[3] = { L"0,5×", L"1×", L"2×" };
+    for (int i = 0; i < 3; ++i) {
+        const RECT* r = EdRegionRect(EdHit::VidSpeed, i);
+        if (!r) continue;
+        const bool on = (fabs(g_evRate - kEvRates[i]) < 1e-6);
+        EdPaintButton(g, *r, t, on, g_edHotWhat == EdHit::VidSpeed && g_edHotIdx == i, !on);
+        EdDrawText(dc, *r, sp[i], on ? g_edFontBold : g_edFont, on ? t.accent : t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    if (const RECT* r = EdRegionRect(EdHit::VidLoop, 0)) {
+        EdPaintButton(g, *r, t, g_evLoop, g_edHotWhat == EdHit::VidLoop, !g_evLoop);
+        EvGlyph(g, 7, *r, EdC(g_evLoop ? t.accent : t.text));
+    }
+    if (const RECT* r = EdRegionRect(EdHit::VidMute, 0)) {
+        const bool off = !g_evAudio;
+        EdPaintButton(g, *r, t, false, !off && g_edHotWhat == EdHit::VidMute, true);
+        EvGlyph(g, (g_evMuted || off) ? 9 : 8, *r, EdC(off ? t.text2 : t.text, off ? 140 : 255));
+        if (off) {
+            RECT nr = { r->right + EdPx(8), g_edRcStrip.top, r->right + EdPx(160), g_edRcStrip.bottom };
+            EdDrawText(dc, nr, S(Str::VidNoAudio), g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
+    }
+}
+
+void EvPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
+{
+    const int x = g_edRcPanel.left + EdPx(14), xr = g_edRcPanel.right - EdPx(14);
+    int y = g_edRcPanel.top + EdPx(14);
+    RECT h = { x, y, g_edRcPanel.right - EdPx(44), y + EdPx(18) };
+    EdDrawText(dc, h, S(Str::VidSecVideo), g_edFontSmall, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    y = h.bottom + EdPx(12);
+    RECT nm = { x, y, xr, y + EdPx(22) };
+    EdDrawText(dc, nm, g_evName, g_edFontBold, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    y = nm.bottom;
+    if (g_evCreated) {
+        wchar_t when[32], buf[96];
+        EdLibWhen(g_evCreated, when, 32, true);
+        swprintf(buf, 96, L"%s: %s", S(Str::EdLibFactRec), when);
+        RECT wr = { x, y, xr, y + EdPx(20) };
+        EdDrawText(dc, wr, buf, g_edFontSmall, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+    // відомості
+    Gdiplus::Color ff = EdC(g_edDark ? t.surface : RGB(255, 255, 255)), fb = EdC(t.border);
+    EdFillRound(g, g_evRcFacts, (float)EdPx(6), &ff, &fb);
+    wchar_t v[64];
+    int ry = g_evRcFacts.top + EdPx(8);
+    auto row = [&](Str label, const wchar_t* val) {
+        RECT lr = { g_evRcFacts.left + EdPx(12), ry, g_evRcFacts.left + EdPx(110), ry + EdPx(24) };
+        RECT vr = { g_evRcFacts.left + EdPx(110), ry, g_evRcFacts.right - EdPx(12), ry + EdPx(24) };
+        EdDrawText(dc, lr, S(label), g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        EdDrawText(dc, vr, val, g_edFont, t.text, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        ry += EdPx(24);
+    };
+    swprintf(v, 64, L"%d × %d", g_evW, g_evH); row(Str::EdLibFactSize, v);
+    if (fabs(g_evFps - floor(g_evFps + 0.5)) < 0.01) swprintf(v, 64, L"%d", (int)(g_evFps + 0.5));
+    else swprintf(v, 64, L"%.2f", g_evFps);
+    row(Str::VidFactFps, v);
+    EvFmtTime(g_evDur, v, 64); row(Str::EdLibFactDur, v);
+    swprintf(v, 64, L"%d", EvFrames()); row(Str::VidFactFrames, v);
+    row(Str::VidFactAudio, S(g_evAudio ? Str::VidAudioYes : Str::VidAudioNo));
+    if (g_evBytes >= 1024 * 1024) { const int t10 = (int)(g_evBytes * 10 / (1024 * 1024)); swprintf(v, 64, L"%d,%d МБ", t10 / 10, t10 % 10); }
+    else swprintf(v, 64, L"%d КБ", (int)((g_evBytes + 1023) / 1024));
+    row(Str::EdLibFactFile, v);
+    // поточний кадр
+    RECT cap = { x, g_evRcFacts.bottom + EdPx(20), xr, g_evRcFacts.bottom + EdPx(38) };
+    EdDrawText(dc, cap, S(Str::VidSecFrame), g_edFontSmall, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    if (const RECT* r = EdRegionRect(EdHit::VidFrameShot, 0)) {
+        EdPaintButton(g, *r, t, false, g_edHotWhat == EdHit::VidFrameShot, false);
+        EdDrawText(dc, *r, S(Str::VidFrameShot), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    if (const RECT* r = EdRegionRect(EdHit::VidShowFile, 0)) {
+        EdPaintButton(g, *r, t, false, g_edHotWhat == EdHit::VidShowFile, false);
+        EdDrawText(dc, *r, S(Str::EdLibShowBtn), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
+// ---- введення ---------------------------------------------------------------
+
+// Клік по ділянці в режимі відео. true — оброблено (або свідомо проігноровано:
+// інструменти, крім «Вибору», і «Зберегти» у відео поки не працюють).
+bool EvClick(HWND hwnd, const EdRegion* r, POINT pt)
+{
+    switch (r->what) {
+    case EdHit::VidBtn:
+        switch (r->idx) {
+        case 0: EvJump(0); break;
+        case 1: EvStep(-1); break;
+        case 2: EvToggleReverse(); break;
+        case 3: EvTogglePlay(); break;
+        case 4: EvStep(1); break;
+        default: EvJump(g_evDur > 0 ? (EvFrames() - 1 + 0.25) / g_evFps : 0); break;
+        }
+        return true;
+    case EdHit::VidTrack:
+        g_evScrub = true;
+        SetCapture(hwnd);
+        if (g_evPlaying || g_evRev) EvPause();
+        EvSeek(EvXToTime(pt.x));
+        EvHoverShow(hwnd, pt);
+        EvInvalidateInfo();
+        return true;
+    case EdHit::VidSpeed:
+        g_evRate = kEvRates[r->idx < 0 ? 0 : (r->idx > 2 ? 2 : r->idx)];
+        if (g_evMe) { g_evMe->SetDefaultPlaybackRate(g_evRate); if (g_evPlaying) g_evMe->SetPlaybackRate(g_evRate); }
+        if (g_evRev) { g_evRevPos0 = g_evPos; g_evRevT0 = GetTickCount64(); }
+        InvalidateRect(hwnd, &g_edRcStrip, FALSE);
+        return true;
+    case EdHit::VidLoop:
+        g_evLoop = !g_evLoop;
+        if (g_evMe) g_evMe->SetLoop(g_evLoop ? TRUE : FALSE);
+        InvalidateRect(hwnd, &g_edRcStrip, FALSE);
+        return true;
+    case EdHit::VidMute:
+        if (!g_evAudio) return true;
+        g_evMuted = !g_evMuted;
+        if (g_evMe) g_evMe->SetMuted(g_evMuted ? TRUE : FALSE);
+        InvalidateRect(hwnd, &g_edRcStrip, FALSE);
+        return true;
+    case EdHit::VidFrameShot: EvFrameToShot(hwnd); return true;
+    case EdHit::VidShowFile: {
+        wchar_t args[MAX_PATH + 16];
+        swprintf(args, MAX_PATH + 16, L"/select,\"%s\"", g_evPath);
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", args, nullptr, SW_SHOWNORMAL);
+        return true;
+    }
+    case EdHit::Copy: EvCopyFrame(hwnd); return true;
+    case EdHit::Tool: return r->idx != 0;         // «Вибір» — як завжди; решта до CAPS-80 сірі
+    case EdHit::InsertImg:
+    case EdHit::Store:
+    case EdHit::SaveMenu:
+    case EdHit::Undo:
+    case EdHit::Redo:
+    case EdHit::Canvas:
+        return true;
+    default: return false;
+    }
+}
+
+// Рух миші: тягнуть покажчик — перемотка; над стрічкою — прев'ю під курсором.
+bool EvMouseMove(HWND hwnd, POINT pt)
+{
+    if (g_evScrub) {
+        EvSeek(EvXToTime(pt.x));
+        EvHoverShow(hwnd, pt);
+        EvInvalidateInfo();
+        return true;
+    }
+    RECT tr = { g_evRcRuler.left, g_evRcRuler.top - EdPx(4), g_evRcRuler.right, g_evRcFilm.bottom };
+    if (!g_edLibOpen && PtInRect(&tr, pt)) EvHoverShow(hwnd, pt);
+    else if (g_evHover) EvHoverHide();
+    return false;
+}
+
+void EvScrubEnd()
+{
+    g_evScrub = false;
+    ReleaseCapture();
+    EvHoverHide();
+}
+
+// Клавіші режиму. Space — відтворення; ←/→ — кадр (з Shift — секунда);
+// Home/End; J/K/L — назад / стоп / уперед, як у відеоредакторах; Ctrl+C — кадр.
+// Решта (літери інструментів, вставка, скасування) у відео поки нічого не робить.
+bool EvKey(HWND hwnd, WPARAM vk, LPARAM lp)
+{
+    const bool ctrl = GetKeyState(VK_CONTROL) < 0;
+    const bool shift = GetKeyState(VK_SHIFT) < 0 || (lp & 0x0200);
+    switch (vk) {
+    case VK_SPACE: EvTogglePlay(); return true;
+    case VK_LEFT:  if (shift) EvJump(g_evPos - 1.0); else EvStep(-1); return true;
+    case VK_RIGHT: if (shift) EvJump(g_evPos + 1.0); else EvStep(1); return true;
+    case VK_HOME:  EvJump(0); return true;
+    case VK_END:   EvJump(g_evDur > 0 ? (EvFrames() - 1 + 0.25) / g_evFps : 0); return true;
+    case 'J': if (!ctrl) { if (!g_evRev) EvToggleReverse(); return true; } break;
+    case 'K': if (!ctrl) { EvPause(); return true; } break;
+    case 'L': if (!ctrl) { if (!g_evPlaying) EvPlay(); return true; } break;
+    case 'C': if (ctrl) { EvCopyFrame(hwnd); return true; } break;
+    case VK_ESCAPE: return false;                 // закрити редактор — як завжди
+    case 'O': if (ctrl) return false; break;      // відкрити інше
+    default: break;
+    }
+    return vk != VK_F1 && vk != VK_TAB;
+}
+
+
+void EvThumbReady(LPARAM lp)
+{
+    EvThumbMsg* m = (EvThumbMsg*)lp;
+    if (!m) return;
+    if (m->gen == InterlockedCompareExchange(&g_evThumbGen, 0, 0) && m->idx >= 0 && m->idx < (int)g_evThumbs.size()) {
+        delete g_evThumbs[(size_t)m->idx];
+        g_evThumbs[(size_t)m->idx] = m->bmp;
+        if (g_edWnd) InvalidateRect(g_edWnd, &g_edRcTimeline, FALSE);
+    } else {
+        delete m->bmp;                      // мініатюра від документа, якого вже нема
+    }
+    delete m;
+}
+
+void EvStatusText(wchar_t* buf, int n)
+{
+    swprintf(buf, n, S(Str::VidFrameOf), EvFrames() > 0 ? EvFrameIdx(g_evPos) + 1 : 0, EvFrames());
+}
+
 void EdLibScan()
 {
     EdLibFree();
@@ -19508,9 +20894,13 @@ void EdLibOpenSel(HWND hwnd)
 {
     if (g_edLibSel < 0 || g_edLibSel >= (int)g_edLib.size()) return;
     const std::wstring path = g_edLib[g_edLibSel].path;
-    // CAPS-74: відео — системним програвачем (редактора відео ще немає, CAPS-78);
-    // бібліотека лишається відкритою.
-    if (g_edLib[g_edLibSel].video) { VidOpenFile(path.c_str()); return; }
+    // CAPS-78: відео — у редакторі, режим «Відео» (системний програвач — кнопка поруч).
+    if (g_edLib[g_edLibSel].video) {
+        if (!EdConfirmReplace()) return;
+        EdLibClose(hwnd);
+        EvOpen((HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), path.c_str());
+        return;
+    }
     // Той, що вже відкритий, — просто повертаємось до нього, нічого не перечитуючи.
     if (g_edDocPath[0] && !lstrcmpiW(path.c_str(), g_edDocPath)) { EdLibClose(hwnd); return; }
     if (!EdConfirmReplace()) return;
@@ -20765,18 +22155,24 @@ void VidSrcClose(VidSrc& s)
 HRESULT VidSrcOpen(VidSrc& s, const VidJob* j)
 {
     CapOutput co = {};
-    if (!CapFindOutput(j->mon, &co)) return DXGI_ERROR_NOT_FOUND;
+    // Синтетика (лише тестова збірка) кадрів із монітора не бере — і мусить
+    // працювати навіть тоді, коли моніторів немає зовсім (сеанс відключено).
+    if (!CapFindOutput(j->mon, &co)) {
+        if (!j->synth) return DXGI_ERROR_NOT_FOUND;
+        co = CapOutput{};
+    }
     s.adapter = co.adapter;
     s.output = co.output;
     s.cs = co.cs;
     lstrcpynW(s.device, co.device, 32);
     // Пристрій — на ТОМУ Ж адаптері, що й дублювання, і з відеопідтримкою:
     // інакше MF не віддасть кадр апаратному енкодеру без копії.
-    HRESULT hr = D3D11CreateDevice(s.adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+    const D3D_DRIVER_TYPE drv = s.adapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
+    HRESULT hr = D3D11CreateDevice(s.adapter, drv, nullptr,
                                    D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
                                    nullptr, 0, D3D11_SDK_VERSION, &s.dev, nullptr, &s.ctx);
     if (FAILED(hr))   // деякі драйвери не мають відеопідтримки — тоді кодує процесор
-        hr = D3D11CreateDevice(s.adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        hr = D3D11CreateDevice(s.adapter, drv, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                                nullptr, 0, D3D11_SDK_VERSION, &s.dev, nullptr, &s.ctx);
     if (FAILED(hr)) return hr;
     // MF торкається контексту з власних потоків.
@@ -21376,10 +22772,14 @@ LRESULT CALLBACK VidToastProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         KillTimer(hwnd, 1);
         SetTimer(hwnd, 1, 4000, nullptr);
         return 0;
-    case WM_LBUTTONUP:
-        VidOpenFile(g_vidToastPath);
+    case WM_LBUTTONUP: {
+        // CAPS-78: запис відкривається в редакторі, режим «Відео».
+        wchar_t p[MAX_PATH];
+        lstrcpynW(p, g_vidToastPath, MAX_PATH);
         DestroyWindow(hwnd);
+        EvOpen(GetModuleHandleW(nullptr), p);
         return 0;
+    }
     case WM_RBUTTONUP:
     case WM_TIMER:
         DestroyWindow(hwnd);
