@@ -130,8 +130,10 @@ constexpr int  IDC_MODE_HINT   = 104;
 constexpr int  IDC_PASSTHROUGH      = 105;
 constexpr int  IDC_PASSTHROUGH_HINT = 106;
 constexpr int  IDC_LAYOUT_ENABLE    = 107;  // CAPS-9: «Переключати розкладки з Caps Lock»
+constexpr int  IDC_FWDCAPS          = 108;  // CAPS-13: пересилати Caps Lock у вікно клієнта
 // CAPS-2: вкладка «Курсор»
 constexpr int  IDC_TABS          = 110;
+constexpr int  IDC_PAGE_SB       = 111;  // CAPS-99: смуга прокрутки сторінки вкладки
 constexpr int  IDC_CUR_ENABLE    = 111;
 constexpr int  IDC_CUR_SCALE     = 112;
 constexpr int  IDC_CUR_HOLD      = 113;
@@ -239,6 +241,7 @@ const wchar_t* kTaskName = L"lilhelpers";
 const wchar_t* kRegPath  = L"Software\\lilhelpers";
 const wchar_t* kRegMode  = L"Mode";
 const wchar_t* kRegPassthrough = L"PassthroughRemote";
+const wchar_t* kRegFwdCaps     = L"ForwardCapsRemote";   // CAPS-13
 const wchar_t* kRegLayoutSwitch = L"LayoutSwitch";   // CAPS-9: перемикання розкладок увімкнено (1)
 const wchar_t* kRegWindowTheme  = L"WindowTheme";    // CAPS-8: 0 авто / 1 світла / 2 темна
 const wchar_t* kRegLang         = L"Language";       // CAPS-12: 0 системна / 1 укр / 2 англ
@@ -288,6 +291,10 @@ X(LayPassthrough,     L"Не перехоплювати Caps Lock у вікна�
                       L"Do not intercept Caps Lock in remote and virtual machine windows")             \
 X(LayRemoteList,      L"Remote Desktop, Windows App, VMware, Hyper-V.",                                \
                       L"Remote Desktop, Windows App, VMware, Hyper-V.")                                \
+X(LayFwdCaps,         L"Пересилати Caps Lock у вікно клієнта, не перемикаючи Caps на цій машині",       \
+                      L"Forward Caps Lock to the client window without toggling Caps on this machine") \
+X(LayFwdCapsHint,     L"Вимкніть, якщо в якомусь клієнті Caps Lock перестав доходити до віддаленої машини — тоді клавіша йде як є.", \
+                      L"Turn off if Caps Lock stops reaching the remote machine in some client; the key then passes through as is.") \
 /* вкладка «Курсор» */                                                                                 \
 X(CurEnable,          L"Збільшувати курсор, якщо потрусити мишею",                                     \
                       L"Enlarge the cursor when the mouse is shaken")                                  \
@@ -596,9 +603,11 @@ X(EdSaveAs,           L"Експорт",                       L"Export")       
 X(EdStore,            L"Зберегти",                      L"Save")                                       \
 X(EdImport,           L"Імпорт…",                       L"Import…")                                    \
 X(EdSaveAsDoc,        L"Зберегти як…",                  L"Save as…")                                   \
+X(EdSaveCopyItem,     L"Зберегти копію",                L"Save a copy")                                \
+X(EdCopySuffix,       L" (копія)",                      L" (copy)")                                    \
 X(EdExportItem,       L"Експорт…",                      L"Export…")                                    \
 X(EdTipOpenLib,       L"Відкрити знімок із бібліотеки", L"Open a snapshot from the library")           \
-X(EdTipSaveMore,      L"Експорт у PNG/JPG або файл поза бібліотекою",                                   \
+X(EdTipSaveMore,      L"Експорт у PNG/JPG, файл поза бібліотекою або копія в бібліотеці",              \
                       L"Export to PNG/JPG or a file outside the library")                              \
 X(EdSaveDocTitle,     L"Зберегти знімок із позначками", L"Save snapshot with marks")                   \
 X(EdFmtDoc,           L"Знімок Little Helpers",         L"Little Helpers snapshot")                    \
@@ -1094,11 +1103,13 @@ Mode g_mode = Mode::Hook;
 
 // CAPS-1: не перехоплювати Caps у вікнах віддалених/віртуальних машин.
 volatile bool g_passthrough = true;   // налаштування (чекбокс), збереж. у реєстрі
+volatile bool g_fwdCaps     = true;   // CAPS-13: у remote-вікні Caps не пропускати, а пересилати клієнту
 volatile bool g_inRemote    = false;  // активне вікно — remote/VM (оновлює WinEvent)
 bool  g_interceptionOn = false;       // перехоплення активне (для Hotkey-контексту)
 bool  g_hotkeyActive   = false;       // RegisterHotKey зараз тримається
 HWINEVENTHOOK g_winEvent = nullptr;
 HWND  g_passthroughCheckbox = nullptr;
+HWND  g_fwdCapsCheckbox = nullptr;    // CAPS-13
 
 // CAPS-9: перемикання розкладок — окрема функція, яку можна вимкнути, не чіпаючи
 // автозапуск (він тепер у вкладці «Налаштування»). Вимкнено = Caps Lock звичайний.
@@ -1531,9 +1542,30 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
     if (!g_kbHookCaps)   // хук стоїть заради перегляду, Caps Lock — не наш
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
 
-    // CAPS-1: у вікні віддаленої/віртуальної машини не перехоплюємо — Caps іде
-    // далі, розкладку перемикає гостьова ОС.
+    // CAPS-1: у вікні віддаленої/віртуальної машини не перехоплюємо — розкладку
+    // перемикає гостьова ОС (там свій екземпляр).
     if (g_passthrough && g_inRemote) {
+        // CAPS-13: пропускати клавішу «як є» не можна — хост тоді перемикає ВЛАСНИЙ
+        // Caps Lock (регістр), хоч розкладку перемикає гостьовий екземпляр, який
+        // клавішу з'їдає. Тому фізичну клавішу з'їдаємо тут, а вікну клієнта шлемо
+        // WM_KEYDOWN/WM_KEYUP з тим самим VK і скан-кодом: клієнт пересилає її в
+        // сесію, а стан Caps на хості не міняється. Автоповтор — геть, як і в нас.
+        // Shift+Caps теж їде клієнтові: справжній Caps Lock хоче гостьова машина.
+        if (g_fwdCaps) {
+            const bool down = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
+            if (down && g_capsDown) return 1;
+            g_capsDown = down;
+            GUITHREADINFO gti = { sizeof(gti) };
+            HWND target = nullptr;
+            if (GetGUIThreadInfo(0, &gti)) target = gti.hwndFocus ? gti.hwndFocus : gti.hwndActive;
+            if (!target) target = GetForegroundWindow();
+            if (target) {
+                const UINT sc = k->scanCode ? k->scanCode : 0x3A;
+                const LPARAM lpm = down ? (LPARAM)((sc << 16) | 1) : (LPARAM)((sc << 16) | 0xC0000001u);
+                PostMessageW(target, down ? WM_KEYDOWN : WM_KEYUP, VK_CAPITAL, lpm);
+            }
+            return 1;
+        }
         g_capsDown = false;
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
     }
@@ -3344,6 +3376,7 @@ void WaitForPreviousInstance()
 bool ThemeIsDark();        // CAPS-7, нижче
 void PeekApplyTheme();     // CAPS-16, нижче
 bool IsPageControl(HWND c); // нижче, у розділі вкладок
+void PageScrollRefresh();   // CAPS-99, там само
 
 bool ComputeDark()
 {
@@ -3599,6 +3632,7 @@ void SelectTab(int index)
     ShowGroup(g_pageShots, g_pageShotsN, index == 4);        // CAPS-21
     ShowGroup(g_pageVideo, g_pageVideoN, index == 5);        // CAPS-73
     ShowGroup(g_pageSettings, g_pageSettingsN, index == 6);
+    PageScrollRefresh();                                     // CAPS-99
 }
 
 // CAPS-12: обидві кнопки «Детально» несуть ще й стрілку стану, тож їхній підпис
@@ -3614,15 +3648,184 @@ void ToggleAdvanced()
     g_advVisible = !g_advVisible;
     UpdateAdvButtons();
     ShowGroup(g_advCtrls, g_advN, g_advVisible);
+    PageScrollRefresh();   // CAPS-99
 }
 
 // ---------- CAPS-7: UI вкладки «День/ніч» ----------
+
+// ---- CAPS-99: прокрутка сторінок вкладок ------------------------------------
+// Сторінки не прокручувались, і висота вікна (790) була межею вмісту — «Відео»
+// в неї вже не влізло. Контроли лишаються дітьми головного вікна (жодного
+// перепідпорядкування: GetDlgItem у коді й харнесах працює як працював); при
+// прокрутці вони зсуваються, а те, що виходить за сторінку, обрізається
+// регіоном вікна (SetWindowRgn) — над заголовками вкладок і підвалом нічого не
+// проступає. Смуга прокрутки — лише коли вміст довший за сторінку.
+int  g_pageScroll[kTabCount] = {};   // зсув кожної вкладки, px (0 — початок)
+int  g_pageBottom[kTabCount] = {};   // низ вмісту вкладки при зсуві 0 (клієнтські px), 0 — не рахований
+HWND g_pageSb = nullptr;
+bool g_pageScrollBusy = false;
+
+// Скільки груп контролів має вкладка (з «Детально», якщо розкрито).
+int PageGroups(int tab, HWND** arrs, int* ns)
+{
+    int n = 0;
+    switch (tab) {
+    case 0: arrs[n] = g_pageLayout;   ns[n++] = g_pageLayoutN; break;
+    case 1: arrs[n] = g_pageCursor;   ns[n++] = g_pageCursorN;
+            if (g_advVisible) { arrs[n] = g_advCtrls; ns[n++] = g_advN; } break;
+    case 2: arrs[n] = g_pageTheme;    ns[n++] = g_pageThemeN;
+            if (g_thAdvVisible) { arrs[n] = g_thAdv; ns[n++] = g_thAdvN; } break;
+    case 3: arrs[n] = g_pagePeek;     ns[n++] = g_pagePeekN; break;
+    case 4: arrs[n] = g_pageShots;    ns[n++] = g_pageShotsN; break;
+    case 5: arrs[n] = g_pageVideo;    ns[n++] = g_pageVideoN; break;
+    default: arrs[n] = g_pageSettings; ns[n++] = g_pageSettingsN; break;
+    }
+    return n;
+}
+
+// Видима область сторінки в клієнтських координатах головного вікна.
+RECT PageViewRect()
+{
+    RECT r = {};
+    if (!g_tabs) return r;
+    GetClientRect(g_tabs, &r);
+    SendMessageW(g_tabs, TCM_ADJUSTRECT, FALSE, (LPARAM)&r);
+    MapWindowPoints(g_tabs, GetParent(g_tabs), (POINT*)&r, 2);
+    InflateRect(&r, -2, -2);
+    return r;
+}
+
+int PageTab() { return g_tabs ? (int)SendMessageW(g_tabs, TCM_GETCURSEL, 0, 0) : 0; }
+
+// Низ вмісту при зсуві 0 і висота вікна перегляду.
+void PageMeasure(int tab, int* bottom0, int* viewH)
+{
+    HWND* arrs[2]; int ns[2];
+    const int g = PageGroups(tab, arrs, ns);
+    HWND parent = g_tabs ? GetParent(g_tabs) : nullptr;
+    int bottom = 0;
+    for (int k = 0; k < g; ++k)
+        for (int i = 0; i < ns[k]; ++i) {
+            RECT r;
+            GetWindowRect(arrs[k][i], &r);
+            MapWindowPoints(nullptr, parent, (POINT*)&r, 2);
+            if (r.bottom + g_pageScroll[tab] > bottom) bottom = r.bottom + g_pageScroll[tab];
+        }
+    const RECT v = PageViewRect();
+    *bottom0 = bottom;
+    *viewH = v.bottom - v.top;
+}
+
+// Обрізати контрол до видимої області сторінки (регіоном у його координатах).
+void PageClip(HWND c, const RECT& view)
+{
+    RECT r;
+    GetWindowRect(c, &r);
+    MapWindowPoints(nullptr, GetParent(c), (POINT*)&r, 2);
+    RECT vis;
+    if (!IntersectRect(&vis, &r, &view)) { SetWindowRgn(c, CreateRectRgn(0, 0, 0, 0), TRUE); return; }
+    if (EqualRect(&vis, &r)) { SetWindowRgn(c, nullptr, TRUE); return; }
+    SetWindowRgn(c, CreateRectRgn(vis.left - r.left, vis.top - r.top, vis.right - r.left, vis.bottom - r.top), TRUE);
+}
+
+void PageClipAll(int tab)
+{
+    const RECT view = PageViewRect();
+    HWND* arrs[2]; int ns[2];
+    const int g = PageGroups(tab, arrs, ns);
+    for (int k = 0; k < g; ++k)
+        for (int i = 0; i < ns[k]; ++i) PageClip(arrs[k][i], view);
+}
+
+// Перерахувати смугу й обрізання для поточної вкладки (після перемикання,
+// «Детально», зміни мови).
+void PageScrollRefresh()
+{
+    if (!g_tabs || g_pageScrollBusy) return;
+    const int tab = PageTab();
+    int bottom0 = 0, viewH = 0;
+    PageMeasure(tab, &bottom0, &viewH);
+    const RECT view = PageViewRect();
+    const int content = bottom0 - view.top + 12;           // трохи повітря під останнім контролом
+    const int maxScroll = content > viewH ? content - viewH : 0;
+    if (g_pageScroll[tab] > maxScroll) {                   // «Детально» згорнули — підтягнути
+        const int d = g_pageScroll[tab] - maxScroll;
+        HWND* arrs[2]; int ns[2];
+        const int g = PageGroups(tab, arrs, ns);
+        for (int k = 0; k < g; ++k)
+            for (int i = 0; i < ns[k]; ++i) {
+                RECT r; GetWindowRect(arrs[k][i], &r);
+                MapWindowPoints(nullptr, GetParent(arrs[k][i]), (POINT*)&r, 2);
+                SetWindowPos(arrs[k][i], nullptr, r.left, r.top + d, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+        g_pageScroll[tab] = maxScroll;
+    }
+    PageClipAll(tab);
+    if (g_pageSb) {
+        if (maxScroll > 0) {
+            SCROLLINFO si = { sizeof(si), SIF_ALL };
+            si.nMin = 0; si.nMax = content - 1; si.nPage = (UINT)viewH; si.nPos = g_pageScroll[tab];
+            SetScrollInfo(g_pageSb, SB_CTL, &si, TRUE);
+            SetWindowPos(g_pageSb, HWND_TOP, view.right - GetSystemMetrics(SM_CXVSCROLL), view.top,
+                         GetSystemMetrics(SM_CXVSCROLL), viewH, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+        } else {
+            ShowWindow(g_pageSb, SW_HIDE);
+        }
+    }
+}
+
+// Прокрутити поточну вкладку до зсуву pos (притискається до меж).
+void PageScrollTo(int pos)
+{
+    if (!g_tabs) return;
+    const int tab = PageTab();
+    int bottom0 = 0, viewH = 0;
+    PageMeasure(tab, &bottom0, &viewH);
+    const RECT view = PageViewRect();
+    const int content = bottom0 - view.top + 12;
+    const int maxScroll = content > viewH ? content - viewH : 0;
+    if (pos > maxScroll) pos = maxScroll;
+    if (pos < 0) pos = 0;
+    const int d = pos - g_pageScroll[tab];
+    if (d == 0) { PageClipAll(tab); return; }
+    g_pageScrollBusy = true;
+    HWND* arrs[2]; int ns[2];
+    const int g = PageGroups(tab, arrs, ns);
+    HDWP dwp = BeginDeferWindowPos(64);
+    for (int k = 0; k < g; ++k)
+        for (int i = 0; i < ns[k]; ++i) {
+            RECT r; GetWindowRect(arrs[k][i], &r);
+            MapWindowPoints(nullptr, GetParent(arrs[k][i]), (POINT*)&r, 2);
+            if (dwp) dwp = DeferWindowPos(dwp, arrs[k][i], nullptr, r.left, r.top - d, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            else SetWindowPos(arrs[k][i], nullptr, r.left, r.top - d, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    if (dwp) EndDeferWindowPos(dwp);
+    g_pageScroll[tab] = pos;
+    g_pageScrollBusy = false;
+    PageClipAll(tab);
+    if (g_pageSb) { SCROLLINFO si = { sizeof(si), SIF_POS }; si.nPos = pos; SetScrollInfo(g_pageSb, SB_CTL, &si, TRUE); }
+    InvalidateRect(g_tabs, nullptr, TRUE);
+}
+
+// Контрол дістав фокус (Tab) — має бути на видноті.
+void PageEnsureVisible(HWND c)
+{
+    if (!c || !g_tabs || !IsPageControl(c)) return;
+    const RECT view = PageViewRect();
+    RECT r;
+    GetWindowRect(c, &r);
+    MapWindowPoints(nullptr, GetParent(c), (POINT*)&r, 2);
+    const int tab = PageTab();
+    if (r.top < view.top) PageScrollTo(g_pageScroll[tab] - (view.top - r.top) - 8);
+    else if (r.bottom > view.bottom) PageScrollTo(g_pageScroll[tab] + (r.bottom - view.bottom) + 8);
+}
 
 void ToggleThemeAdvanced()
 {
     g_thAdvVisible = !g_thAdvVisible;
     UpdateAdvButtons();
     ShowGroup(g_thAdv, g_thAdvN, g_thAdvVisible);
+    PageScrollRefresh();   // CAPS-99
 }
 
 void SetPickerMinutes(HWND p, int minutes)
@@ -7121,6 +7324,7 @@ void SetLayoutControlsEnabled(HWND hwnd)
     EnableWindow(GetDlgItem(hwnd, IDC_MODE_HOOK),   g_layoutOn);
     EnableWindow(GetDlgItem(hwnd, IDC_MODE_HOTKEY), g_layoutOn);
     EnableWindow(g_passthroughCheckbox,             g_layoutOn);
+    EnableWindow(g_fwdCapsCheckbox,                 g_layoutOn && g_passthrough);   // CAPS-13
 }
 
 // CAPS-9: увімкнути/вимкнути саме перемикання розкладок. Не чіпає автозапуск:
@@ -9354,6 +9558,9 @@ void EdFitView();                     // поворот міняє сторон�
 bool EdDocSaveTo(const wchar_t* path);
 int  EdDocOpen(const wchar_t* path);
 bool EdStoreNow();                    // зберегти в бібліотеку
+bool EdStoreCopy();                   // CAPS-97: копія в бібліотеку, далі працюємо з нею
+std::wstring EdLibCopyName(const std::wstring& name);
+bool EvSaveCopy();                    // CAPS-97: те саме для відео (новий проєкт)
 void EdOpenLibrary(HWND hwnd);
 void EdSaveDocAs(HWND hwnd);
 void EdSaveMenu(HWND hwnd, const RECT& btn);
@@ -17114,6 +17321,8 @@ void EdSaveMenu(HWND hwnd, const RECT& btn)
     if (!m) return;
     AppendMenuW(m, MF_STRING, 1, S(Str::EdExportItem));
     AppendMenuW(m, MF_STRING, 2, S(Str::EdSaveAsDoc));
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, 3, S(Str::EdSaveCopyItem));   // CAPS-97
     POINT p = { btn.left, btn.top };
     ClientToScreen(hwnd, &p);
     const int cmd = (int)TrackPopupMenu(m, TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RETURNCMD |
@@ -17122,6 +17331,10 @@ void EdSaveMenu(HWND hwnd, const RECT& btn)
     DestroyMenu(m);
     if (cmd == 1) EdDoSave();
     else if (cmd == 2) EdSaveDocAs(hwnd);
+    else if (cmd == 3) {
+        if (EdStoreCopy()) { g_edLastAction = 1; RegSaveInt(kRegEdLast, 1); EdTick(EdHit::Store); }
+        else MessageBoxW(hwnd, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
+    }
 }
 
 void EdTextBegin(HWND hwnd, POINT img, int idx)
@@ -25808,7 +26021,7 @@ DWORD WINAPI EvSaveThread(LPVOID param)
     else hr = EvExportRun(&j->x);
     if (SUCCEEDED(hr) && InterlockedCompareExchange(&j->x.cancel, 0, 0)) hr = E_ABORT;
     if (SUCCEEDED(hr) && !MoveFileExW(j->x.dst, j->out, MOVEFILE_REPLACE_EXISTING)) hr = HRESULT_FROM_WIN32(GetLastError());
-    if (SUCCEEDED(hr) && j->mode == 3) {             // CAPS-81: проєкт — хвіст ще в .part, до перейменування
+    if (SUCCEEDED(hr) && (j->mode == 3 || j->mode == 5)) {   // CAPS-81: проєкт (CAPS-97: і копія) — хвіст
         // (перейменування вище вже відбулось — дописуємо в кінцевий файл)
         if (!LhvWriteTail(j->out, j->tail)) { hr = E_FAIL; DeleteFileW(j->out); }
         else VidLibRetention(j->out);
@@ -25820,7 +26033,7 @@ DWORD WINAPI EvSaveThread(LPVOID param)
         LhMp4AddMeta(j->out, j->name, j->meta);
         LhSetFileTimes(j->out, j->meta.taken);
     }
-    if (SUCCEEDED(hr) && j->mode == 3) LhSetFileTimes(j->out, j->meta.taken);   // проєкт — теж дата зйомки
+    if (SUCCEEDED(hr) && (j->mode == 3 || j->mode == 5)) LhSetFileTimes(j->out, j->meta.taken);   // проєкт — теж дата зйомки
     if (SUCCEEDED(hr) && j->mode == 0) {
         // Назва й дата — одразу; мініатюру й розмір бібліотека дорахує сама (кеш
         // прив'язаний до розміру й часу файла, тут вони свідомо нульові).
@@ -26038,7 +26251,7 @@ void EvSaved(LPARAM lp)
         if (SUCCEEDED(j->x.hr)) {
             g_evSavedKeep = j->keep;
             g_evMarksSavedGen = j->marksGen;       // CAPS-80
-            if (j->mode == 0 || j->mode == 3) { g_evSavedCrop = g_edCrop; g_evSavedDocW = g_evDocW; g_evSavedDocH = g_evDocH; }   // CAPS-90
+            if (j->mode == 0 || j->mode == 3 || j->mode == 5) { g_evSavedCrop = g_edCrop; g_evSavedDocW = g_evDocW; g_evSavedDocH = g_evDocH; }   // CAPS-90
             if (j->mode == 0) lstrcpynW(g_evLibOut, j->out, MAX_PATH);
             if (j->mode == 3) {                        // CAPS-81: тепер відкритий документ — проєкт
                 const wchar_t* dir = EdLibDir();
@@ -26047,6 +26260,14 @@ void EvSaved(LPARAM lp)
                 lstrcpynW(g_evLibOut, j->out, MAX_PATH);
                 WIN32_FILE_ATTRIBUTE_DATA fa = {};
                 if (GetFileAttributesExW(g_evPath, GetFileExInfoStandard, &fa)) g_evBytes = ((ULONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+            }
+            if (j->mode == 5) {                        // CAPS-97: копія — далі працюємо з нею; оригінал лишається
+                lstrcpynW(g_evPath, j->out, MAX_PATH);
+                lstrcpynW(g_evLibOut, j->out, MAX_PATH);
+                g_evPendingDelete[0] = 0;
+                WIN32_FILE_ATTRIBUTE_DATA fa = {};
+                if (GetFileAttributesExW(g_evPath, GetFileExInfoStandard, &fa)) g_evBytes = ((ULONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+                EdLibScanRefresh();
             }
             if (j->mode == 4) {                        // CAPS-89: GIF — тост із розміром
                 g_evLastGifFrames = j->x.framesOut;
@@ -26057,7 +26278,7 @@ void EvSaved(LPARAM lp)
                 EdToastText(msg);
                 EdTick(EdHit::Store);
             }
-            else if (j->mode < 2 || j->mode == 3) EdTick(EdHit::Store);
+            else if (j->mode < 2 || j->mode == 3 || j->mode == 5) EdTick(EdHit::Store);
             else if (EvClipFile(j->out)) EdToast(Str::VidCopiedFile);
             else MessageBoxW(g_edWnd, S(Str::EdErrCopy), kAppName, MB_OK | MB_ICONWARNING);
             if (j->closeAfter) PostMessageW(g_edWnd, WM_CLOSE, 0, 0);
@@ -26129,6 +26350,8 @@ bool EvSaveMenuAt(HWND hwnd, const RECT& btn)
     AppendMenuW(m, fl, 2, S(Str::VidCopyFileItem));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, fl, 3, S(Str::VidGifItem));           // CAPS-89
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, fl, 4, S(Str::EdSaveCopyItem));       // CAPS-97
     POINT p = { btn.left, btn.top };
     ClientToScreen(hwnd, &p);
     const int cmd = (int)TrackPopupMenu(m, TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTBUTTON,
@@ -26136,7 +26359,49 @@ bool EvSaveMenuAt(HWND hwnd, const RECT& btn)
     DestroyMenu(m);
     if (cmd == 1 || cmd == 2) return EvSaveStart(cmd, false);
     if (cmd == 3) return EvGifDialog(hwnd);
+    if (cmd == 4) return EvSaveCopy();
     return false;
+}
+
+// CAPS-97: копія запису — новий проєкт .lhvideo: те саме MP4 байт у байт і хвіст
+// із поточним станом (правки, позначки, кадр, метадані). Редактор далі працює з
+// копією; оригінал (MP4 чи проєкт) не чіпається. Копіювання — у потоці з поступом.
+bool EvSaveCopy()
+{
+    if (g_evJob || !g_edVideo || !g_evPath[0]) return false;
+    wchar_t part[MAX_PATH] = {}, out[MAX_PATH] = {};
+    if (!VidLibPath(part, out)) return false;
+    const size_t n = wcslen(out);
+    if (n < 5 || n + 5 >= MAX_PATH) return false;
+    std::wstring base(out, n - 4);
+    swprintf(out, MAX_PATH, L"%s.lhvideo", base.c_str());
+    for (int i = 2; i < 100 && GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES; ++i)
+        swprintf(out, MAX_PATH, L"%s (%d).lhvideo", base.c_str(), i);
+    swprintf(part, MAX_PATH, L"%s.part", out);
+    const std::wstring nm = EdLibCopyName(g_evName);
+    wchar_t oldName[128];
+    lstrcpynW(oldName, g_evName, 128);
+    lstrcpynW(g_evName, nm.c_str(), 128);          // хвіст пишеться вже з назвою копії
+    EvSaveJob* j = new EvSaveJob;
+    lstrcpynW(j->x.src, g_evPath, MAX_PATH);
+    lstrcpynW(j->x.dst, part, MAX_PATH);
+    lstrcpynW(j->out, out, MAX_PATH);
+    j->x.notify = g_edWnd;
+    j->mode = 5;
+    j->copyOnly = true;
+    j->keep = EvKeepSegs();
+    j->marksGen = g_evMarksGen;
+    j->tail = LhvBuild();
+    j->name = g_evName;
+    j->meta = g_edMeta;
+    g_evJob = j;
+    g_evJobThread = CreateThread(nullptr, 0, EvSaveThread, j, 0, nullptr);
+    if (!g_evJobThread) { g_evJob = nullptr; delete j; lstrcpynW(g_evName, oldName, 128); return false; }
+    if (g_edWnd) {
+        SetTimer(g_edWnd, kEvSaveTimer, 150, nullptr);
+        InvalidateRect(g_edWnd, &g_edRcStatus, FALSE);
+    }
+    return true;
 }
 
 
@@ -26938,6 +27203,58 @@ bool EdStoreNow()
         return ok;
     }
     return EdDocSaveTo(g_edDocPath);
+}
+
+// CAPS-97: назва копії — «<назва> (копія)», далі «(копія 2)»… — унікальна серед
+// записів бібліотеки; копія копії рахується від кореня назви.
+std::wstring EdLibCopyName(const std::wstring& name)
+{
+    const std::wstring suf = S(Str::EdCopySuffix);            // " (копія)"
+    const std::wstring open = suf.substr(0, suf.size() - 1);  // " (копія"
+    std::wstring root = name;
+    const size_t at = root.rfind(open);
+    if (at != std::wstring::npos) {
+        const std::wstring rest = root.substr(at + open.size());
+        bool tail = (rest == L")");
+        if (!tail && rest.size() > 2 && rest[0] == L' ' && rest.back() == L')') {
+            tail = true;
+            for (size_t i = 1; i + 1 < rest.size(); ++i) if (rest[i] < L'0' || rest[i] > L'9') { tail = false; break; }
+        }
+        if (tail) root.resize(at);
+    }
+    EdLibScan();                                           // свіжий список: попередня копія вже має бути в ньому
+    auto taken = [&](const std::wstring& n) {
+        for (const EdLibItem& it : g_edLib) if (!lstrcmpiW(it.name.c_str(), n.c_str())) return true;
+        return false;
+    };
+    std::wstring c = root + suf;
+    for (int i = 2; taken(c) && i < 1000; ++i) c = root + open + L" " + std::to_wstring(i) + L")";
+    return c;
+}
+
+// CAPS-97: копія в бібліотеку з поточним станом (позначки, кадр, тон, метадані);
+// далі редактор працює з копією (як «Зберегти як» у звичайних програмах), а
+// оригінал лишається таким, як був — незбережені правки йдуть у копію.
+bool EdStoreCopy()
+{
+    if (!g_edSrc) return false;
+    wchar_t stamp[32], path[MAX_PATH];
+    if (!EdLibNewPath(path, stamp)) return false;
+    const std::wstring nm = EdLibCopyName(g_edDocName[0] ? g_edDocName : stamp);
+    wchar_t oldPath[MAX_PATH], oldName[128];
+    lstrcpynW(oldPath, g_edDocPath, MAX_PATH);
+    lstrcpynW(oldName, g_edDocName, 128);
+    lstrcpynW(g_edDocName, nm.c_str(), 128);
+    lstrcpynW(g_edDocPath, path, MAX_PATH);
+    if (!EdDocSaveTo(path)) {
+        lstrcpynW(g_edDocPath, oldPath, MAX_PATH);
+        lstrcpynW(g_edDocName, oldName, 128);
+        return false;
+    }
+    EdLibRetention();
+    EdLibScanRefresh();
+    if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
+    return true;
 }
 
 bool EdSaveAs()
@@ -30124,6 +30441,39 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
 
+    // CAPS-99: прокрутка сторінки вкладки — коліщатком над нею або смугою.
+    case WM_MOUSEWHEEL: {
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        ScreenToClient(hwnd, &pt);
+        RECT tr;
+        if (g_tabs && GetWindowRect(g_tabs, &tr)) {
+            MapWindowPoints(nullptr, hwnd, (POINT*)&tr, 2);
+            if (PtInRect(&tr, pt)) {
+                PageScrollTo(g_pageScroll[PageTab()] - GET_WHEEL_DELTA_WPARAM(wp) * 48 / WHEEL_DELTA);
+                return 0;
+            }
+        }
+        break;
+    }
+    case WM_VSCROLL:
+        if ((HWND)lp == g_pageSb && g_pageSb) {
+            SCROLLINFO si = { sizeof(si), SIF_ALL };
+            GetScrollInfo(g_pageSb, SB_CTL, &si);
+            int pos = si.nPos;
+            switch (LOWORD(wp)) {
+            case SB_LINEUP:   pos -= 24; break;
+            case SB_LINEDOWN: pos += 24; break;
+            case SB_PAGEUP:   pos -= (int)si.nPage; break;
+            case SB_PAGEDOWN: pos += (int)si.nPage; break;
+            case SB_THUMBTRACK: case SB_THUMBPOSITION: pos = si.nTrackPos; break;
+            case SB_TOP: pos = 0; break;
+            case SB_BOTTOM: pos = si.nMax; break;
+            default: return 0;
+            }
+            PageScrollTo(pos);
+            return 0;
+        }
+        break;
     case WM_HSCROLL:
         if ((HWND)lp == g_curScale) {
             g_cur.scale = (int)SendMessageW(g_curScale, TBM_GETPOS, 0, 0);
@@ -30216,6 +30566,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_COMMAND:
+        // CAPS-99: контрол сторінки дістав фокус клавішею — прокрутити до нього
+        if ((HIWORD(wp) == BN_SETFOCUS || HIWORD(wp) == EN_SETFOCUS) && lp) PageEnsureVisible((HWND)lp);
         switch (LOWORD(wp)) {
         case IDC_AUTOSTART:
             if (HIWORD(wp) == BN_CLICKED) {
@@ -30287,6 +30639,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 g_passthrough = SendMessageW(g_passthroughCheckbox, BM_GETCHECK, 0, 0) == BST_CHECKED;
                 SavePassthrough(g_passthrough);
                 ApplyRemoteContext();
+            }
+            return 0;
+        case IDC_FWDCAPS:                        // CAPS-13
+            if (HIWORD(wp) == BN_CLICKED) {
+                g_fwdCaps = SendMessageW(g_fwdCapsCheckbox, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                RegSaveInt(kRegFwdCaps, g_fwdCaps ? 1 : 0);
             }
             return 0;
         case IDC_CUR_ENABLE:
@@ -30776,6 +31134,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
                            hwnd, (HMENU)(INT_PTR)IDC_TABS, hInst, nullptr);
     SendMessageW(g_tabs, WM_SETFONT, (WPARAM)font, TRUE);
     SetWindowSubclass(g_tabs, TabSubclassProc, 1, 0);   // полотно сторінки — див. TabSubclassProc
+    // CAPS-99: смуга прокрутки сторінки — над табом; показується лише коли треба.
+    g_pageSb = CreateWindowW(L"SCROLLBAR", L"", WS_CHILD | SBS_VERT | WS_CLIPSIBLINGS, 0, 0, 0, 0,
+                             hwnd, (HMENU)(INT_PTR)IDC_PAGE_SB, hInst, nullptr);
     // CAPS-73: сьома вкладка («Відео») — відступ 10 → 6, інакше «Налаштування» ховались за стрілками
     SendMessageW(g_tabs, TCM_SETPADDING, 0, MAKELPARAM(sc(6), sc(5)));    // повітря в заголовках
     {
@@ -30844,6 +31205,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     g_passthrough = LoadPassthrough();
     g_passthroughCheckbox = check(addL, Str::LayPassthrough, IDC_PASSTHROUGH, g_passthrough, 2);
     text(addL, Str::LayRemoteList, 1, IDC_PASSTHROUGH_HINT, 12);
+    g_fwdCaps = RegLoadInt(kRegFwdCaps, 1, 0, 1) != 0;                                  // CAPS-13
+    g_fwdCapsCheckbox = check(addL, Str::LayFwdCaps, IDC_FWDCAPS, g_fwdCaps, 2);
+    hint(addL, Str::LayFwdCapsHint, 2);
 
     // ---- вкладка «Курсор» ----
     y = PY;
@@ -31168,6 +31532,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // Контрол, що не вліз у масив сторінки, ніколи не сховається при перемиканні
     // вкладок — саме так у 2.1.0 «Оновити» лишалась поверх усіх вкладок. Повідомлення
     // для розробника (не локалізоване): користувач його не побачить, бо запас великий.
+    PageScrollRefresh();                                     // CAPS-99: перша вкладка
     if (g_pageOverflow || g_locOverflow)
         MessageBoxW(hwnd, L"Page control array overflow - raise the capacity.",
                     kAppName, MB_ICONERROR | MB_OK);
