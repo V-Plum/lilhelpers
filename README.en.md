@@ -115,7 +115,13 @@ it to where it ends up.
   composition — dozens of frames for free. The system size is restored with a
   single call on a background thread, and the copy covers the moment of the
   switch. The price: the real cursor is visible under the copy (already at
-  normal size and at the same spot), so the option can be turned off.
+  normal size and at the same spot), so the option can be turned off. Since
+  4.12.0 the copy is crisp (CAPS-4): a cursor bitmap is always 32 px, and
+  stretched to 160 px without smoothing it showed 5×5 blocks. For standard
+  cursors the frame of the needed size is taken from the system `.cur` (up to
+  256 px there); foreign cursors are scaled bicubically from their own frame;
+  alpha for 1-bit cursors comes from the mask, otherwise a black arrow would
+  be invisible.
 - If the copy is off, the system cursor itself shrinks, and then the animation
   is **tied to TIME, not to a number of steps**, and runs on a separate thread.
   Reason: each size change sends a synchronous `WM_SETTINGCHANGE` to all
@@ -776,7 +782,10 @@ the rest of the window.
 removes it. When more than one is selected, the property strip changes: it
 has only actions on several — align by edges or centres, distribute with equal
 spacing, group. Clicking any member of a group selects the whole group; they
-also move, get deleted and rotate together, in one `Ctrl+Z` step.
+also move, get deleted and rotate together, in one `Ctrl+Z` step. You can
+drag by any member: the clicked one becomes the main one (since 4.12.0,
+CAPS-104) — motion is computed from it, so there is no jump, and the right
+panel shows exactly what you grabbed.
 
 Such a selection has a **shared** bounding box, and shared handles on it: the
 corner and side ones stretch everyone at once, and the round handle above the
