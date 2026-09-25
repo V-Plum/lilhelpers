@@ -20,13 +20,12 @@ Small Windows 11 conveniences in one tray app. No dependencies, a single exe:
   image from the clipboard, and the editor lets you mark up what matters, hide
   what shouldn't be seen and send the result to the clipboard or a file. Marks
   stay editable: shots are saved in their own format in a library, with
-  EXIF/META metadata. ⚠ Experimental, since 3.0.0.
+  EXIF/META metadata. Since 3.0.0.
 - **Screen recording** — `Alt+Shift+5` records a region, a window (and follows
   it) or the whole screen to MP4 with the same HDR compensation as screenshots;
   cursor, clicks, system sound and microphone are optional. The same editor
   trims and cuts, draws marks over the video, crops and scales it down, exports
-  to MP4 or GIF and keeps everything as a `.lhvideo` project. ⚠ Experimental,
-  since 4.0.0.
+  to MP4 or GIF and keeps everything as a `.lhvideo` project. Since 4.0.0.
 - **Dark theme for the app window itself**, auto-updates from GitHub Releases
   with signature verification.
 - **Ukrainian and English** UI — from the Windows language or chosen by hand.
@@ -355,7 +354,7 @@ dependency. The whole feature costs **163 KB**: 387 KB in 2.1.1 → 550 KB in
   registry). The keyboard hook is shared with the layout feature: it stays
   while at least one of the features needs it.
 
-## Screenshot editor ⚠ experimental
+## Screenshot editor
 
 Since 3.0.0. A hotkey takes a shot, the editor opens, and the result goes to
 the clipboard or a file.
@@ -868,7 +867,7 @@ recipe on top of it, so **Reset** returns exactly the captured frame, and
 **Compare**, while the button is held, shows the source frame without any
 intermediate file.
 
-## Screen recording ⚠ experimental
+## Screen recording
 
 Since 4.0.0. `Alt+Shift+5` opens the same selection frame as for shots: drag —
 a region, click — a window, `Space` — the whole monitor. Recording starts right
@@ -1366,7 +1365,7 @@ Two things worth knowing honestly:
 
 - Hide in video is shown as a plate during playback, and the real blur only
   while paused and in the saved file.
-- Screen recording is experimental. "Follow the window" mode needs Windows 10
+- "Follow the window" mode needs Windows 10
   1903 or newer; on older versions the window is recorded as the region where
   it was at the start. A minimised window gives no frames — the video keeps
   the last one.
@@ -1380,8 +1379,8 @@ Two things worth knowing honestly:
   Recording then doesn't start and says so plainly.
 - The monitor on which the region is selected is recorded; a monitor rotated
   by 90° isn't supported yet.
-- The screenshot and video editor is experimental: the format and behaviour may
-  still change (old files keep opening — see the notes on format versions).
+- The editor's file formats (`.lhshot`, `.lhvideo`) still grow: new versions add
+  fields, and old files keep opening (see the notes on format versions).
 - Tone works on the 8-bit channels of an already mapped frame. What was
   bleached into pure white during mapping can't be brought back by any slider
   — it only redistributes what's left.

@@ -2146,6 +2146,122 @@ void OverlayDestroy()
     if (g_overlayIcon) { DestroyIcon(g_overlayIcon); g_overlayIcon = nullptr; }
 }
 
+// ---- CAPS-4: копія без пікселізації ----
+// Бітмап курсора завжди 32 px (системний розмір Windows масштабує при малюванні, а не
+// підміняє бітмап), і DrawIconEx розтягував його без згладжування — блоки 5×5 на 160 px.
+// A) стандартні курсори (IDC_*) беремо з системного .cur у потрібному розмірі — там лежать
+//    кадри до 256 px, копія чітка; кадр перевантажується на кожному розмірі.
+// B) чужі курсори застосунків — рідний кадр у DIB і GDI+ з бікубічною інтерполяцією:
+//    краї м'які замість блокових.
+int g_ovStdId = 0;   // OEM-ідентифікатор стандартного курсора; 0 — чужий
+
+int OverlayStdCursor(HCURSOR hc)
+{
+    static const WORD ids[] = { 32512 /*ARROW*/, 32513 /*IBEAM*/, 32514 /*WAIT*/, 32515 /*CROSS*/, 32516 /*UPARROW*/,
+                                32642 /*SIZENWSE*/, 32643 /*SIZENESW*/, 32644 /*SIZEWE*/, 32645 /*SIZENS*/, 32646 /*SIZEALL*/,
+                                32648 /*NO*/, 32649 /*HAND*/, 32650 /*APPSTARTING*/, 32651 /*HELP*/ };
+    if (!hc) return 0;
+    for (WORD id : ids)
+        if (LoadCursorW(nullptr, MAKEINTRESOURCEW(id)) == hc) return id;
+    return 0;
+}
+
+// UpdateLayeredWindow хоче premultiplied alpha. Курсори з 1-бітною маскою
+// приходять із нульовою альфою — тоді копія була б невидимою, тож такі
+// пікселі робимо непрозорими за наявністю кольору.
+void OverlayPremultiply(BYTE* p, int count)
+{
+    bool anyAlpha = false;
+    for (int i = 0; i < count; ++i)
+        if (p[i * 4 + 3]) { anyAlpha = true; break; }
+    for (int i = 0; i < count; ++i) {
+        BYTE* px = p + i * 4;
+        if (!anyAlpha)
+            px[3] = (px[0] || px[1] || px[2]) ? 255 : 0;
+        const int a = px[3];
+        px[0] = (BYTE)(px[0] * a / 255);
+        px[1] = (BYTE)(px[1] * a / 255);
+        px[2] = (BYTE)(px[2] * a / 255);
+    }
+}
+
+// Рідний кадр курсора → premultiplied ARGB (w×h). Альфа — з каналу, якщо він є, інакше
+// з AND-маски: 1-бітні курсори (чорна стрілка з білим контуром) інакше були б невидимі
+// там, де вони чорні. Ті самі три види форм, що й у VidCursorBuild (CAPS-76).
+bool OverlayNative(HICON hc, std::vector<DWORD>& px, int& w, int& h)
+{
+    ICONINFO ii = {};
+    if (!hc || !GetIconInfo(hc, &ii)) return false;
+    BITMAP bm = {};
+    GetObjectW(ii.hbmMask, sizeof(bm), &bm);
+    const bool mono = !ii.hbmColor;
+    w = bm.bmWidth;
+    h = mono ? bm.bmHeight / 2 : bm.bmHeight;
+    const bool ok = w > 0 && h > 0 && w <= 512 && h <= 512;
+    if (ok) {
+        std::vector<DWORD> mask((size_t)w * bm.bmHeight), color;
+        HDC dc = GetDC(nullptr);
+        BITMAPINFO bi = {};
+        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth = w;
+        bi.bmiHeader.biHeight = -bm.bmHeight;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        GetDIBits(dc, ii.hbmMask, 0, (UINT)bm.bmHeight, mask.data(), &bi, DIB_RGB_COLORS);
+        if (!mono) {
+            color.resize((size_t)w * h);
+            bi.bmiHeader.biHeight = -h;
+            GetDIBits(dc, ii.hbmColor, 0, (UINT)h, color.data(), &bi, DIB_RGB_COLORS);
+        }
+        ReleaseDC(nullptr, dc);
+        bool alpha = false;
+        for (size_t k = 0; k < color.size() && !alpha; ++k) if (color[k] >> 24) alpha = true;
+        px.assign((size_t)w * h, 0);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                const bool andBit = (mask[(size_t)y * w + x] & 0xFFFFFF) != 0;
+                DWORD out = 0;
+                if (mono) {
+                    const bool xorBit = (mask[(size_t)(y + h) * w + x] & 0xFFFFFF) != 0;
+                    if (!andBit) out = xorBit ? 0xFFFFFFFFu : 0xFF000000u;   // біле або чорне
+                    else if (xorBit) out = 0xFFFFFFFFu;                       // інверсія тла ≈ біле
+                } else {
+                    const DWORD c = color[(size_t)y * w + x];
+                    if (alpha) {
+                        const DWORD a = c >> 24;
+                        out = (a << 24) | ((((c >> 16) & 255) * a / 255) << 16) | ((((c >> 8) & 255) * a / 255) << 8) | ((c & 255) * a / 255);
+                    } else if (!andBit) out = 0xFF000000u | (c & 0xFFFFFF);
+                    else if (c & 0xFFFFFF) out = 0xFFFFFFFFu;
+                }
+                px[(size_t)y * w + x] = out;
+            }
+    }
+    DeleteObject(ii.hbmMask);
+    if (ii.hbmColor) DeleteObject(ii.hbmColor);
+    return ok;
+}
+
+// Копія курсора розміром size — у top-down DIB bits (size×size), premultiplied.
+// Джерело: для стандартного курсора — найближчий кадр із системного .cur (там є
+// 32…256 px), для чужого — його власний; далі бікубік GDI+ у потрібний розмір.
+void OverlayDraw(HDC mem, void* bits, int size)
+{
+    (void)mem;
+    std::vector<DWORD> px;
+    int w = 0, h = 0;
+    HICON big = g_ovStdId ? (HICON)LoadImageW(nullptr, MAKEINTRESOURCEW(g_ovStdId), IMAGE_CURSOR, size, size, LR_SHARED) : nullptr;
+    if (!(big && OverlayNative(big, px, w, h)) && !OverlayNative(g_overlayIcon, px, w, h)) return;
+    if (w == size && h == size) { memcpy(bits, px.data(), (size_t)size * size * 4); return; }
+    Gdiplus::Bitmap src(w, h, w * 4, PixelFormat32bppPARGB, (BYTE*)px.data());
+    Gdiplus::Bitmap dst(size, size, size * 4, PixelFormat32bppPARGB, (BYTE*)bits);
+    Gdiplus::Graphics g(&dst);
+    g.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
+    g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    g.DrawImage(&src, Gdiplus::Rect(0, 0, size, size), 0, 0, w, h, Gdiplus::UnitPixel);
+    g.Flush(Gdiplus::FlushIntentionSync);
+}
+
 // Малюємо копію курсора заданого розміру в layered-вікно під гарячою точкою.
 void OverlayFrame(int size)
 {
@@ -2167,25 +2283,7 @@ void OverlayFrame(int size)
     HBITMAP dib = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
     if (dib && bits) {
         HGDIOBJ old = SelectObject(mem, dib);
-        DrawIconEx(mem, 0, 0, g_overlayIcon, size, size, 0, nullptr, DI_NORMAL);
-
-        // UpdateLayeredWindow хоче premultiplied alpha. Курсори з 1-бітною маскою
-        // приходять із нульовою альфою — тоді копія була б невидимою, тож такі
-        // пікселі робимо непрозорими за наявністю кольору.
-        BYTE* p = (BYTE*)bits;
-        const int count = size * size;
-        bool anyAlpha = false;
-        for (int i = 0; i < count; ++i)
-            if (p[i * 4 + 3]) { anyAlpha = true; break; }
-        for (int i = 0; i < count; ++i) {
-            BYTE* px = p + i * 4;
-            if (!anyAlpha)
-                px[3] = (px[0] || px[1] || px[2]) ? 255 : 0;
-            const int a = px[3];
-            px[0] = (BYTE)(px[0] * a / 255);
-            px[1] = (BYTE)(px[1] * a / 255);
-            px[2] = (BYTE)(px[2] * a / 255);
-        }
+        OverlayDraw(mem, bits, size);                  // CAPS-4: чітка копія
 
         POINT dst = { pt.x - MulDiv(g_ovHotspot.x, size, g_ovBasePx),
                       pt.y - MulDiv(g_ovHotspot.y, size, g_ovBasePx) };
@@ -2236,6 +2334,7 @@ bool OverlayBeginShrink()
 
     OverlayDestroy();
     g_overlayIcon = copy;
+    g_ovStdId = OverlayStdCursor(ci.hCursor);   // CAPS-4
     g_overlay = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST |
                                 WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
                                 L"lilhelpers_overlay", nullptr, WS_POPUP,
@@ -11135,6 +11234,8 @@ void EdSnapTone(EdSnap& s)
     s.vidW = g_evDocW;         s.vidH = g_evDocH;   // CAPS-90
 }
 
+void EvMarksTouched();   // CAPS-102, нижче
+
 void EdPushUndo()
 {
     EdSnap s;
@@ -11147,6 +11248,7 @@ void EdPushUndo()
     if ((int)g_edUndo.size() > kEdUndoMax) g_edUndo.erase(g_edUndo.begin());
     g_edRedo.clear();
     EvNoteMarkUndo();                          // CAPS-80: у відео — ще й у спільну чергу
+    EvMarksTouched();                          // CAPS-102: смуги таймлайну беруть нові властивості
 }
 
 void EdApply(const EdSnap& s)
@@ -11157,6 +11259,7 @@ void EdApply(const EdSnap& s)
     g_edSelMore = s.selMore;
     g_edCrop = s.crop;
     if (g_edSel >= (int)g_edObjs.size()) g_edSel = -1;
+    EvMarksTouched();                          // CAPS-102
 
     // Повернення до іншого оригіналу — теж «геометрія»: міняється розмір.
     bool srcBack = false;
@@ -14477,6 +14580,7 @@ bool EdGroupSet(int field, int value)
         else o.alpha = value;
     }
     if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
+    EvMarksTouched();                          // CAPS-102: повзунок без знімка — теж
     return true;
 }
 
@@ -19565,6 +19669,12 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (hit >= 0 && EdIsSelected(hit) && EdManySel()) {
                 // Клік по вже вибраному в групі не збиває вибір — інакше
                 // групу неможливо було б потягнути.
+                // CAPS-104: клікнутий стає головним. Початок тягнення береться з клікнутого,
+                // а рух рахується від головного — коли це різні елементи, група стрибала на
+                // відстань між ними. Заодно права панель показує те, за що взялися.
+                if (hit != g_edSel)
+                    for (size_t k = 0; k < g_edSelMore.size(); ++k)
+                        if (g_edSelMore[k] == hit) { g_edSelMore[k] = g_edSel; g_edSel = hit; InvalidateRect(hwnd, nullptr, FALSE); break; }
             } else if (hit != g_edSel || EdManySel()) {
                 EdSelectOne(hit);
                 InvalidateRect(hwnd, nullptr, FALSE);
@@ -26165,6 +26275,14 @@ RECT EvMarkBar(int i, const std::vector<int>& lane)
     return r;
 }
 
+// CAPS-102: смуга на таймлайні має колір позначки і читає його при малюванні, тож після
+// будь-якої зміни властивостей таймлайн треба перемалювати. Спільна точка — знімок
+// скасування (його кладе кожна зміна), скасування/повторення і повзунки без знімка.
+void EvMarksTouched()
+{
+    if (g_edVideo && g_edWnd && !g_edLibOpen) InvalidateRect(g_edWnd, &g_edRcTimeline, FALSE);
+}
+
 void EvPaintMarks(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     const RECT& m = g_evRcMarks;
@@ -32380,7 +32498,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     sec(addL, Str::LaySecRemote);
     g_passthrough = LoadPassthrough();
     g_passthroughCheckbox = check(addL, Str::LayPassthrough, IDC_PASSTHROUGH, g_passthrough, 2);
-    text(addL, Str::LayRemoteList, 1, IDC_PASSTHROUGH_HINT, 12);
+    text(addL, Str::LayRemoteList, 2, IDC_PASSTHROUGH_HINT, 12);   // CAPS-5: підказка стала довшою — два рядки
     g_fwdCaps = RegLoadInt(kRegFwdCaps, 1, 0, 1) != 0;                                  // CAPS-13
     g_fwdCapsCheckbox = check(addL, Str::LayFwdCaps, IDC_FWDCAPS, g_fwdCaps, 2);
     hint(addL, Str::LayFwdCapsHint, 2);
