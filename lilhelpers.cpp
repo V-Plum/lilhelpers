@@ -81,6 +81,8 @@
 #include <dwrite.h>
 #include <wincodec.h>
 #include <string>
+#include <map>            // CAPS-100: назви груп
+#include <set>
 #include <float.h>
 // CAPS-16: кадр і метадані відео — Media Foundation, теж системна.
 #include <mfapi.h>
@@ -468,6 +470,10 @@ X(PeekReformatted,    L"відформатовано",              L"reformatte
 X(PeekSvgAsCode,      L"SVG з ефектами, яких ми не малюємо — показано розмітку",  L"SVG uses effects we do not draw — markup shown") \
 X(PeekFmtStl,         L"%.0f × %.0f × %.0f · трикутників: %u · %s",   L"%.0f × %.0f × %.0f · triangles: %u · %s") \
 X(PeekFmtVideo,       L"%d × %d · %s · %s",                      L"%d × %d · %s · %s")               \
+X(PeekFmtAudio,       L"%s · %s · %d кбіт/с · %s",              L"%s · %s · %d kbps · %s")           \
+X(PeekLblTitle,       L"Назва",                         L"Title")                                       \
+X(PeekLblArtist,      L"Виконавець",                    L"Artist")                                      \
+X(PeekLblAlbum,       L"Альбом",                        L"Album")                                       \
 X(PeekDocxText,       L"лише текст",                  L"text only")                                  \
 X(PeekFmtPdf,         L"%d × %d · сторінок: %u · %s",              L"%d × %d · pages: %u · %s")      \
 X(PeekFmtImageNote,   L"%d × %d · %s · %s",          L"%d × %d · %s · %s")                           \
@@ -957,6 +963,10 @@ X(EdMarksMenuBack,    L"На задній план",                L"Send to ba
 X(EdMarksMenuHide,    L"Приховати",                     L"Hide")                                       \
 X(EdMarksMenuShow,    L"Показати",                      L"Show")                                       \
 X(EdMarksMenuDelete,  L"Видалити\tDelete",              L"Delete\tDelete")                             \
+X(EdMarksGroupFmt,    L"Група %d",                      L"Group %d")                                   \
+X(EdTipMarkGroup,     L"Група: клік — вибрати всю; тягніть цілком; подвійний клік — назва; права кнопка — дії", \
+                      L"Group: click to select all; drag as one; double-click to rename; right-click for actions") \
+X(EdTipMarkFold,      L"Згорнути або розгорнути групу", L"Collapse or expand the group")                \
 X(EdFxGlow,           L"Свічення",                      L"Glow")                                       \
 X(EdTipFx,            L"Ефекти: тінь і свічення",       L"Effects: shadow and glow")                   \
 X(EdMetaHead,         L"EXIF / META",                   L"EXIF / META")                                \
@@ -1978,11 +1988,14 @@ void ApplyCursorSizePx(int px)
 // просив блокувати все, що ПОВОДИТЬСЯ як повноекранна гра.
 bool IsFullscreenForeground()
 {
+    // CAPS-6: QUNS_BUSY тут БУЛО й глушило збільшення глобально, поки відкрита
+    // сесія RDP (клієнти тримають «зайнято», щоб не лізли тости) — навіть над
+    // неактивним розгорнутим вікном. Лишаються справжній повний екран D3D,
+    // режим презентації та геометрична перевірка нижче.
     QUERY_USER_NOTIFICATION_STATE state;
     if (SUCCEEDED(SHQueryUserNotificationState(&state)) &&
         (state == QUNS_RUNNING_D3D_FULL_SCREEN ||
-         state == QUNS_PRESENTATION_MODE ||
-         state == QUNS_BUSY))
+         state == QUNS_PRESENTATION_MODE))
         return true;
 
     HWND fg = GetForegroundWindow();
@@ -4076,7 +4089,7 @@ constexpr size_t kPeekImageMax = 64u * 1024 * 1024;   // більший файл
 
 HFONT CreateUIFont(int percent, int weight);      // визначення нижче, після WndProc
 
-enum class PeekKind { None, Image, Text, Card };
+enum class PeekKind { None, Image, Text, Card, Media };   // CAPS-18: відео чи аудіо, що грає
 
 struct PeekInfo {
     wchar_t name[MAX_PATH];
@@ -4132,6 +4145,48 @@ bool     g_peekJsonFormatted = false;   // показуємо не байт-у-�
 bool     g_peekSvgAsCode     = false;   // SVG не намалювали — скажемо чому, а не промовчимо
 Str      g_peekSvgNote       = Str::Empty;  // намалювали, але не все — теж скажемо
 HWND     g_peekEnableCb = nullptr;
+
+// ---- CAPS-18: програвання відео й аудіо в перегляді ---------------------------
+// Той самий Media Engine у режимі frame-server, що й у редакторі відео (CAPS-78),
+// але СВІЙ екземпляр: перегляд і редактор живуть одночасно. Кадри — у дочірнє вікно
+// зі swap chain, звук грає рушій. Керування лише мишею: вікно не має фокуса (пробіл
+// належить Провіднику). Відео стартує без звуку, аудіо — зі звуком тихіше; кнопка
+// звуку в смузі, вибір пам'ятається окремо для відео й аудіо (рішення власника 25.09).
+constexpr UINT WMAPP_PKEVENT = WM_APP + 17;
+constexpr UINT TIMER_PEEK_TICK = 3;
+constexpr int  kPkBar = 40;                                // смуга керування, лог. px
+const wchar_t* kRegPeekVidMuted = L"PeekVideoMuted";       // типово 1: перегляд відкривається легко, гучне відео — несподіванка
+const wchar_t* kRegPeekAudMuted = L"PeekAudioMuted";       // типово 0: аудіо без звуку не має сенсу
+struct PkNotify : IMFMediaEngineNotify {
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** pp) override {
+        if (id == __uuidof(IUnknown) || id == __uuidof(IMFMediaEngineNotify)) { *pp = this; return S_OK; }
+        *pp = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return 2; }
+    ULONG STDMETHODCALLTYPE Release() override { return 1; }
+    HRESULT STDMETHODCALLTYPE EventNotify(DWORD e, DWORD_PTR, DWORD) override {
+        if (g_peekWnd) PostMessageW(g_peekWnd, WMAPP_PKEVENT, (WPARAM)e, 0);
+        return S_OK;
+    }
+};
+PkNotify               g_pkNotify;
+ID3D11Device*          g_pkDev = nullptr;
+ID3D11DeviceContext*   g_pkCtx = nullptr;
+IMFDXGIDeviceManager*  g_pkDm  = nullptr;
+UINT                   g_pkTok = 0;
+IMFMediaEngine*        g_pkMe  = nullptr;
+IDXGISwapChain1*       g_pkSc  = nullptr;
+HWND                   g_pkView = nullptr;
+UINT                   g_pkScW = 0, g_pkScH = 0;
+bool     g_pkAudio = false, g_pkReady = false, g_pkPlaying = false, g_pkMuted = false, g_pkSeekDrag = false, g_pkEnded = false;
+double   g_pkDur = 0, g_pkPos = 0;
+int      g_pkHot = 0;                                      // 1 пуск/пауза, 2 звук, 3 смуга
+wchar_t  g_pkArtist[160] = {}, g_pkTitle[160] = {}, g_pkAlbum[160] = {};
+int      g_pkKbps = 0;
+void EvFmtTime(double s, wchar_t* out, int n);          // CAPS-78, нижче
+RECT PeekContentRect(HWND hwnd);                       // нижче
+const GUID kMfPropHandlerService = { 0xa3face02, 0x32b8, 0x41dd, { 0x90, 0xe7, 0x5f, 0xef, 0x7c, 0x89, 0x91, 0xb5 } };   // MF_PROPERTY_HANDLER_SERVICE (своя копія: у MinGW libmfuuid не завжди повний)
 
 int PeekPx(int v) { return MulDiv(v, (int)GetDpiForSystem(), 96); }
 
@@ -6410,10 +6465,397 @@ bool PeekPdfGoto(int page)
     return true;
 }
 
+// ---- CAPS-18: програвач ----
+
+LRESULT CALLBACK PkViewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+void PkPresent();
+
+bool PkEnsureSwap(UINT w, UINT h)
+{
+    if (!g_pkDev || !g_pkView || !w || !h) return false;
+    if (g_pkSc && g_pkScW == w && g_pkScH == h) return true;
+    if (g_pkSc) {
+        if (SUCCEEDED(g_pkSc->ResizeBuffers(0, w, h, DXGI_FORMAT_UNKNOWN, 0))) { g_pkScW = w; g_pkScH = h; return true; }
+        g_pkSc->Release();
+        g_pkSc = nullptr;
+    }
+    IDXGIDevice* dd = nullptr;
+    IDXGIAdapter* ad = nullptr;
+    IDXGIFactory2* f = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(g_pkDev->QueryInterface(__uuidof(IDXGIDevice), (void**)&dd)) && dd &&
+        SUCCEEDED(dd->GetAdapter(&ad)) && ad &&
+        SUCCEEDED(ad->GetParent(__uuidof(IDXGIFactory2), (void**)&f)) && f) {
+        DXGI_SWAP_CHAIN_DESC1 d = {};
+        d.Width = w; d.Height = h;
+        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        d.SampleDesc.Count = 1;
+        d.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        d.BufferCount = 2;
+        d.Scaling = DXGI_SCALING_STRETCH;
+        d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        d.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+        HRESULT hr = f->CreateSwapChainForHwnd(g_pkDev, g_pkView, &d, nullptr, nullptr, &g_pkSc);
+        if (FAILED(hr)) {
+            d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+            hr = f->CreateSwapChainForHwnd(g_pkDev, g_pkView, &d, nullptr, nullptr, &g_pkSc);
+        }
+        ok = SUCCEEDED(hr) && g_pkSc;
+        if (ok) { g_pkScW = w; g_pkScH = h; }
+    }
+    if (f) f->Release();
+    if (ad) ad->Release();
+    if (dd) dd->Release();
+    return ok;
+}
+
+// Поточний кадр — у дочірнє вікно (воно вже рівно на місці кадру, тож без масштабу).
+void PkPresent()
+{
+    if (!g_pkMe || !g_pkReady || g_pkAudio || !g_pkView || !IsWindowVisible(g_pkView)) return;
+    RECT cr;
+    GetClientRect(g_pkView, &cr);
+    if (cr.right <= 0 || cr.bottom <= 0 || !PkEnsureSwap((UINT)cr.right, (UINT)cr.bottom)) return;
+    ID3D11Texture2D* bb = nullptr;
+    if (FAILED(g_pkSc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
+    const COLORREF bg = g_peekDark ? kDkBg : RGB(255, 255, 255);
+    MFVideoNormalizedRect src = { 0, 0, 1, 1 };
+    MFARGB border = { GetBValue(bg), GetGValue(bg), GetRValue(bg), 255 };
+    g_pkMe->TransferVideoFrame(bb, &src, &cr, &border);
+    bb->Release();
+    g_pkSc->Present(0, 0);
+}
+
+void PkClose()
+{
+    if (g_peekWnd) KillTimer(g_peekWnd, TIMER_PEEK_TICK);
+    if (g_pkMe) { g_pkMe->Shutdown(); g_pkMe->Release(); g_pkMe = nullptr; }
+    if (g_pkSc) { g_pkSc->Release(); g_pkSc = nullptr; }
+    if (g_pkView) { DestroyWindow(g_pkView); g_pkView = nullptr; }
+    if (g_pkDm) { g_pkDm->Release(); g_pkDm = nullptr; }
+    if (g_pkCtx) { g_pkCtx->ClearState(); g_pkCtx->Release(); g_pkCtx = nullptr; }
+    if (g_pkDev) { g_pkDev->Release(); g_pkDev = nullptr; }
+    g_pkScW = g_pkScH = 0;
+    g_pkAudio = g_pkReady = g_pkPlaying = g_pkSeekDrag = g_pkEnded = false;
+    g_pkDur = g_pkPos = 0;
+    g_pkHot = 0;
+    g_pkArtist[0] = g_pkTitle[0] = g_pkAlbum[0] = 0;
+    g_pkKbps = 0;
+}
+
+bool PkOpen(const wchar_t* path, bool audio)
+{
+    PkClose();
+    if (!VideoEnsureMf()) return false;
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+                                   D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                                   nullptr, 0, D3D11_SDK_VERSION, &g_pkDev, nullptr, &g_pkCtx);
+    if (FAILED(hr))
+        hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                               nullptr, 0, D3D11_SDK_VERSION, &g_pkDev, nullptr, &g_pkCtx);
+    if (FAILED(hr)) return false;
+    ID3D10Multithread* mt = nullptr;
+    if (SUCCEEDED(g_pkDev->QueryInterface(__uuidof(ID3D10Multithread), (void**)&mt)) && mt) { mt->SetMultithreadProtected(TRUE); mt->Release(); }
+    if (FAILED(MFCreateDXGIDeviceManager(&g_pkTok, &g_pkDm)) || FAILED(g_pkDm->ResetDevice(g_pkDev, g_pkTok))) return false;
+    IMFMediaEngineClassFactory* cf = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_MFMediaEngineClassFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                __uuidof(IMFMediaEngineClassFactory), (void**)&cf)) || !cf) return false;
+    IMFAttributes* a = nullptr;
+    MFCreateAttributes(&a, 3);
+    a->SetUnknown(MF_MEDIA_ENGINE_CALLBACK, &g_pkNotify);
+    a->SetUnknown(MF_MEDIA_ENGINE_DXGI_MANAGER, g_pkDm);
+    a->SetUINT32(MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM);
+    hr = cf->CreateInstance(audio ? MF_MEDIA_ENGINE_AUDIOONLY : 0, a, &g_pkMe);
+    a->Release();
+    cf->Release();
+    if (FAILED(hr) || !g_pkMe) { g_pkMe = nullptr; return false; }
+    g_pkAudio = audio;
+    g_pkMe->SetAutoPlay(FALSE);
+    g_pkMuted = RegLoadInt(audio ? kRegPeekAudMuted : kRegPeekVidMuted, audio ? 0 : 1, 0, 1) != 0;
+    g_pkMe->SetMuted(g_pkMuted ? TRUE : FALSE);
+    g_pkMe->SetVolume(audio ? 0.5 : 1.0);           // аудіо — тихіше: перегляд відкривається легко
+    if (!audio) {
+        static bool reg = false;
+        if (!reg) {
+            WNDCLASSW wc = {};
+            wc.lpfnWndProc = PkViewProc;
+            wc.hInstance = GetModuleHandleW(nullptr);
+            wc.lpszClassName = L"lilhelpers_pkview";
+            RegisterClassW(&wc);
+            reg = true;
+        }
+        g_pkView = CreateWindowExW(0, L"lilhelpers_pkview", L"", WS_CHILD | WS_CLIPSIBLINGS,
+                                   0, 0, 1, 1, g_peekWnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+    }
+    BSTR url = SysAllocString(path);
+    if (LhvPathIs(path)) {                          // CAPS-81: проєкт — через байтовий потік як MP4
+        IMFMediaEngineEx* ex = nullptr;
+        IMFByteStream* bs = LhvByteStream(path);
+        hr = (bs && SUCCEEDED(g_pkMe->QueryInterface(__uuidof(IMFMediaEngineEx), (void**)&ex)) && ex)
+             ? ex->SetSourceFromByteStream(bs, url) : E_FAIL;
+        if (ex) ex->Release();
+        if (bs) bs->Release();
+    } else {
+        hr = g_pkMe->SetSource(url);
+    }
+    SysFreeString(url);
+    return SUCCEEDED(hr);
+}
+
+RECT PeekBarRect(const RECT& content) { return { content.left, content.bottom - PeekPx(kPkBar), content.right, content.bottom }; }
+RECT PkPlayRect(const RECT& bar)
+{
+    const int sz = PeekPx(28), y = (bar.top + bar.bottom) / 2 - sz / 2;
+    return { bar.left + PeekPx(10), y, bar.left + PeekPx(10) + sz, y + sz };
+}
+RECT PkMuteRect(const RECT& bar)
+{
+    const int sz = PeekPx(28), y = (bar.top + bar.bottom) / 2 - sz / 2;
+    return { bar.right - PeekPx(10) - sz, y, bar.right - PeekPx(10), y + sz };
+}
+RECT PkTimeRect(const RECT& bar)
+{
+    const RECT pr = PkPlayRect(bar);
+    return { pr.right + PeekPx(8), bar.top, pr.right + PeekPx(8) + PeekPx(104), bar.bottom };
+}
+RECT PkTrackRect(const RECT& bar)
+{
+    const RECT tr = PkTimeRect(bar), mr = PkMuteRect(bar);
+    return { tr.right + PeekPx(4), bar.top + PeekPx(10), mr.left - PeekPx(12), bar.bottom - PeekPx(10) };
+}
+
+// Де лежить кадр відео (вписаний, по центру) — над смугою керування.
+RECT PeekMediaRect(const RECT& content)
+{
+    RECT c = content;
+    c.bottom -= PeekPx(kPkBar);
+    if (g_pkAudio || g_peekInfo.imgW <= 0 || g_peekInfo.imgH <= 0) return c;
+    const int cw = c.right - c.left, ch = c.bottom - c.top;
+    double k = 1.0;
+    if (g_peekInfo.imgW > cw) k = (double)cw / g_peekInfo.imgW;
+    if (g_peekInfo.imgH * k > ch) k = (double)ch / g_peekInfo.imgH;
+    const int dw = (int)(g_peekInfo.imgW * k + 0.5), dh = (int)(g_peekInfo.imgH * k + 0.5);
+    RECT r = { c.left + (cw - dw) / 2, c.top + (ch - dh) / 2, 0, 0 };
+    r.right = r.left + (dw > 1 ? dw : 1);
+    r.bottom = r.top + (dh > 1 ? dh : 1);
+    return r;
+}
+
+void PkLayout(HWND hwnd)
+{
+    if (!g_pkView) return;
+    if (g_peekKind != PeekKind::Media || g_pkAudio) { ShowWindow(g_pkView, SW_HIDE); return; }
+    const RECT v = PeekMediaRect(PeekContentRect(hwnd));
+    SetWindowPos(g_pkView, HWND_TOP, v.left, v.top, v.right - v.left, v.bottom - v.top, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+}
+
+void PkInvalidateBar()
+{
+    if (!g_peekWnd) return;
+    const RECT bar = PeekBarRect(PeekContentRect(g_peekWnd));
+    InvalidateRect(g_peekWnd, &bar, FALSE);
+}
+
+void PkToggle()
+{
+    if (!g_pkMe || !g_pkReady) return;
+    if (g_pkPlaying) { g_pkMe->Pause(); return; }
+    if (g_pkEnded) { g_pkMe->SetCurrentTime(0); g_pkPos = 0; }
+    g_pkMe->Play();
+}
+
+void PkSetMuted(bool m)
+{
+    g_pkMuted = m;
+    if (g_pkMe) g_pkMe->SetMuted(m ? TRUE : FALSE);
+    RegSaveInt(g_pkAudio ? kRegPeekAudMuted : kRegPeekVidMuted, m ? 1 : 0);
+    PkInvalidateBar();
+}
+
+void PkSeekFrac(double f)
+{
+    if (!g_pkMe || !g_pkReady || g_pkDur <= 0) return;
+    if (f < 0) f = 0;
+    if (f > 1) f = 1;
+    g_pkPos = f * g_pkDur;
+    g_pkMe->SetCurrentTime(g_pkPos);
+    g_pkEnded = false;
+    PkInvalidateBar();
+}
+
+void PkOnEvent(DWORD e)
+{
+    if (!g_pkMe) return;
+    switch (e) {
+    case MF_MEDIA_ENGINE_EVENT_CANPLAY:
+    case MF_MEDIA_ENGINE_EVENT_LOADEDDATA:
+        if (!g_pkReady) {
+            g_pkReady = true;
+            const double d = g_pkMe->GetDuration();
+            if (d > 0 && d == d && d < 1e9) g_pkDur = d;
+            g_pkMe->Play();                          // стартує сам: відео без звуку, аудіо тихіше
+            if (g_peekWnd) SetTimer(g_peekWnd, TIMER_PEEK_TICK, 16, nullptr);
+        }
+        break;
+    case MF_MEDIA_ENGINE_EVENT_PLAYING: g_pkPlaying = true; g_pkEnded = false; break;
+    case MF_MEDIA_ENGINE_EVENT_PAUSE:   g_pkPlaying = false; break;
+    case MF_MEDIA_ENGINE_EVENT_ENDED:   g_pkPlaying = false; g_pkEnded = true; if (g_pkDur > 0) g_pkPos = g_pkDur; break;
+    case MF_MEDIA_ENGINE_EVENT_ERROR:   g_pkPlaying = false; break;
+    default: return;
+    }
+    PkInvalidateBar();
+}
+
+void PkTick()
+{
+    if (!g_pkMe || !g_pkReady) return;
+    LONGLONG pts = 0;
+    if (!g_pkAudio && g_pkMe->OnVideoStreamTick(&pts) == S_OK) PkPresent();
+    if (g_pkPlaying && !g_pkSeekDrag) {
+        const double p = g_pkMe->GetCurrentTime();
+        if (p != g_pkPos) { g_pkPos = p; PkInvalidateBar(); }
+    }
+}
+
+LRESULT CALLBACK PkViewProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_NCHITTEST: return HTTRANSPARENT;         // миша — вікну перегляду
+    case WM_ERASEBKGND: return 1;
+    case WM_PAINT: ValidateRect(hwnd, nullptr); PkPresent(); return 0;
+    default: break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// Аудіо: тривалість, бітрейт і теги — через Media Foundation (системний код, без
+// сторонніх обробників властивостей: процес елевейтований, див. шапку розділу).
+const PROPERTYKEY kPkeyTitle       = { { 0xF29F85E0, 0x4FF9, 0x1068, { 0xAB, 0x91, 0x08, 0x00, 0x2B, 0x27, 0xB3, 0xD9 } }, 2 };
+const PROPERTYKEY kPkeyMusicArtist = { { 0x56A3372E, 0xCE9C, 0x11D2, { 0x9F, 0x0E, 0x00, 0x60, 0x97, 0xC6, 0x86, 0xF6 } }, 2 };
+const PROPERTYKEY kPkeyMusicAlbum  = { { 0x56A3372E, 0xCE9C, 0x11D2, { 0x9F, 0x0E, 0x00, 0x60, 0x97, 0xC6, 0x86, 0xF6 } }, 4 };
+const PROPERTYKEY kPkeyAudioKbps   = { { 0x64440490, 0x4C8B, 0x11D1, { 0x8B, 0x70, 0x08, 0x00, 0x36, 0xB1, 0x1A, 0x03 } }, 4 };
+
+bool IsAudioExt(const wchar_t* ext)
+{
+    static const wchar_t* const k[] = { L".mp3", L".m4a", L".aac", L".wav", L".flac", L".ogg", L".oga",
+                                        L".opus", L".wma", L".aiff", L".aif", L".mka" };
+    return ExtIn(ext, k, sizeof(k) / sizeof(*k));
+}
+
+static void PkPropStr(IPropertyStore* ps, const PROPERTYKEY& key, wchar_t* out, int cch)
+{
+    out[0] = 0;
+    PROPVARIANT pv;
+    PropVariantInit(&pv);
+    if (SUCCEEDED(ps->GetValue(key, &pv))) {
+        if (pv.vt == VT_LPWSTR && pv.pwszVal) lstrcpynW(out, pv.pwszVal, cch);
+        else if (pv.vt == (VT_VECTOR | VT_LPWSTR) && pv.calpwstr.cElems > 0 && pv.calpwstr.pElems[0]) lstrcpynW(out, pv.calpwstr.pElems[0], cch);
+        else if (pv.vt == VT_BSTR && pv.bstrVal) lstrcpynW(out, pv.bstrVal, cch);
+    }
+    PropVariantClear(&pv);
+}
+
+bool PeekLoadAudio(const wchar_t* path, wchar_t* durOut, int durCch)
+{
+    durOut[0] = 0;
+    if (!VideoEnsureMf()) return false;
+    IMFSourceReader* reader = nullptr;
+    if (FAILED(LhOpenReader(path, nullptr, &reader)) || !reader) return false;
+    bool ok = false;
+    PROPVARIANT pv;
+    PropVariantInit(&pv);
+    if (SUCCEEDED(reader->GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION, &pv)) && pv.vt == VT_UI8) {
+        FormatDuration((LONGLONG)pv.uhVal.QuadPart, durOut, durCch);
+        ok = true;
+    }
+    PropVariantClear(&pv);
+    IPropertyStore* ps = nullptr;
+    if (SUCCEEDED(reader->GetServiceForStream((DWORD)MF_SOURCE_READER_MEDIASOURCE, kMfPropHandlerService,
+                                              __uuidof(IPropertyStore), (void**)&ps)) && ps) {
+        PkPropStr(ps, kPkeyTitle, g_pkTitle, 160);
+        PkPropStr(ps, kPkeyMusicArtist, g_pkArtist, 160);
+        PkPropStr(ps, kPkeyMusicAlbum, g_pkAlbum, 160);
+        if (!g_pkKbps) {
+            PROPVARIANT b;
+            PropVariantInit(&b);
+            if (SUCCEEDED(ps->GetValue(kPkeyAudioKbps, &b)) && b.vt == VT_UI4) g_pkKbps = (int)(b.ulVal / 1000);
+            PropVariantClear(&b);
+        }
+        ps->Release();
+    }
+    reader->Release();
+    return ok;
+}
+
+// Смуга керування: пуск/пауза, час, доріжка з пройденим, звук.
+void PkPaintBar(HDC dc, const RECT& bar, COLORREF text, COLORREF gray, COLORREF accent)
+{
+    Gdiplus::Graphics g(dc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    const RECT pr = PkPlayRect(bar), mr = PkMuteRect(bar), tr = PkTrackRect(bar), tmr = PkTimeRect(bar);
+    auto hotFill = [&](const RECT& r, int which) {
+        if (g_pkHot != which) return;
+        Gdiplus::SolidBrush hb(Gdiplus::Color(g_peekDark ? 40 : 28, 128, 128, 128));
+        g.FillEllipse(&hb, (INT)r.left, (INT)r.top, (INT)(r.right - r.left), (INT)(r.bottom - r.top));
+    };
+    // пуск / пауза
+    hotFill(pr, 1);
+    {
+        Gdiplus::SolidBrush b(Gdiplus::Color(255, GetRValue(text), GetGValue(text), GetBValue(text)));
+        const float cx = (pr.left + pr.right) / 2.0f, cy = (pr.top + pr.bottom) / 2.0f, s = (float)PeekPx(6);
+        if (g_pkPlaying) {
+            g.FillRectangle(&b, cx - s, cy - s, s * 0.7f, s * 2);
+            g.FillRectangle(&b, cx + s * 0.3f, cy - s, s * 0.7f, s * 2);
+        } else {
+            Gdiplus::PointF p3[3] = { { cx - s * 0.8f, cy - s }, { cx - s * 0.8f, cy + s }, { cx + s * 1.0f, cy } };
+            g.FillPolygon(&b, p3, 3);
+        }
+    }
+    // час
+    {
+        wchar_t a[24], d[24], buf[64];
+        EvFmtTime(g_pkPos, a, 24);
+        EvFmtTime(g_pkDur, d, 24);
+        swprintf(buf, 64, L"%s / %s", a, d);
+        HGDIOBJ old = SelectObject(dc, g_peekFont);
+        SetTextColor(dc, gray);
+        RECT r = tmr;
+        DrawTextW(dc, buf, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
+        SelectObject(dc, old);
+    }
+    // доріжка
+    {
+        const float cy = (tr.top + tr.bottom) / 2.0f;
+        const float h = (float)PeekPx(4);
+        Gdiplus::SolidBrush tb(Gdiplus::Color(g_peekDark ? 70 : 60, GetRValue(gray), GetGValue(gray), GetBValue(gray)));
+        g.FillRectangle(&tb, (float)tr.left, cy - h / 2, (float)(tr.right - tr.left), h);
+        const double f = g_pkDur > 0 ? g_pkPos / g_pkDur : 0.0;
+        const float px = (float)(tr.left + (tr.right - tr.left) * (f < 0 ? 0 : f > 1 ? 1 : f));
+        Gdiplus::SolidBrush ab(Gdiplus::Color(255, GetRValue(accent), GetGValue(accent), GetBValue(accent)));
+        g.FillRectangle(&ab, (float)tr.left, cy - h / 2, px - tr.left, h);
+        const float k = (float)PeekPx(g_pkHot == 3 || g_pkSeekDrag ? 7 : 5);
+        g.FillEllipse(&ab, px - k, cy - k, k * 2, k * 2);
+    }
+    // звук
+    hotFill(mr, 2);
+    {
+        Gdiplus::Pen pen(Gdiplus::Color(255, GetRValue(text), GetGValue(text), GetBValue(text)), (float)PeekPx(2) * 0.8f);
+        pen.SetStartCap(Gdiplus::LineCapRound); pen.SetEndCap(Gdiplus::LineCapRound);
+        Gdiplus::SolidBrush b(Gdiplus::Color(255, GetRValue(text), GetGValue(text), GetBValue(text)));
+        const float cx = (mr.left + mr.right) / 2.0f, cy = (mr.top + mr.bottom) / 2.0f, s = (float)PeekPx(6);
+        Gdiplus::PointF sp[6] = { { cx - s, cy - s * 0.4f }, { cx - s * 0.4f, cy - s * 0.4f }, { cx + s * 0.2f, cy - s },
+                                  { cx + s * 0.2f, cy + s }, { cx - s * 0.4f, cy + s * 0.4f }, { cx - s, cy + s * 0.4f } };
+        g.FillPolygon(&b, sp, 6);
+        if (g_pkMuted) g.DrawLine(&pen, cx - s, cy - s, cx + s, cy + s);
+        else g.DrawArc(&pen, cx - s * 0.1f, cy - s * 0.7f, s * 0.9f, s * 1.4f, -60.0f, 120.0f);
+    }
+}
+
 // ---- завантаження елемента ----
 
 void PeekReset()
 {
+    PkClose();                                        // CAPS-18
     PdfSessionClose();
     if (g_peekWnd) KillTimer(g_peekWnd, TIMER_PEEK_ANIM);
     delete g_peekScaled; g_peekScaled = nullptr;
@@ -6524,7 +6966,17 @@ void PeekLoad(const wchar_t* path)
         if (PeekLoadVideo(path, dur, 32)) {
             swprintf(I.subtitle, 320, S(Str::PeekFmtVideo), I.imgW, I.imgH,
                      dur[0] ? dur : L"?", I.size);
-            g_peekKind = PeekKind::Image;
+            // CAPS-18: перший кадр — постер, доки рушій не віддасть свій; далі грає.
+            g_peekKind = PkOpen(path, false) ? PeekKind::Media : PeekKind::Image;
+            return;
+        }
+    }
+    if (IsAudioExt(ext)) {                              // CAPS-18
+        wchar_t dur[32] = {};
+        if (PeekLoadAudio(path, dur, 32) && PkOpen(path, true)) {
+            if (g_pkKbps > 0) swprintf(I.subtitle, 320, S(Str::PeekFmtAudio), I.type, dur, g_pkKbps, I.size);
+            else              swprintf(I.subtitle, 320, S(Str::PeekFmtThree), I.type, dur, I.size);
+            g_peekKind = PeekKind::Media;
             return;
         }
     }
@@ -6652,6 +7104,7 @@ void PeekLayout(HWND hwnd)
     }
     delete g_peekScaled;
     g_peekScaled = nullptr;   // під новий розмір перерахується при малюванні
+    PkLayout(hwnd);           // CAPS-18: вікно кадру — на місце кадру
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
@@ -6674,12 +7127,16 @@ void PeekShow()
     const int availH = (work.bottom - work.top) * 80 / 100;
     const int head = PeekPx(kPeekHead);
     int w = PeekPx(720), h = PeekPx(560);
-    if (g_peekKind == PeekKind::Image && g_peekImg) {
+    const int bar = (g_peekKind == PeekKind::Media) ? PeekPx(kPkBar) : 0;   // CAPS-18
+    if ((g_peekKind == PeekKind::Image || (g_peekKind == PeekKind::Media && !g_pkAudio)) && g_peekImg) {
         double scale = 1.0;
         if (g_peekInfo.imgW > availW) scale = (double)availW / g_peekInfo.imgW;
-        if (g_peekInfo.imgH * scale > availH - head) scale = (double)(availH - head) / g_peekInfo.imgH;
+        if (g_peekInfo.imgH * scale > availH - head - bar) scale = (double)(availH - head - bar) / g_peekInfo.imgH;
         w = (int)(g_peekInfo.imgW * scale + 0.5);
-        h = (int)(g_peekInfo.imgH * scale + 0.5) + head;
+        h = (int)(g_peekInfo.imgH * scale + 0.5) + head + bar;
+    } else if (g_peekKind == PeekKind::Media) {          // аудіо: картка з тегами
+        w = PeekPx(580);
+        h = head + PeekPx(56) + PeekPx(120) + bar;
     } else if (g_peekKind == PeekKind::Card) {
         const int rows = PeekCardRows() * PeekPx(24);
         w = PeekPx(580);
@@ -6931,7 +7388,46 @@ void PeekPaint(HDC dc, const RECT& rc)
     c.top += head;
     const int cw = c.right - c.left, ch = c.bottom - c.top;
 
-    if (g_peekKind == PeekKind::Image && g_peekImg && cw > 0 && ch > 0) {
+    if (g_peekKind == PeekKind::Media) {                 // CAPS-18
+        const RECT bar = PeekBarRect(c);
+        if (!g_pkAudio && g_peekImg) {                      // постер під вікном кадру (доки рушій не готовий)
+            const RECT dst = PeekMediaRect(c);
+            Gdiplus::Graphics g(dc);
+            g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            g.DrawImage(g_peekImg, Gdiplus::Rect(dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top),
+                        0, 0, g_peekInfo.imgW, g_peekInfo.imgH, Gdiplus::UnitPixel);
+        } else if (g_pkAudio) {                             // аудіо: значок і теги
+            const int icon = PeekPx(96);
+            int ix = c.left + PeekPx(28), iy = c.top + PeekPx(28);
+            if (g_peekIconBig) DrawIconEx(dc, ix, iy, g_peekIconBig, icon, icon, 0, nullptr, DI_NORMAL);
+            const int lx = ix + icon + PeekPx(28), vx = lx + PeekPx(100), rowH = PeekPx(24);
+            int y = iy + PeekPx(2);
+            auto row = [&](Str label, const wchar_t* value) {
+                if (!value || !*value) return;
+                RECT lr = { lx, y, vx - PeekPx(8), y + rowH };
+                RECT vr = { vx, y, c.right - PeekPx(20), y + rowH };
+                SelectObject(dc, g_peekFont);
+                SetTextColor(dc, gray);
+                DrawTextW(dc, S(label), -1, &lr, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+                SetTextColor(dc, text);
+                DrawTextW(dc, value, -1, &vr, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+                y += rowH;
+            };
+            row(Str::PeekLblTitle,  g_pkTitle);
+            row(Str::PeekLblArtist, g_pkArtist);
+            row(Str::PeekLblAlbum,  g_pkAlbum);
+            row(Str::PeekLblType,   g_peekInfo.type);
+            row(Str::PeekLblWhere,  g_peekInfo.folder);
+        }
+        {
+            RECT sep = { bar.left, bar.top, bar.right, bar.top + 1 };
+            HBRUSH b = CreateSolidBrush(line);
+            FillRect(dc, &sep, b);
+            DeleteObject(b);
+        }
+        PkPaintBar(dc, bar, text, gray, g_peekDark ? RGB(76, 194, 255) : RGB(0, 95, 184));
+    } else if (g_peekKind == PeekKind::Image && g_peekImg && cw > 0 && ch > 0) {
         RECT dst = PeekImageRect(c);
         const int dw = dst.right - dst.left, dh = dst.bottom - dst.top;
         Gdiplus::Graphics g(dc);
@@ -7090,6 +7586,16 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_MOUSEMOVE: {
         RECT rc;
         GetClientRect(hwnd, &rc);
+        if (g_peekKind == PeekKind::Media) {              // CAPS-18: смуга керування
+            POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            const RECT bar = PeekBarRect(PeekContentRect(hwnd));
+            const RECT tr = PkTrackRect(bar);
+            if (g_pkSeekDrag) { PkSeekFrac((double)(pt.x - tr.left) / (tr.right - tr.left > 0 ? tr.right - tr.left : 1)); return 0; }
+            const RECT pr = PkPlayRect(bar), mr = PkMuteRect(bar);
+            RECT trh = tr; InflateRect(&trh, 0, PeekPx(8));
+            const int hot = PtInRect(&pr, pt) ? 1 : PtInRect(&mr, pt) ? 2 : PtInRect(&trh, pt) ? 3 : 0;
+            if (hot != g_pkHot) { g_pkHot = hot; InvalidateRect(hwnd, &bar, FALSE); }
+        }
         if (g_peekPanning) {
             const POINT now = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
             g_peekPanX += now.x - g_peekPanFrom.x;
@@ -7124,6 +7630,7 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_MOUSELEAVE:
         g_peekTracking = false;
+        if (g_pkHot) { g_pkHot = 0; PkInvalidateBar(); }   // CAPS-18
         if (g_peekCloseHot || g_peekPagerHot) {
             g_peekCloseHot = false;
             g_peekPagerHot = 0;
@@ -7140,7 +7647,9 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         ScreenToClient(hwnd, &cur);
         // У багатосторінковому PDF просте коліщатко гортає сторінки, а Ctrl масштабує;
         // усюди інакше коліщатко саме масштабує — гортати там нічого.
-        if (PeekHasPager() && !ctrl) {
+        if (g_peekKind == PeekKind::Media) {              // CAPS-18: коліщатко — перемотка на 5 с
+            if (g_pkDur > 0) PkSeekFrac((g_pkPos + (delta > 0 ? -5.0 : 5.0)) / g_pkDur);
+        } else if (PeekHasPager() && !ctrl) {
             const int to = (int)g_peekPdfPage + (delta < 0 ? 1 : -1);
             if (PeekPdfGoto(to)) InvalidateRect(hwnd, nullptr, FALSE);
         } else {
@@ -7153,6 +7662,21 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         RECT rc;
         GetClientRect(hwnd, &rc);
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        if (g_peekKind == PeekKind::Media) {              // CAPS-18
+            const RECT bar = PeekBarRect(PeekContentRect(hwnd));
+            const RECT pr = PkPlayRect(bar), mr = PkMuteRect(bar), tr = PkTrackRect(bar);
+            RECT trh = tr; InflateRect(&trh, 0, PeekPx(8));
+            if (PtInRect(&pr, pt)) { PkToggle(); return 0; }
+            if (PtInRect(&mr, pt)) { PkSetMuted(!g_pkMuted); return 0; }
+            if (PtInRect(&trh, pt)) {
+                g_pkSeekDrag = true;
+                SetCapture(hwnd);
+                PkSeekFrac((double)(pt.x - tr.left) / (tr.right - tr.left > 0 ? tr.right - tr.left : 1));
+                return 0;
+            }
+            if (pt.y >= PeekPx(kPeekHead) && pt.y < bar.top) { PkToggle(); return 0; }   // клік по кадру — пауза/пуск
+            return 0;
+        }
         if (pt.y >= PeekPx(kPeekHead) && g_peekKind == PeekKind::Image && g_peekZoom > 1.0f) {
             g_peekPanning = true;
             g_peekPanFrom = pt;
@@ -7162,10 +7686,12 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_LBUTTONDBLCLK:
+        if (g_peekKind == PeekKind::Media) return 0;   // CAPS-18: клік уже спрацював як пауза/пуск
         PeekZoomReset(hwnd);            // подвійний клік — знову вписати у вікно
         return 0;
 
     case WM_LBUTTONUP: {
+        if (g_pkSeekDrag) { g_pkSeekDrag = false; ReleaseCapture(); PkInvalidateBar(); return 0; }   // CAPS-18
         if (g_peekPanning) {
             g_peekPanning = false;
             ReleaseCapture();
@@ -7190,8 +7716,13 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == VK_ESCAPE || wp == VK_SPACE) PeekClose();
         return 0;
 
+    case WMAPP_PKEVENT:                                    // CAPS-18: подія рушія
+        PkOnEvent((DWORD)wp);
+        return 0;
+
     case WM_TIMER:
         if (wp == TIMER_PEEK_FOLLOW) PeekFollowTick();
+        else if (wp == TIMER_PEEK_TICK) PkTick();          // CAPS-18
         else if (wp == TIMER_PEEK_ANIM && g_peekImg && g_peekFrames > 1) {
             // Кадри мають РІЗНУ тривалість, тож таймер переставляється щокадру.
             g_peekFrame = (g_peekFrame + 1) % g_peekFrames;
@@ -9311,6 +9842,7 @@ struct EdSnap {
     bool mirror;
     int srcId;        // який саме оригінал був у роботі
     int vidW = 0, vidH = 0;   // CAPS-90: розмір документа відео (0 — не відео)
+    std::map<int, std::wstring> grpNames;   // CAPS-100: назви груп (перейменування — теж крок)
 };
 
 struct EdTile {
@@ -9343,7 +9875,8 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    VidMarks,             // CAPS-80: доріжка позначок
                    MetaClear,            // CAPS-88: «Прибрати всі метадані»
                    VidResize,            // CAPS-90: «Розмір відео…» у правій панелі
-                   MarkRow, MarkEye };   // CAPS-98: рядок панелі «Позначки» і його око
+                   MarkRow, MarkEye,     // CAPS-98: рядок панелі «Позначки» і його око
+                   MarkGroup, MarkGroupEye, MarkGroupFold };   // CAPS-100: вузол групи, його око, згорнути
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -9399,6 +9932,10 @@ bool  g_edMarksDragging = false;   // миша вже зрушила — це т
 POINT g_edMarksDragFrom = {};
 HWND  g_edMarksEdit = nullptr;     // поле перейменування
 int   g_edMarksEditIdx = -1;
+int   g_edMarksEditGrp = 0;        // CAPS-100: перейменовують групу, а не позначку
+int   g_edMarksDragGrp = 0;        // CAPS-100: тягнуть вузол групи (усіх її учасників)
+struct EdMarkRow { int obj; int grp; bool node; };   // рядок списку: позначка або вузол групи (obj — найвищий учасник)
+std::vector<EdMarkRow> g_edMarksRows;
 int   g_edMarksSelSeen = -2;       // прокрутити до вибраного лише при зміні вибору
 constexpr int kEdMarksEditId = 430;
 constexpr int kEdMarksRowH = 30;   // логічних px
@@ -9618,6 +10155,10 @@ void EdMarksMenu(HWND hwnd, int idx, POINT pt);
 bool EdMarksDropAt(POINT pt, int* out);
 void EdMarksMove(int idx, int dropPos);
 void EdMarksToggleHidden(int idx);
+bool EdGroupsCompact();                          // CAPS-100
+void EdMarksRenameGroupBegin(HWND hwnd, int grp);
+void EdMarksGroupToggleHidden(int grp);
+std::wstring EdGroupName(int grp);
 void EdMetaHide();
 void EdMetaRefresh();
 void EdMetaCommit(HWND hwnd, int i);
@@ -9701,6 +10242,9 @@ std::vector<EdObj> g_edObjs;
 int      g_edSel = -1;
 std::vector<int> g_edSelMore;
 int      g_edNextGrp = 1;
+// CAPS-100: назва групи (порожня — «Група N») і згорнуті вузли панелі (лише в пам'яті).
+std::map<int, std::wstring> g_edGrpNames;
+std::set<int> g_edGrpFold;
 
 // ---- CAPS-27: кадр ------------------------------------------------------
 // Кроп — ВЛАСТИВІСТЬ кадру, а не дія над пікселями. Знімок лишається цілим,
@@ -10488,6 +11032,7 @@ void EdSelMoreSnap(EdSnap& s);   // нижче: список вибраних ж
 
 void EdSnapTone(EdSnap& s)
 {
+    s.grpNames = g_edGrpNames;   // CAPS-100
     s.exposure = g_edExposure; s.gamma = g_edGamma; s.contrast = g_edContrast;
     s.rot = g_edRot;           s.mirror = g_edMirror;
     s.srcId = g_edSrcId;
@@ -10511,6 +11056,7 @@ void EdPushUndo()
 void EdApply(const EdSnap& s)
 {
     g_edObjs = s.objs;
+    g_edGrpNames = s.grpNames;   // CAPS-100
     g_edSel  = s.sel;
     g_edSelMore = s.selMore;
     g_edCrop = s.crop;
@@ -15889,6 +16435,36 @@ void EdAlignSel(int what)
     if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
 }
 
+// CAPS-100: група — один шар. Учасники стають суміжними в z-порядку: під
+// найвищим із них, у своєму відносному порядку (рішення власника 25.09). Інакше
+// вузол у панелі обіцяв би порядок малювання, якого немає. Повертає, чи щось змінилось.
+bool EdGroupsCompact()
+{
+    const int n = (int)g_edObjs.size();
+    std::vector<EdObj> out;
+    out.reserve(n);
+    std::set<int> seen;
+    for (int i = n - 1; i >= 0; --i) {                 // згори вниз
+        const int g = g_edObjs[i].grp;
+        if (g == 0) { out.push_back(g_edObjs[i]); continue; }
+        if (seen.count(g)) continue;
+        seen.insert(g);
+        for (int j = i; j >= 0; --j) if (g_edObjs[j].grp == g) out.push_back(g_edObjs[j]);
+    }
+    std::reverse(out.begin(), out.end());              // знизу вгору, як у документі
+    bool changed = false;
+    for (int i = 0; i < n && !changed; ++i)
+        if (out[i].grp != g_edObjs[i].grp || out[i].kind != g_edObjs[i].kind || out[i].x != g_edObjs[i].x ||
+            out[i].y != g_edObjs[i].y || out[i].seq != g_edObjs[i].seq) changed = true;
+    if (changed) g_edObjs.swap(out);
+    for (auto it = g_edGrpNames.begin(); it != g_edGrpNames.end();) {   // назви груп, яких уже нема
+        bool alive = false;
+        for (const EdObj& o : g_edObjs) if (o.grp == it->first) { alive = true; break; }
+        it = alive ? std::next(it) : g_edGrpNames.erase(it);
+    }
+    return changed;
+}
+
 void EdGroupSel(bool group)
 {
     const std::vector<int> all = EdSelAll();
@@ -15897,6 +16473,10 @@ void EdGroupSel(bool group)
     EdPushUndo();
     const int id = group ? g_edNextGrp++ : 0;
     for (size_t k = 0; k < all.size(); ++k) g_edObjs[all[k]].grp = id;
+    if (group) {
+        EdGroupsCompact();                              // CAPS-100: один шар
+        for (int i = (int)g_edObjs.size() - 1; i >= 0; --i) if (g_edObjs[i].grp == id) { EdSelectOne(i); break; }
+    }
     if (g_edWnd) { EdLayout(g_edWnd); InvalidateRect(g_edWnd, nullptr, FALSE); }
 }
 
@@ -15982,16 +16562,25 @@ void EdDuplicateSel()
     }
 }
 
+// CAPS-100: усі вибрані разом, у своєму порядку — група так лишається одним шаром.
 void EdRaise(bool front)
 {
-    if (g_edSel < 0 || g_edSel >= (int)g_edObjs.size()) return;
-    const int last = (int)g_edObjs.size() - 1;
-    if ((front && g_edSel == last) || (!front && g_edSel == 0)) return;
+    std::vector<int> all = EdSelAll();
+    if (all.empty()) return;
+    std::sort(all.begin(), all.end());
+    const int n = (int)g_edObjs.size(), m = (int)all.size();
+    bool already = true;
+    for (int k = 0; k < m; ++k) if (all[k] != (front ? n - m + k : k)) { already = false; break; }
+    if (already) return;
     EdPushUndo();
-    EdObj o = g_edObjs[g_edSel];
-    g_edObjs.erase(g_edObjs.begin() + g_edSel);
-    if (front) { g_edObjs.push_back(o); g_edSel = (int)g_edObjs.size() - 1; }
-    else       { g_edObjs.insert(g_edObjs.begin(), o); g_edSel = 0; }
+    std::vector<EdObj> picked;
+    for (int k = 0; k < m; ++k) picked.push_back(g_edObjs[all[k]]);
+    for (int k = m - 1; k >= 0; --k) g_edObjs.erase(g_edObjs.begin() + all[k]);
+    const int at = front ? (int)g_edObjs.size() : 0;
+    g_edObjs.insert(g_edObjs.begin() + at, picked.begin(), picked.end());
+    EdSelClear();
+    g_edSel = at + m - 1;
+    for (int k = 0; k + 1 < m; ++k) g_edSelMore.push_back(at + k);
     InvalidateRect(g_edWnd, nullptr, FALSE);
 }
 
@@ -16855,6 +17444,13 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::OvCopy:   return Str::EdTipOvCopy;
     case EdHit::OvWindow: return Str::EdTipOvWindow;
     case EdHit::MarkRow:  return Str::EdTipMarkRow;                    // CAPS-98
+    case EdHit::MarkGroup: return Str::EdTipMarkGroup;                 // CAPS-100
+    case EdHit::MarkGroupFold: return Str::EdTipMarkFold;
+    case EdHit::MarkGroupEye: {
+        bool allHidden = true;
+        for (const EdObj& o : g_edObjs) if (o.grp == idx && !o.hidden) allHidden = false;
+        return allHidden ? Str::EdTipMarkShow : Str::EdTipMarkHide;
+    }
     case EdHit::MarkEye:  return (idx >= 0 && idx < (int)g_edObjs.size() && g_edObjs[idx].hidden)
                                  ? Str::EdTipMarkShow : Str::EdTipMarkHide;
     case EdHit::InsertImg: return Str::EdTipInsertImg;
@@ -18653,9 +19249,12 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (g_edVideo && !g_edObjs[mi].hidden && g_edObjs[mi].vf1 != INT_MAX && !EdObjLive(g_edObjs[mi]))
                 EvSeek((g_edObjs[mi].vf0 + 0.25) / g_evFps);
             g_edMarksDragIdx = mi;
+            g_edMarksDragGrp = 0;
             g_edMarksDragging = false;
             g_edMarksDrop = -1;
             g_edMarksDragFrom = pt;
+            // CAPS-100: учасника групи окремо не витягнеш — лише клік (вибір)
+            if (g_edObjs[mi].grp) { EdLayout(hwnd); InvalidateRect(hwnd, nullptr, FALSE); return 0; }
             g_edDrag = EdDrag::MarkRow;
             SetCapture(hwnd);
             EdLayout(hwnd);
@@ -18665,6 +19264,31 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case EdHit::MarkEye:                     // CAPS-98
             EdMarksToggleHidden(r->idx);
             return 0;
+        case EdHit::MarkGroupFold:               // CAPS-100: згорнути/розгорнути вузол
+            if (g_edGrpFold.count(r->idx)) g_edGrpFold.erase(r->idx); else g_edGrpFold.insert(r->idx);
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, &g_edRcPanel, FALSE);
+            return 0;
+        case EdHit::MarkGroupEye:                // CAPS-100
+            EdMarksGroupToggleHidden(r->idx);
+            return 0;
+        case EdHit::MarkGroup: {                 // CAPS-100: вибрати всю групу + тягнення вузла
+            if (g_edMarksEdit) EdMarksRenameEnd(hwnd, true);
+            int top = -1;
+            for (int i = (int)g_edObjs.size() - 1; i >= 0; --i) if (g_edObjs[i].grp == r->idx) { top = i; break; }
+            if (top < 0) return 0;
+            EdSelectOne(top);
+            g_edMarksDragIdx = top;
+            g_edMarksDragGrp = r->idx;
+            g_edMarksDragging = false;
+            g_edMarksDrop = -1;
+            g_edMarksDragFrom = pt;
+            g_edDrag = EdDrag::MarkRow;
+            SetCapture(hwnd);
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         case EdHit::Panel:                       // CAPS-88: одна відкрита; повторний клік — згорнути
             if (g_edMarksEdit) EdMarksRenameEnd(hwnd, true);   // CAPS-98
             g_edPanelTab = (g_edPanelTab == r->idx) ? -1 : r->idx;
@@ -18962,6 +19586,14 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             EdMarksMenu(hwnd, rr->idx, pt);
             return 0;
         }
+        if (rr && rr->what == EdHit::MarkGroup && !g_edLibOpen) {   // CAPS-100
+            if (g_edMarksEdit) EdMarksRenameEnd(hwnd, true);
+            for (int i = (int)g_edObjs.size() - 1; i >= 0; --i) if (g_edObjs[i].grp == rr->idx) { EdSelectOne(i); break; }
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            EdMarksMenu(hwnd, -rr->idx, pt);
+            return 0;
+        }
         break;
     }
 
@@ -18970,6 +19602,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         {   // CAPS-98: подвійний клік по рядку — перейменувати
             const EdRegion* mr = EdFind(pt);
             if (mr && mr->what == EdHit::MarkRow && !g_edLibOpen) { EdMarksRenameBegin(hwnd, mr->idx); return 0; }
+            if (mr && mr->what == EdHit::MarkGroup && !g_edLibOpen) { EdMarksRenameGroupBegin(hwnd, mr->idx); return 0; }   // CAPS-100
         }
         if (g_edLibOpen) {
             const EdRegion* lr = EdFind(pt);
@@ -19419,6 +20052,7 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edRedo.clear();
     EdSelClear();
     g_edNextGrp = 1;
+    g_edGrpNames.clear(); g_edGrpFold.clear();   // CAPS-100
     g_edTool = kEdStartTool;            // CAPS-66
     g_edZoom = 1.0f;
     g_edPanX = g_edPanY = 0;
@@ -19919,8 +20553,9 @@ bool EdWriteFile(const wchar_t* path)
 
 const char kEdDocMagic[8] = { 'L', 'H', 'S', 'H', 'O', 'T', 0x1A, '\n' };
 constexpr WORD kEdDocVerMajor = 1;   // ламає сумісність
-constexpr WORD kEdDocVerMinor = 2;   // лише додає поля: 1.1 — INFO і THMB для бібліотеки;
+constexpr WORD kEdDocVerMinor = 3;   // лише додає поля: 1.1 — INFO і THMB для бібліотеки;
                                      // 1.2 — у OBJ  поля shdw/glow (CAPS-31), name/hidn (CAPS-98)
+                                     // 1.3 — блок GRPN: назви груп (CAPS-100); учасники групи суміжні
 
 struct EdKindTag { EdKind kind; const char* tag; };
 const EdKindTag kEdKindTags[] = {
@@ -20566,6 +21201,12 @@ bool EdDocWrite(const wchar_t* path, const std::wstring& name)
         for (size_t i = 0; i < g_edObjs.size(); ++i) EdWriteObj(w, g_edObjs[i]);
         w.close(at);
     }
+    if (!g_edGrpNames.empty()) {                // CAPS-100 (1.3): назви груп — лише коли є
+        const size_t at = w.open("GRPN");
+        w.u32v((DWORD)g_edGrpNames.size());
+        for (const auto& kv : g_edGrpNames) { w.i32v(kv.first); w.str(kv.second); }
+        w.close(at);
+    }
 
     return EdWrCommit(path, w);
 }
@@ -20678,6 +21319,7 @@ struct EdDoc {
     std::wstring name, source;
     ULONGLONG created = 0;              // CAPS-88: дата зйомки
     LhMeta meta;                        //          і решта метаданих
+    std::map<int, std::wstring> grpNames;   // CAPS-100
     void free()
     {
         delete src; src = nullptr;
@@ -20745,6 +21387,9 @@ int EdDocRead(const wchar_t* path, EdDoc& d)
         } else if (!memcmp(t, "NUMS", 4)) {
             d.seq = r.i32v(); d.startNum = r.i32v();
             d.counterGroup = r.i32v(); d.nextGrp = r.i32v();
+        } else if (!memcmp(t, "GRPN", 4)) {       // CAPS-100
+            const DWORD n = r.u32v();
+            for (DWORD i = 0; i < n && n < 10000 && !r.bad; ++i) { const int g = r.i32v(); d.grpNames[g] = r.str(); }
         } else if (!memcmp(t, "OBJS", 4)) {
             const DWORD n = r.u32v();
             if (n > 100000) { r.bad = true; break; }
@@ -20801,6 +21446,9 @@ void EdDocApply(EdDoc& d, const wchar_t* path)
     g_edShotScale = d.scale1000 / 1000.0;   // CAPS-58
     g_edCounterGroup = d.counterGroup;
     g_edNextGrp = d.nextGrp > 0 ? d.nextGrp : 1;
+    g_edGrpNames = d.grpNames;          // CAPS-100
+    g_edGrpFold.clear();
+    EdGroupsCompact();                  // старі файли: учасники групи — докупи
 
     g_edUndo.clear();
     g_edRedo.clear();
@@ -21066,7 +21714,7 @@ bool VidMetaRead(const std::wstring& mp4, VidMeta& m)
 const char kLhvMagic[8] = { 'L', 'H', 'V', 'I', 'D', 'E', 'O', 0x1A };
 const char kLhvEnd[8]   = { 'L', 'H', 'V', 'E', 'N', 'D', 0, 0 };
 const BYTE kLhvUuid[16] = { 0x6c, 0x68, 0x76, 0x2d, 0x9a, 0x3e, 0x4f, 0x81, 0xb2, 0x5d, 0x0c, 0x77, 0xe1, 0x46, 0x2f, 0xa9 };
-constexpr WORD kLhvVerMajor = 1, kLhvVerMinor = 1;   // 1.1 — у OBJ  shdw/glow, name/hidn (CAPS-31/98)
+constexpr WORD kLhvVerMajor = 1, kLhvVerMinor = 2;   // 1.1 — у OBJ  shdw/glow, name/hidn (CAPS-31/98); 1.2 — GRPN (CAPS-100)
 
 bool LhvIs(const wchar_t* path) { return LhvPathIs(path); }
 
@@ -24190,37 +24838,81 @@ std::wstring EdObjName(const EdObj& o, int idx)
     return n + L" " + std::to_wstring(ord);
 }
 
+// CAPS-100: список = позначки згори вниз, група — вузол + її учасники з відступом
+// (учасники суміжні: EdGroupsCompact). Згорнутий вузол ховає учасників.
+void EdMarksBuildRows()
+{
+    g_edMarksRows.clear();
+    std::set<int> seen;
+    for (int i = (int)g_edObjs.size() - 1; i >= 0; --i) {
+        const int g = g_edObjs[i].grp;
+        if (g == 0) { g_edMarksRows.push_back(EdMarkRow{ i, 0, false }); continue; }
+        if (!seen.count(g)) { seen.insert(g); g_edMarksRows.push_back(EdMarkRow{ i, g, true }); }
+        if (!g_edGrpFold.count(g)) g_edMarksRows.push_back(EdMarkRow{ i, g, false });
+    }
+}
+
+// Рядок позначки в списку (для прокрутки до вибраного); -1 — схований у згорнутій групі
+int EdMarksRowOf(int obj)
+{
+    for (size_t r = 0; r < g_edMarksRows.size(); ++r)
+        if (!g_edMarksRows[r].node && g_edMarksRows[r].obj == obj) return (int)r;
+    for (size_t r = 0; r < g_edMarksRows.size(); ++r)
+        if (g_edMarksRows[r].node && g_edMarksRows[r].grp == g_edObjs[obj].grp) return (int)r;
+    return -1;
+}
+
+std::wstring EdGroupName(int grp)
+{
+    auto it = g_edGrpNames.find(grp);
+    if (it != g_edGrpNames.end() && !it->second.empty()) return it->second;
+    wchar_t b[64];
+    swprintf(b, 64, S(Str::EdMarksGroupFmt), grp);
+    return b;
+}
+
 void EdMarksLayout(HWND hwnd)
 {
     const int px = g_edRcPanel.left + EdPx(10), pr = g_edRcPanel.right - EdPx(10);
     const int top = g_edRcPanel.top + EdPx(14) + EdPx(18) + EdPx(10);
     g_edMarksRc = { px, top, pr, g_edRcPanel.bottom - EdPx(10) };
-    const int n = (int)g_edObjs.size(), rh = EdPx(kEdMarksRowH);
+    EdMarksBuildRows();
+    const int n = (int)g_edMarksRows.size(), rh = EdPx(kEdMarksRowH);
     const int total = n * rh, view = g_edMarksRc.bottom - g_edMarksRc.top;
     if (g_edMarksScroll > total - view) g_edMarksScroll = total - view;
     if (g_edMarksScroll < 0) g_edMarksScroll = 0;
     if (g_edSel != g_edMarksSelSeen) {              // вибір змінився — його рядок у поле зору
         g_edMarksSelSeen = g_edSel;
-        if (g_edSel >= 0 && g_edSel < n) {
-            const int y0 = (n - 1 - g_edSel) * rh - g_edMarksScroll;
+        const int row = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) ? EdMarksRowOf(g_edSel) : -1;
+        if (row >= 0) {
+            const int y0 = row * rh - g_edMarksScroll;
             if (y0 < 0) g_edMarksScroll += y0;
             else if (y0 + rh > view) g_edMarksScroll += y0 + rh - view;
             if (g_edMarksScroll < 0) g_edMarksScroll = 0;
         }
     }
     for (int row = 0; row < n; ++row) {
-        const int i = n - 1 - row;                  // верхній рядок — верхній шар
+        const EdMarkRow& mr = g_edMarksRows[row];
         RECT r = { g_edMarksRc.left, g_edMarksRc.top + row * rh - g_edMarksScroll,
                    g_edMarksRc.right, g_edMarksRc.top + (row + 1) * rh - g_edMarksScroll };
         if (r.bottom <= g_edMarksRc.top || r.top >= g_edMarksRc.bottom) continue;
         if (r.top < g_edMarksRc.top) r.top = g_edMarksRc.top;
         if (r.bottom > g_edMarksRc.bottom) r.bottom = g_edMarksRc.bottom;
-        EdAdd(r, EdHit::MarkRow, i);
+        if (mr.node) {                              // CAPS-100: вузол групи
+            EdAdd(r, EdHit::MarkGroup, mr.grp);
+            RECT fold = { r.left, r.top, r.left + EdPx(22), r.bottom };
+            EdAdd(fold, EdHit::MarkGroupFold, mr.grp);
+            RECT eye = { r.right - EdPx(30), r.top, r.right, r.bottom };
+            EdAdd(eye, EdHit::MarkGroupEye, mr.grp);
+            continue;
+        }
+        EdAdd(r, EdHit::MarkRow, mr.obj);
         RECT eye = { r.right - EdPx(30), r.top, r.right, r.bottom };
-        EdAdd(eye, EdHit::MarkEye, i);              // після рядка: EdFind іде з кінця
+        EdAdd(eye, EdHit::MarkEye, mr.obj);         // після рядка: EdFind іде з кінця
     }
     if (g_edMarksEdit) {                            // поле перейменування їде за своїм рядком
-        const RECT* r = EdRegionRect(EdHit::MarkRow, g_edMarksEditIdx);
+        const RECT* r = g_edMarksEditGrp ? EdRegionRect(EdHit::MarkGroup, g_edMarksEditGrp)
+                                         : EdRegionRect(EdHit::MarkRow, g_edMarksEditIdx);
         if (r) { MoveWindow(g_edMarksEdit, r->left + EdPx(28), r->top + EdPx(3),
                             (r->right - EdPx(32)) - (r->left + EdPx(28)), r->bottom - r->top - EdPx(6), TRUE);
                  ShowWindow(g_edMarksEdit, SW_SHOWNA); }
@@ -24228,34 +24920,82 @@ void EdMarksLayout(HWND hwnd)
     }
 }
 
-// Куди впаде рядок: позиція в порядку показу 0..n (лінія між рядками).
+// Куди впаде рядок: позиція в порядку показу 0..rows (лінія між рядками).
+// CAPS-100: усередину групи нічого не кидається — з нутрощів лінія відскакує
+// до ближчої межі вузла (над ним або під останнім учасником).
 bool EdMarksDropAt(POINT pt, int* out)
 {
-    const int n = (int)g_edObjs.size(), rh = EdPx(kEdMarksRowH);
+    const int n = (int)g_edMarksRows.size(), rh = EdPx(kEdMarksRowH);
     if (n == 0) return false;
     int pos = (pt.y - g_edMarksRc.top + g_edMarksScroll + rh / 2) / rh;
     if (pt.y < g_edMarksRc.top) pos = (g_edMarksScroll + rh / 2) / rh;
     if (pos < 0) pos = 0;
     if (pos > n) pos = n;
+    // усередині вузла? (між вузлом і його останнім учасником)
+    if (pos > 0 && pos < n) {
+        const EdMarkRow& above = g_edMarksRows[pos - 1];
+        const EdMarkRow& below = g_edMarksRows[pos];
+        if (above.grp && above.grp == below.grp && !below.node) {
+            int sRow = pos - 1, eRow = pos;
+            while (sRow > 0 && !g_edMarksRows[sRow].node) --sRow;                 // рядок вузла
+            while (eRow < n && g_edMarksRows[eRow].grp == above.grp && !g_edMarksRows[eRow].node) ++eRow;
+            pos = (pos - sRow <= eRow - pos) ? sRow : eRow;
+        }
+    }
     *out = pos;
     return true;
 }
 
-// Позначку idx — на позицію показу dropPos (0 — найвище). Один крок скасування.
-void EdMarksMove(int idx, int dropPos)
+// Набір позначок (індекси за зростанням) — на позицію показу dropPos (0 — найвище),
+// у своєму порядку. Один крок скасування. Учасники групи їдуть лише всі разом.
+void EdMarksMoveSet(std::vector<int> idxs, int dropPos)
 {
     const int n = (int)g_edObjs.size();
-    if (idx < 0 || idx >= n) return;
-    int to = n - dropPos;                           // індекс у масиві, ПЕРЕД яким вставити (до вилучення)
-    if (to > idx) --to;                             // вилучення зсуває все вище на один
-    if (to < 0) to = 0;
-    if (to >= n) to = n - 1;
-    if (to == idx) return;
+    if (idxs.empty()) return;
+    std::sort(idxs.begin(), idxs.end());
+    // індекс у масиві, ПЕРЕД яким вставити: вище рядка dropPos, або на самий низ
+    int to = n;
+    if (dropPos < (int)g_edMarksRows.size()) {
+        const EdMarkRow& r = g_edMarksRows[dropPos];
+        to = r.obj + 1;                              // вузол: obj — найвищий учасник
+        if (r.node) to = r.obj + 1;
+    } else to = 0;
+    int removedBelow = 0;
+    for (int i : idxs) if (i < to) ++removedBelow;
+    to -= removedBelow;
+    bool same = true;                                // уже там?
+    for (size_t k = 0; k < idxs.size(); ++k) if (idxs[k] != to + (int)k) { same = false; break; }
+    if (same) return;
     EdPushUndo();
-    EdObj o = g_edObjs[idx];
-    g_edObjs.erase(g_edObjs.begin() + idx);
-    g_edObjs.insert(g_edObjs.begin() + to, o);
-    EdSelectOne(to);
+    std::vector<EdObj> picked;
+    for (int i : idxs) picked.push_back(g_edObjs[i]);
+    for (int k = (int)idxs.size() - 1; k >= 0; --k) g_edObjs.erase(g_edObjs.begin() + idxs[k]);
+    if (to > (int)g_edObjs.size()) to = (int)g_edObjs.size();
+    if (to < 0) to = 0;
+    g_edObjs.insert(g_edObjs.begin() + to, picked.begin(), picked.end());
+    EdSelectOne(to + (int)picked.size() - 1);
+    if (g_edVideo) ++g_evMarksGen;
+}
+
+void EdMarksMove(int idx, int dropPos)
+{
+    if (idx < 0 || idx >= (int)g_edObjs.size()) return;
+    std::vector<int> set;
+    const int g = g_edObjs[idx].grp;
+    if (g) { for (int i = 0; i < (int)g_edObjs.size(); ++i) if (g_edObjs[i].grp == g) set.push_back(i); }
+    else set.push_back(idx);
+    EdMarksMoveSet(set, dropPos);
+}
+
+// CAPS-100: око вузла — усім учасникам разом: хоч один видимий → сховати всіх.
+void EdMarksGroupToggleHidden(int grp)
+{
+    bool anyVisible = false;
+    for (const EdObj& o : g_edObjs) if (o.grp == grp && !o.hidden) anyVisible = true;
+    EdPushUndo();
+    for (EdObj& o : g_edObjs) if (o.grp == grp) o.hidden = anyVisible;
+    if (g_edVideo) ++g_evMarksGen;
+    if (g_edWnd) { EdLayout(g_edWnd); InvalidateRect(g_edWnd, nullptr, FALSE); }
 }
 
 void EdMarksToggleHidden(int idx)
@@ -24289,6 +25029,23 @@ LRESULT CALLBACK EdMarksEditProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PT
     return DefSubclassProc(h, msg, wp, lp);
 }
 
+static void EdMarksEditMake(HWND hwnd, const RECT* rc, const std::wstring& cur);
+
+// CAPS-100: назва групи — так само полем над рядком вузла.
+void EdMarksRenameGroupBegin(HWND hwnd, int grp)
+{
+    if (grp <= 0) return;
+    if (g_edMarksEdit) EdMarksRenameEnd(hwnd, true);
+    if (g_edPanelTab != 2) g_edPanelTab = 2;
+    for (int i = (int)g_edObjs.size() - 1; i >= 0; --i) if (g_edObjs[i].grp == grp) { EdSelectOne(i); break; }
+    EdLayout(hwnd);
+    const RECT* rc = EdRegionRect(EdHit::MarkGroup, grp);
+    if (!rc) return;
+    g_edMarksEditIdx = -1;
+    g_edMarksEditGrp = grp;
+    EdMarksEditMake(hwnd, rc, EdGroupName(grp));
+}
+
 void EdMarksRenameBegin(HWND hwnd, int idx)
 {
     if (idx < 0 || idx >= (int)g_edObjs.size()) return;
@@ -24299,7 +25056,12 @@ void EdMarksRenameBegin(HWND hwnd, int idx)
     const RECT* rc = EdRegionRect(EdHit::MarkRow, idx);
     if (!rc) return;
     g_edMarksEditIdx = idx;
-    const std::wstring cur = EdObjName(g_edObjs[idx], idx);
+    g_edMarksEditGrp = 0;
+    EdMarksEditMake(hwnd, rc, EdObjName(g_edObjs[idx], idx));
+}
+
+static void EdMarksEditMake(HWND hwnd, const RECT* rc, const std::wstring& cur)
+{
     g_edMarksEdit = CreateWindowExW(0, L"EDIT", cur.c_str(), WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
                                     rc->left + EdPx(28), rc->top + EdPx(3), (rc->right - EdPx(32)) - (rc->left + EdPx(28)),
                                     rc->bottom - rc->top - EdPx(6), hwnd, (HMENU)(INT_PTR)kEdMarksEditId,
@@ -24325,7 +25087,18 @@ void EdMarksRenameEnd(HWND hwnd, bool apply)
     SetFocus(hwnd);
     const int idx = g_edMarksEditIdx;
     g_edMarksEditIdx = -1;
-    if (apply) EdMarksRename(idx, buf);
+    const int grp = g_edMarksEditGrp;
+    g_edMarksEditGrp = 0;
+    if (apply && grp > 0) {                         // CAPS-100: назва групи
+        std::wstring v = buf;
+        while (!v.empty() && (v.back() == L' ' || v.back() == L'\r' || v.back() == L'\n')) v.pop_back();
+        while (!v.empty() && v.front() == L' ') v.erase(v.begin());
+        if (v != EdGroupName(grp)) {
+            EdPushUndo();
+            if (v.empty()) g_edGrpNames.erase(grp); else g_edGrpNames[grp] = v;
+            if (g_edVideo) ++g_evMarksGen;
+        }
+    } else if (apply) EdMarksRename(idx, buf);
     EdLayout(hwnd);
     InvalidateRect(hwnd, nullptr, FALSE);
 }
@@ -24335,18 +25108,23 @@ void EdMarksHideEdit()
     if (g_edMarksEdit && g_edWnd) EdMarksRenameEnd(g_edWnd, true);
 }
 
+// idx ≥ 0 — рядок позначки; idx < 0 — вузол групи (-grp): CAPS-100.
 void EdMarksMenu(HWND hwnd, int idx, POINT pt)
 {
-    if (idx < 0 || idx >= (int)g_edObjs.size()) return;
-    const bool hidden = g_edObjs[idx].hidden;
+    const bool isGroup = idx < 0;
+    const int grp = isGroup ? -idx : 0;
+    if (!isGroup && idx >= (int)g_edObjs.size()) return;
+    bool hidden = !isGroup && g_edObjs[idx].hidden;
+    if (isGroup) { hidden = true; for (const EdObj& o : g_edObjs) if (o.grp == grp && !o.hidden) hidden = false; }
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING, 1, S(Str::EdMarksMenuRename));
-    AppendMenuW(m, MF_STRING, 2, S(Str::EdMarksMenuDup));
+    if (!isGroup) AppendMenuW(m, MF_STRING, 2, S(Str::EdMarksMenuDup));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, 3, S(Str::EdMarksMenuFront));
     AppendMenuW(m, MF_STRING, 4, S(Str::EdMarksMenuBack));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, 5, S(hidden ? Str::EdMarksMenuShow : Str::EdMarksMenuHide));
+    if (isGroup) AppendMenuW(m, MF_STRING, 7, S(Str::EdTipUngroup));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, 6, S(Str::EdMarksMenuDelete));
     POINT sp = pt;
@@ -24354,12 +25132,13 @@ void EdMarksMenu(HWND hwnd, int idx, POINT pt)
     const int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, sp.x, sp.y, 0, hwnd, nullptr);
     DestroyMenu(m);
     switch (cmd) {
-    case 1: EdMarksRenameBegin(hwnd, idx); return;
+    case 1: if (isGroup) EdMarksRenameGroupBegin(hwnd, grp); else EdMarksRenameBegin(hwnd, idx); return;
     case 2: EdDuplicateSel(); break;
     case 3: EdRaise(true); break;
     case 4: EdRaise(false); break;
-    case 5: EdMarksToggleHidden(idx); break;
+    case 5: if (isGroup) EdMarksGroupToggleHidden(grp); else EdMarksToggleHidden(idx); break;
     case 6: EdDeleteSel(); break;
+    case 7: EdGroupSel(false); break;
     default: return;
     }
     EdLayout(hwnd);
@@ -24382,12 +25161,48 @@ void EdPaintMarksPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     IntersectClipRect(dc, g_edMarksRc.left, g_edMarksRc.top, g_edMarksRc.right, g_edMarksRc.bottom);
     Gdiplus::GraphicsState st = g.Save();
     g.SetClip(Gdiplus::Rect(g_edMarksRc.left, g_edMarksRc.top, g_edMarksRc.right - g_edMarksRc.left, g_edMarksRc.bottom - g_edMarksRc.top));
-    const int n = (int)g_edObjs.size(), rh = EdPx(kEdMarksRowH);
+    const int n = (int)g_edMarksRows.size(), rh = EdPx(kEdMarksRowH);
     for (int row = 0; row < n; ++row) {
-        const int i = n - 1 - row;
+        const EdMarkRow& mr = g_edMarksRows[row];
         RECT r = { g_edMarksRc.left, g_edMarksRc.top + row * rh - g_edMarksScroll,
                    g_edMarksRc.right, g_edMarksRc.top + (row + 1) * rh - g_edMarksScroll };
         if (r.bottom <= g_edMarksRc.top || r.top >= g_edMarksRc.bottom) continue;
+        if (mr.node) {                                                   // CAPS-100: вузол групи
+            bool anySel = false, allHidden = true;
+            int cnt = 0;
+            for (int k = 0; k < (int)g_edObjs.size(); ++k)
+                if (g_edObjs[k].grp == mr.grp) { ++cnt; if (EdIsSelected(k)) anySel = true; if (!g_edObjs[k].hidden) allHidden = false; }
+            const bool hot = (g_edHotWhat == EdHit::MarkGroup && g_edHotIdx == mr.grp);
+            if (anySel || hot) {
+                Gdiplus::Color f = EdC(anySel ? t.accentBg : t.hot);
+                RECT rr = r; InflateRect(&rr, 0, -EdPx(1));
+                EdFillRound(g, rr, (float)EdPx(6), &f, nullptr);
+            }
+            const COLORREF tx = allHidden ? t.text2 : (anySel ? t.accent : t.text);
+            // трикутник згортання: ▾ розгорнуто, ▸ згорнуто
+            {
+                const bool fold = g_edGrpFold.count(mr.grp) != 0;
+                const float cx = (float)(r.left + EdPx(11)), cy = (float)((r.top + r.bottom) / 2), d = (float)EdPx(4);
+                Gdiplus::SolidBrush tb(EdC(t.text2));
+                Gdiplus::PointF pts[3];
+                if (fold) { pts[0] = { cx - d / 2, cy - d }; pts[1] = { cx + d / 2, cy }; pts[2] = { cx - d / 2, cy + d }; }
+                else      { pts[0] = { cx - d, cy - d / 2 }; pts[1] = { cx + d, cy - d / 2 }; pts[2] = { cx, cy + d / 2 }; }
+                g.FillPolygon(&tb, pts, 3);
+            }
+            RECT gb = { r.left + EdPx(22), r.top + (rh - EdPx(18)) / 2, r.left + EdPx(40), r.top + (rh - EdPx(18)) / 2 + EdPx(18) };
+            EdIcon(g, IcoGroup, gb, EdC(tx), 1.5f);
+            wchar_t head2[160];
+            swprintf(head2, 160, L"%s \u00B7 %d", EdGroupName(mr.grp).c_str(), cnt);
+            RECT nr = { gb.right + EdPx(6), r.top, r.right - EdPx(30), r.bottom };
+            if (!(g_edMarksEdit && g_edMarksEditGrp == mr.grp))
+                EdDrawText(dc, nr, head2, g_edFontBold, tx, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            RECT eb = { r.right - EdPx(24), r.top + (rh - EdPx(16)) / 2, r.right - EdPx(6), r.top + (rh - EdPx(16)) / 2 + EdPx(16) };
+            const bool eyeHot = (g_edHotWhat == EdHit::MarkGroupEye && g_edHotIdx == mr.grp);
+            EdIcon(g, allHidden ? IcoHide : IcoEye, eb, EdC(eyeHot ? t.text : t.text2, (allHidden || eyeHot) ? 255 : 150), 1.4f);
+            continue;
+        }
+        const int i = mr.obj;
+        if (mr.grp) r.left += EdPx(18);                                  // учасник — з відступом
         const EdObj& o = g_edObjs[i];
         const bool sel = EdIsSelected(i);
         const bool hot = (g_edHotWhat == EdHit::MarkRow && g_edHotIdx == i);
@@ -24435,7 +25250,7 @@ void EdPaintMarksPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
     g.Restore(st);
     RestoreDC(dc, saved);
-    const int total = n * rh, view = g_edMarksRc.bottom - g_edMarksRc.top;   // тонка смуга прокрутки
+    const int total = n * rh, view = g_edMarksRc.bottom - g_edMarksRc.top;   // тонка смуга прокрутки (n — рядків)
     if (total > view && view > 0) {
         int bh = view * view / total;
         if (bh < EdPx(20)) bh = EdPx(20);
@@ -25633,6 +26448,12 @@ std::vector<BYTE> LhvBuild()
         for (const EdObj& o : g_edObjs) EdWriteObj(w, o);
         w.close(at);
     }
+    if (!g_edGrpNames.empty()) {                // CAPS-100 (1.2): назви груп
+        const size_t at = w.open("GRPN");
+        w.u32v((DWORD)g_edGrpNames.size());
+        for (const auto& kv : g_edGrpNames) { w.i32v(kv.first); w.str(kv.second); }
+        w.close(at);
+    }
     if (!g_evMouseLog.empty()) { const size_t at = w.open("MOUS"); w.raw(g_evMouseLog.data(), g_evMouseLog.size()); w.close(at); }
     return w.b;
 }
@@ -25653,6 +26474,7 @@ bool LhvApply(const wchar_t* path)
     std::vector<Gdiplus::Bitmap*> bank;
     std::vector<EdObj> objs;
     int seq = 0, startNum = 1, cgroup = 0, nextGrp = 1, scale1000 = 1000;
+    std::map<int, std::wstring> grpNames;   // CAPS-100
     std::vector<BYTE> mouse;
     LhMeta meta;                                 // CAPS-88
     bool haveMeta = false;
@@ -25680,6 +26502,7 @@ bool LhvApply(const wchar_t* path)
                 r.at += blen;
             }
         } else if (!memcmp(t, "NUMS", 4)) { seq = r.i32v(); startNum = r.i32v(); cgroup = r.i32v(); nextGrp = r.i32v(); }
+        else if (!memcmp(t, "GRPN", 4)) { const DWORD n = r.u32v(); for (DWORD i = 0; i < n && n < 10000 && !r.bad; ++i) { const int g = r.i32v(); grpNames[g] = r.str(); } }   // CAPS-100
         else if (!memcmp(t, "SCAL", 4)) { const int v = r.i32v(); if (v >= 250 && v <= 8000) scale1000 = v; }
         else if (!memcmp(t, "OBJS", 4)) {
             const DWORD n = r.u32v();
@@ -25720,6 +26543,8 @@ bool LhvApply(const wchar_t* path)
     for (Gdiplus::Bitmap* b : g_edImgBank) delete b;
     g_edImgBank = bank;
     g_edObjs = objs;
+    g_edGrpNames = grpNames; g_edGrpFold.clear();   // CAPS-100
+    EdGroupsCompact();
     g_edSeq = seq; g_edStartNum = startNum; g_edCounterGroup = cgroup; g_edNextGrp = nextGrp > 0 ? nextGrp : 1;
     g_edShotScale = scale1000 / 1000.0;
     g_evMouseLog = mouse;
