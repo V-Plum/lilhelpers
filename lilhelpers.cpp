@@ -21889,7 +21889,7 @@ struct EvGifCtx {
     EvExportJob* j = nullptr;
     UINT32 vw = 0, vh = 0;
     int ow = 0, oh = 0, gw = 0, gh = 0;
-    std::vector<BYTE> frame, base, comp, small;
+    std::vector<BYTE> frame, base, comp, shrunk;
 };
 
 inline void EvGifCook(EvGifCtx& c, int f)
@@ -21900,8 +21900,8 @@ inline void EvGifCook(EvGifCtx& c, int f)
     const EvMarkSpan* sp = nullptr;
     for (const EvMarkSpan& x : c.j->spans) if (f >= x.a && f < x.b) { sp = &x; break; }
     if (sp) EvApplyMarks(c.base.data(), c.ow, c.oh, sp->ops);
-    if (c.gw == c.ow && c.gh == c.oh) c.small.swap(c.base);
-    else EvGeomFrame(c.base.data(), c.ow, c.oh, RECT{ 0, 0, c.ow, c.oh }, c.small, c.gw, c.gh);
+    if (c.gw == c.ow && c.gh == c.oh) c.shrunk.swap(c.base);
+    else EvGeomFrame(c.base.data(), c.ow, c.oh, RECT{ 0, 0, c.ow, c.oh }, c.shrunk, c.gw, c.gh);
 }
 
 // Номер кадру джерела за номером у виході (обернене до EvMapFrame).
@@ -21966,15 +21966,15 @@ int EvGifSample(EvGifCtx& c, IMFSourceReader* rd, DWORD vSi, double fps, LONGLON
         const int f = EvSrcOfOut(c.j->keep, out);
         if (!EvGifSeekFrame(rd, vSi, f, fps, c.vw, c.vh, c.frame)) continue;
         EvGifCook(c, f);
-        GifHistAdd(hist, c.small.data(), c.gw, c.gh);
+        GifHistAdd(hist, c.shrunk.data(), c.gw, c.gh);
         if (!est) continue;
-        firsts.push_back(c.small);
+        firsts.push_back(c.shrunk);
         const LONGLONG out2 = out + step < totalOut ? out + step : totalOut - 1;
         const int f2 = EvSrcOfOut(c.j->keep, out2);
         if (f2 > f && EvGifSeekFrame(rd, vSi, f2, fps, c.vw, c.vh, c.frame, false)) {
             EvGifCook(c, f2);
-            GifHistAdd(hist, c.small.data(), c.gw, c.gh);
-            seconds.push_back(c.small);
+            GifHistAdd(hist, c.shrunk.data(), c.gw, c.gh);
+            seconds.push_back(c.shrunk);
         } else {
             seconds.push_back(firsts.back());
         }
@@ -22096,7 +22096,7 @@ inline HRESULT EvGifRun(EvExportJob* j)
                     if (!EvSampleToRgb(s, w, h, c.frame)) { hr = E_FAIL; break; }
                     EvGifCook(c, f);
                     cooked = true;
-                    GifQuantize(q, c.small.data(), c.gw, c.gh, j->gifDither, idx);
+                    GifQuantize(q, c.shrunk.data(), c.gw, c.gh, j->gifDither, idx);
                 } else {
                     // той самий семпл на кілька слотів — ті самі індекси (Push їх з'їв: відновимо з prev)
                     idx = gs.first ? idx : gs.prev;
