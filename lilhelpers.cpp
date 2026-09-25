@@ -9234,6 +9234,8 @@ void EvPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t);
 void EvPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t);
 bool EvClick(HWND hwnd, const EdRegion* r, POINT pt);
 bool EvMouseMove(HWND hwnd, POINT pt);
+LPCWSTR EvCursorAt(POINT pt);
+void EvMarksHover(POINT pt);
 void EvScrubEnd();
 bool EvKey(HWND hwnd, WPARAM vk, LPARAM lp);
 void EvTick();
@@ -10686,7 +10688,7 @@ void EdLayout(HWND hwnd)
 
     // CAPS-78: у відео під полотном — таймлайн; полотно (і вікно кадру) коротше.
     if (g_edVideo && !g_edOverlay) {
-        const int tlh = EdPx(156);             // CAPS-80: +доріжка позначок
+        const int tlh = EdPx(164);             // CAPS-80: +доріжка позначок (4.4.1: вища)
         g_edRcTimeline = { g_edRcCanvas.left, g_edRcCanvas.bottom - tlh, g_edRcCanvas.right, g_edRcCanvas.bottom };
         g_edRcCanvas.bottom -= tlh;
     }
@@ -17509,7 +17511,18 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
 
+    case WM_SETCURSOR:
+        // 4.4.1: інакше клас вікна щоразу повертає стрілку перед WM_MOUSEMOVE — курсор блимав би
+        if (LOWORD(lp) == HTCLIENT && g_edVideo) {
+            POINT p;
+            GetCursorPos(&p);
+            ScreenToClient(hwnd, &p);
+            if (LPCWSTR c = EvCursorAt(p)) { SetCursor(LoadCursorW(nullptr, c)); return TRUE; }
+        }
+        break;
+
     case WM_MOUSELEAVE:
+        if (g_edVideo) EvMarksHover(POINT{ INT_MIN, INT_MIN });   // 4.4.1
         if (!g_evScrub) EvHoverHide();   // CAPS-78
         g_edTracking = false;
         EdTipHide();
@@ -21893,7 +21906,7 @@ void EvLayout(HWND hwnd)
     RECT film = { g_evRcFilm.left - EdPx(6), g_evRcRuler.bottom + EdPx(2), g_evRcFilm.right + EdPx(6), g_evRcFilm.bottom + EdPx(4) };
     EdAdd(film, EdHit::VidFilm, 0);
     // CAPS-80: доріжка позначок — під стрічкою
-    g_evRcMarks = { g_evRcFilm.left, g_evRcFilm.bottom + EdPx(6), g_evRcFilm.right, g_evRcFilm.bottom + EdPx(26) };
+    g_evRcMarks = { g_evRcFilm.left, g_evRcFilm.bottom + EdPx(8), g_evRcFilm.right, g_evRcFilm.bottom + EdPx(34) };
     { RECT mk = { g_evRcMarks.left - EdPx(6), g_evRcMarks.top - EdPx(1), g_evRcMarks.right + EdPx(6), g_evRcMarks.bottom + EdPx(2) };
       EdAdd(mk, EdHit::VidMarks, 0); }
 
@@ -22285,6 +22298,7 @@ bool EvClick(HWND hwnd, const EdRegion* r, POINT pt)
 bool EvMouseMove(HWND hwnd, POINT pt)
 {
     if (g_evScrub) {
+        if (LPCWSTR c = EvCursorAt(pt)) SetCursor(LoadCursorW(nullptr, c));
         if (g_evDrag == 5) { EvMarksDrag(hwnd, pt); return true; }   // CAPS-80: доріжка позначок
         if (g_evDrag >= 2) { EvEditDrag(hwnd, pt); return true; }   // CAPS-79: стрічка й ручки
         EvSeek(EvXToTime(pt.x));
@@ -22295,6 +22309,8 @@ bool EvMouseMove(HWND hwnd, POINT pt)
     RECT tr = { g_evRcRuler.left, g_evRcRuler.top - EdPx(4), g_evRcRuler.right, g_evRcFilm.bottom };
     if (!g_edLibOpen && PtInRect(&tr, pt)) EvHoverShow(hwnd, pt);
     else if (g_evHover) EvHoverHide();
+    EvMarksHover(pt);                          // 4.4.1: смуга під курсором
+    if (LPCWSTR c = EvCursorAt(pt)) SetCursor(LoadCursorW(nullptr, c));
     return false;
 }
 
@@ -22597,6 +22613,10 @@ void EvMarksChanged()
 int  g_evMarkDrag = -1;                      // яку позначку тягнуть
 int  g_evMarkDragKind = 0;                   // 1 — вся, 2 — початок, 3 — кінець
 int  g_evMarkFrom0 = 0, g_evMarkFrom1 = 0, g_evMarkGrab = 0;
+// 4.4.1 (зауваження власника: смуга не виглядала активною): позначка під
+// курсором і її частина — 1 уся, 2 початок, 3 кінець. Підсвічується, а краї
+// показують ручки, як у рамки на полотні.
+int  g_evMarkHot = -1, g_evMarkHotKind = 0;
 
 // Смуги позначок у дві доріжки: наступна, що перетинає попередню, — нижче.
 void EvMarkLanes(std::vector<int>& lane)
@@ -22617,8 +22637,11 @@ void EvMarkLanes(std::vector<int>& lane)
 RECT EvMarkBar(int i, const std::vector<int>& lane)
 {
     const EdObj& o = g_edObjs[(size_t)i];
-    const int lh = (g_evRcMarks.bottom - g_evRcMarks.top) / 2;
-    const int top = g_evRcMarks.top + lane[(size_t)i] * lh;
+    // 4.4.1: друга доріжка — лише коли позначки перетинаються; інакше смуга на всю висоту
+    const bool two = std::find(lane.begin(), lane.end(), 1) != lane.end();
+    const int pad = EdPx(3);
+    const int lh = (g_evRcMarks.bottom - g_evRcMarks.top - 2 * pad) / (two ? 2 : 1);
+    const int top = g_evRcMarks.top + pad + lane[(size_t)i] * lh;
     RECT r = { EvTimeToX(o.vf0 / g_evFps), top + 1, EvTimeToX(o.vf1 / g_evFps), top + lh - 1 };
     if (r.right - r.left < EdPx(4)) r.right = r.left + EdPx(4);
     return r;
@@ -22642,11 +22665,44 @@ void EvPaintMarks(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         const RECT r = EvMarkBar((int)i, lane);
         const EdObj& o = g_edObjs[i];
         const COLORREF c = EdIsEffect(o.kind) && o.kind == EdKind::Hide ? RGB(120, 120, 128) : o.color;
-        Gdiplus::SolidBrush b(Gdiplus::Color(215, GetRValue(c), GetGValue(c), GetBValue(c)));
+        const bool drag = (int)i == g_evMarkDrag;
+        const bool hot = drag || (g_evMarkDrag < 0 && (int)i == g_evMarkHot);
+        const bool sel = (int)i == g_edSel;
+        Gdiplus::SolidBrush b(Gdiplus::Color(hot ? 255 : 215, GetRValue(c), GetGValue(c), GetBValue(c)));
         g.FillRectangle(&b, (INT)r.left, (INT)r.top, (INT)(r.right - r.left), (INT)(r.bottom - r.top));
-        if ((int)i == g_edSel) {
+        if (sel) {
             Gdiplus::Pen p(EdC(t.accent), (float)EdPx(2));
             g.DrawRectangle(&p, (INT)r.left, (INT)r.top, (INT)(r.right - r.left - 1), (INT)(r.bottom - r.top - 1));
+        } else if (hot) {
+            Gdiplus::Pen p(g_edDark ? Gdiplus::Color(230, 255, 255, 255) : Gdiplus::Color(200, 20, 20, 24), 1.0f);
+            g.DrawRectangle(&p, (INT)r.left, (INT)r.top, (INT)(r.right - r.left - 1), (INT)(r.bottom - r.top - 1));
+        }
+        // Ручки на краях — видно, що смугу можна розтягнути. Та, що під курсором, — акцентна.
+        if ((hot || sel) && r.right - r.left > 2 * EdPx(6)) {
+            const int hk = drag ? g_evMarkDragKind : ((int)i == g_evMarkHot ? g_evMarkHotKind : 0);
+            const Gdiplus::SmoothingMode smWas = g.GetSmoothingMode();
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            for (int side = 2; side <= 3; ++side) {
+                const bool on = hk == side;
+                const float gw = (float)EdPx(7), gh = (float)(r.bottom - r.top + EdPx(4));
+                const float gx = side == 2 ? (float)r.left : (float)r.right - gw;
+                const float gy = (float)r.top - EdPx(2);
+                Gdiplus::GraphicsPath gp;
+                const float rr = (float)EdPx(2) * 2;
+                gp.AddArc(gx, gy, rr, rr, 180, 90); gp.AddArc(gx + gw - rr, gy, rr, rr, 270, 90);
+                gp.AddArc(gx + gw - rr, gy + gh - rr, rr, rr, 0, 90); gp.AddArc(gx, gy + gh - rr, rr, rr, 90, 90);
+                gp.CloseFigure();
+                Gdiplus::SolidBrush fill(on ? EdC(t.accent) : Gdiplus::Color(255, 255, 255, 255));
+                g.FillPath(&fill, &gp);
+                Gdiplus::Pen border(on ? EdC(t.accent) : Gdiplus::Color(200, 60, 60, 66), 1.0f);
+                g.DrawPath(&border, &gp);
+                // дві риски-хват посередині
+                Gdiplus::Pen tick(on ? Gdiplus::Color(255, 255, 255, 255) : Gdiplus::Color(255, 90, 90, 96), 1.0f);
+                const float cx = gx + gw / 2, cy = gy + gh / 2, th = gh * 0.22f;
+                g.DrawLine(&tick, cx - 1.5f, cy - th, cx - 1.5f, cy + th);
+                g.DrawLine(&tick, cx + 1.5f, cy - th, cx + 1.5f, cy + th);
+            }
+            g.SetSmoothingMode(smWas);
         }
     }
     g.ResetClip();
@@ -22669,6 +22725,41 @@ int EvMarkAt(POINT pt, int* kind)
         return i;
     }
     return -1;
+}
+
+
+// Курсор над таймлайном відео: край смуги позначки й ручка обрізання — «тягни
+// вбік», сама смуга — «пересунути». nullptr — курсор вирішує решта редактора.
+LPCWSTR EvCursorAt(POINT pt)
+{
+    if (!g_edVideo || g_edOverlay || g_edLibOpen) return nullptr;
+    if (g_evScrub) {
+        if (g_evDrag == 5) return g_evMarkDragKind == 1 ? IDC_SIZEALL : IDC_SIZEWE;
+        if (g_evDrag == 3 || g_evDrag == 4) return IDC_SIZEWE;
+        return nullptr;
+    }
+    RECT mk = { g_evRcMarks.left - EdPx(6), g_evRcMarks.top - EdPx(1), g_evRcMarks.right + EdPx(6), g_evRcMarks.bottom + EdPx(2) };
+    int kind = 0;
+    if (PtInRect(&mk, pt) && EvMarkAt(pt, &kind) >= 0) return kind == 1 ? IDC_SIZEALL : IDC_SIZEWE;
+    // ручки обрізання — те саме влучання, що в EvEditClick
+    if (PtInRect(&g_evRcFilm, pt) && !g_evEd.parts.empty()) {
+        const int grab = EdPx(9);
+        if (abs(pt.x - EvTimeToX(g_evEd.in / g_evFps)) <= grab || abs(pt.x - EvTimeToX(g_evEd.out / g_evFps)) <= grab) return IDC_SIZEWE;
+    }
+    return nullptr;
+}
+
+// Миша над доріжкою позначок (без натиснутої кнопки): оновити підсвічування.
+void EvMarksHover(POINT pt)
+{
+    int i = -1, kind = 0;
+    RECT mk = { g_evRcMarks.left - EdPx(6), g_evRcMarks.top - EdPx(1), g_evRcMarks.right + EdPx(6), g_evRcMarks.bottom + EdPx(2) };
+    if (pt.x != INT_MIN && !g_edLibOpen && PtInRect(&mk, pt)) i = EvMarkAt(pt, &kind);
+    if (i < 0) kind = 0;
+    if (i == g_evMarkHot && kind == g_evMarkHotKind) return;
+    g_evMarkHot = i;
+    g_evMarkHotKind = kind;
+    if (g_edWnd) InvalidateRect(g_edWnd, &g_edRcTimeline, FALSE);
 }
 
 // Натиснули на доріжці позначок: вибрати й почати тягнути (усю — чи край).
@@ -26263,8 +26354,8 @@ void VidOpenFile(const wchar_t* path)
     ShellExecuteW(nullptr, L"open", L"explorer.exe", arg, nullptr, SW_SHOWNORMAL);
 }
 
-// «Відео збережено» біля курсора — як CapFlash, але клікабельне й довше: це
-// єдиний шлях до щойно записаного, поки немає редактора відео.
+// «Відео збережено» біля курсора — як CapFlash, але клікабельне й довше. З 4.4.1
+// запис відкривається в редакторі сам; плашка — лише коли редактор зайнятий.
 LRESULT CALLBACK VidToastProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -26556,6 +26647,28 @@ void VidReleaseJob()
     VidTraySet(false);
 }
 
+// Редактор можна зайняти без питань: ні незбережених правок, ні збереження, що йде.
+bool EdCanReplaceQuietly()
+{
+    if (!g_edWnd) return true;
+    if (g_edOverlay) return false;
+    if (g_edVideo) return !g_evJob && !EvDirty();
+    return g_edSaved || (g_edObjs.empty() && EdToneDefault() && EdGeomDefault());
+}
+
+// Щойно записане — одразу в редакторі (зауваження власника 25.09: редактор уже є,
+// плашка-посередник, у яку треба влучити, зайва). Плашка лишається запасним
+// шляхом, коли в редакторі незбережена робота: її не чіпаємо без питання.
+void VidOpenRecorded(const wchar_t* path)
+{
+    if (!EdCanReplaceQuietly() || !EvOpen(GetModuleHandleW(nullptr), path)) { VidToastShow(path); return; }
+    if (g_vidToast) DestroyWindow(g_vidToast);
+    if (g_edWnd) {
+        if (IsIconic(g_edWnd)) ShowWindow(g_edWnd, SW_RESTORE);
+        SetForegroundWindow(g_edWnd);
+    }
+}
+
 void VidDone(VidResult* r)
 {
     VidReleaseJob();
@@ -26568,7 +26681,7 @@ void VidDone(VidResult* r)
             EdLayout(g_edWnd);
             InvalidateRect(g_edWnd, nullptr, TRUE);
         }
-        VidToastShow(r->path);
+        VidOpenRecorded(r->path);
         if (r->warn != Str::Empty) TrayBalloon(kAppName, S(r->warn));   // CAPS-77: без якоїсь доріжки звуку
     } else if (FAILED(r->hr)) {
         wchar_t msg[512];
