@@ -933,6 +933,23 @@ X(EdTipFit,           L"Вписати у вікно",               L"Fit to wi
 X(EdTipPanelHide,     L"Згорнути панель",               L"Collapse the panel")                         \
 X(EdTipPanelShow,     L"Розгорнути панель",             L"Expand the panel")                           \
 X(EdTipPanelProps,    L"Властивості знімка",            L"Snapshot properties")                        \
+X(EdFxShadow,         L"Тінь",                          L"Shadow")                                     \
+X(EdMarksHead,        L"Позначки",                      L"Marks")                                      \
+X(EdMarksEmpty,       L"Позначок ще немає — намалюйте щось на полотні.", L"No marks yet — draw something on the canvas.") \
+X(EdTipPanelMarks,    L"Позначки — список, порядок шарів, назви", L"Marks — list, layer order, names") \
+X(EdTipMarkRow,       L"Клік — вибрати; тягніть — порядок шарів; подвійний клік або F2 — назва; права кнопка — дії", \
+                      L"Click to select; drag to reorder layers; double-click or F2 to rename; right-click for actions") \
+X(EdTipMarkHide,      L"Приховати (у файл назовні не піде)", L"Hide (not exported)")                    \
+X(EdTipMarkShow,      L"Показати",                      L"Show")                                       \
+X(EdMarksMenuRename,  L"Перейменувати\tF2",             L"Rename\tF2")                                 \
+X(EdMarksMenuDup,     L"Дублювати",                     L"Duplicate")                                  \
+X(EdMarksMenuFront,   L"На передній план",              L"Bring to front")                             \
+X(EdMarksMenuBack,    L"На задній план",                L"Send to back")                               \
+X(EdMarksMenuHide,    L"Приховати",                     L"Hide")                                       \
+X(EdMarksMenuShow,    L"Показати",                      L"Show")                                       \
+X(EdMarksMenuDelete,  L"Видалити\tDelete",              L"Delete\tDelete")                             \
+X(EdFxGlow,           L"Свічення",                      L"Glow")                                       \
+X(EdTipFx,            L"Ефекти: тінь і свічення",       L"Effects: shadow and glow")                   \
 X(EdMetaHead,         L"EXIF / META",                   L"EXIF / META")                                \
 X(EdMetaTitle,        L"Назва",                         L"Title")                                      \
 X(EdMetaDesc,         L"Опис",                          L"Description")                                \
@@ -8903,6 +8920,14 @@ struct EdObj {
     // міняються ні від масштабу на екрані, ні після відкриття файлу.
     int      corners;
     int      crpx;
+    // CAPS-31: ефекти — тінь і свічення: 0 немає, 1 слабке, 2 сильне (пресети,
+    // рішення власника 25.09). Зсув і радіус — у пікселях ЗНІМКА (× масштаб при
+    // малюванні), як товщина: файл не залежить від масштабу на екрані.
+    int      shadow = 0, glow = 0;
+    // CAPS-98: назва в панелі «Позначки» (порожня — автоназва) і «приховано»:
+    // не малюється, не ловиться мишею, в експорт не йде.
+    std::wstring name;
+    bool     hidden = false;
     // CAPS-80. Лише у відео: кадри [vf0, vf1), коли позначку видно. INT_MAX у vf1 —
     // «ще не призначено»: щойно створена, дістане проміжок від поточного кадру.
     int      vf0 = 0, vf1 = INT_MAX;
@@ -8986,6 +9011,11 @@ bool EdHasThick(EdKind k)  { return k != EdKind::Text && k != EdKind::Hide &&
 // Лічильник і штамп ставляться одним кліком, а не тягненням: у них немає
 // «намалюй рамку», є лише розмір із трьох значень.
 bool EdIsStamped(EdKind k) { return k == EdKind::Counter || k == EdKind::Stamp; }
+// CAPS-31: ефекти — усім, крім приховування й маркера (вони не мазки, а дії над
+// пікселями знімка, і тінь під розмиттям не має сенсу).
+bool EdFxAllowed(EdKind k) { return k != EdKind::Hide && k != EdKind::Mark; }
+bool EdFxOn(const EdObj& o) { return (o.shadow > 0 || o.glow > 0) && EdFxAllowed(o.kind); }
+int  EdFxExtent(const EdObj& o);
 
 // Розміри кружечка лічильника й штампа — діаметр у пікселях знімка.
 const int kEdStampSizes[3] = { 28, 40, 56 };
@@ -9108,7 +9138,8 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    VidFilm, VidEdit,     // CAPS-79: стрічка (вибір, проміжок, ручки обрізання) і кнопки правок
                    VidMarks,             // CAPS-80: доріжка позначок
                    MetaClear,            // CAPS-88: «Прибрати всі метадані»
-                   VidResize };          // CAPS-90: «Розмір відео…» у правій панелі
+                   VidResize,            // CAPS-90: «Розмір відео…» у правій панелі
+                   MarkRow, MarkEye };   // CAPS-98: рядок панелі «Позначки» і його око
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -9128,10 +9159,12 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoGroup, IcoUngroup,
              IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn,
              IcoWindow, IcoImage,
-             IcoProps, IcoMeta };                  // CAPS-88: вкладки правих панелей
+             IcoProps, IcoMeta,                    // CAPS-88: вкладки правих панелей
+             IcoMarks, IcoEye };                   // CAPS-98: вкладка «Позначки», око «показано»
 
 enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength, Crop, CropMove,
-                    Tone, Compare, Zoom, Rotate, ManyResize, ManyRotate, OvSel };
+                    Tone, Compare, Zoom, Rotate, ManyResize, ManyRotate, OvSel,
+                    MarkRow };          // CAPS-98: рядок списку позначок
 
 HWND  g_edWnd = nullptr;
 // CAPS-33: редактор зараз — оверлей поверх замороженого монітора. Документ —
@@ -9151,6 +9184,20 @@ bool  g_edDark = false;
 // CAPS-88 (рішення власника 25.09): праві панелі — вкладки. Відкрита лише одна:
 // 0 — властивості знімка (у відео — «Відео»), 1 — EXIF/META; -1 — усі згорнуті.
 int   g_edPanelTab = -1;
+// CAPS-98: панель «Позначки» (вкладка 2) — список у z-порядку: верхній рядок =
+// верхній шар. Тягнення рядка міняє порядок, око ховає, подвійний клік / F2 —
+// назва. Назва й «приховано» — у самій позначці (файл).
+RECT  g_edMarksRc = {};            // ділянка списку
+int   g_edMarksScroll = 0;         // прокрутка, px
+int   g_edMarksDragIdx = -1;       // яку позначку тягнуть
+int   g_edMarksDrop = -1;          // куди вставити: позиція в порядку ПОКАЗУ, 0..n
+bool  g_edMarksDragging = false;   // миша вже зрушила — це тягнення, а не клік
+POINT g_edMarksDragFrom = {};
+HWND  g_edMarksEdit = nullptr;     // поле перейменування
+int   g_edMarksEditIdx = -1;
+int   g_edMarksSelSeen = -2;       // прокрутити до вибраного лише при зміні вибору
+constexpr int kEdMarksEditId = 430;
+constexpr int kEdMarksRowH = 30;   // логічних px
 // CAPS-88: метадані запису (EXIF/META) — те, що людина пише про знімок чи відео.
 // Назва — це назва запису в бібліотеці (g_edDocName / g_evName), дата зйомки —
 // «створено» запису; решта — тут. У файли назовні (PNG, JPEG, MP4) пишемо лише це.
@@ -9164,6 +9211,7 @@ LhMeta g_edMeta;
 void LhGdipSetProps(Gdiplus::Bitmap* bmp, const std::wstring& title, const LhMeta& m);
 bool LhPngAddText(const wchar_t* path, const std::wstring& title, const LhMeta& m);
 void LhSetFileTimes(const wchar_t* path, ULONGLONG ft);
+bool LhWriteAll(const wchar_t* path, const std::vector<BYTE>& b);
 bool EdDocPatch(const wchar_t* path, const std::wstring* name, const LhMeta* meta);
 bool EdDocRename(const wchar_t* path, const std::wstring& name);
 constexpr int kEdMetaFields = 6;      // назва, опис, автор, авторське право, теги, дата зйомки
@@ -9250,6 +9298,7 @@ std::vector<char> g_evUndoOrder, g_evRedoOrder;   // спільна черга �
 int       g_evMarksGen = 0, g_evMarksSavedGen = 0;
 bool EdObjLive(const EdObj& o)
 {
+    if (o.hidden) return false;                  // CAPS-98: приховану не малюємо й не ловимо
     if (!g_edVideo || o.vf1 == INT_MAX) return true;
     const int f = g_evLiveFrame >= 0 ? g_evLiveFrame : g_evFrozen;
     return f >= o.vf0 && f < o.vf1;
@@ -9327,6 +9376,7 @@ void EvSaved(LPARAM lp);
 void EvSaveTick();
 void EvApplyDocSize();                           // CAPS-90
 void EvFreezeForEdit();
+void EvSeek(double t);                         // CAPS-98: перехід на кадр позначки з панелі
 void EvNoteMarkUndo();                         // CAPS-80
 void EvRefreeze();                             // CAPS-90
 bool EvHasGeom();
@@ -9351,6 +9401,16 @@ void EvClose();
 void EvWheel(POINT pt, int delta, bool pan);
 bool EvMarksWheel(POINT pt, int delta);
 void EdMetaLayout(HWND hwnd);                    // CAPS-88
+void EdMarksLayout(HWND hwnd);                   // CAPS-98
+void EdMarksHideEdit();
+void EdMarksRenameBegin(HWND hwnd, int idx);
+void EdMarksRenameEnd(HWND hwnd, bool apply);
+void EdMarksRename(int idx, const wchar_t* name);
+std::wstring EdObjName(const EdObj& o, int idx);
+void EdMarksMenu(HWND hwnd, int idx, POINT pt);
+bool EdMarksDropAt(POINT pt, int* out);
+void EdMarksMove(int idx, int dropPos);
+void EdMarksToggleHidden(int idx);
 void EdMetaHide();
 void EdMetaRefresh();
 void EdMetaCommit(HWND hwnd, int i);
@@ -9507,6 +9567,7 @@ int EdGroupStart(int grp);
 int EdGroupCount(int grp);
 int      g_edDash = 0;                   // CAPS-34: стиль лінії за замовчуванням
 int      g_edCorners = 0;                // CAPS-58: кути нового прямокутника
+int      g_edShadowDef = 0, g_edGlowDef = 0;   // CAPS-31: ефекти нової позначки (типово нічого — рішення власника)
 // CAPS-58: масштаб монітора, з якого знято знімок (DPI / 96). Радіус кутів —
 // «логічні» пікселі × цей масштаб: на 4K при 150 % помірне скруглення виглядає
 // так само, як на 1080p. Для файлів і буфера — 1. Зберігається в документі.
@@ -9523,6 +9584,7 @@ constexpr int kEdPaintNone  = 8;         // клітинка «Немає»/«А
 // CAPS-65: товщина (висота маркера, розмір кружечка й штампа) — теж список.
 constexpr int kEdPickThick  = 9;
 constexpr int kEdPickShape  = 10;        // CAPS-68: форма лічильника
+constexpr int kEdPickFx     = 11;        // CAPS-31: «Ефекти» — два рядки (тінь, свічення) по три
 bool EdIsPaintPick(int g) { return g >= kEdPickPaint && g <= kEdPickAlpha; }
 
 // CAPS-67: типовий основний колір і прозорість — свої в напису й маркера,
@@ -9763,6 +9825,21 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
         g.DrawEllipse(&pen, 5.6f, 5.6f, 2.8f, 2.8f);
         break;
     }
+    // CAPS-98: «Позначки» — три шари списком: квадратик і риска в кожному рядку.
+    case IcoMarks: {
+        const float ys[3] = { 4.2f, 9.2f, 14.2f };
+        for (int i = 0; i < 3; ++i) {
+            g.DrawRectangle(&pen, 3.0f, ys[i] - 1.6f, 3.2f, 3.2f);
+            g.DrawLine(&pen, 9.2f, ys[i], 17.0f, ys[i]);
+        }
+        break;
+    }
+    // CAPS-98: око «показано» — дві повіки й зіниця; приховано — IcoHide.
+    case IcoEye:
+        g.DrawBezier(&pen, 2.4f, 10.0f, 6.0f, 4.4f, 14.0f, 4.4f, 17.6f, 10.0f);
+        g.DrawBezier(&pen, 2.4f, 10.0f, 6.0f, 15.6f, 14.0f, 15.6f, 17.6f, 10.0f);
+        g.FillEllipse(&br, 8.2f, 8.2f, 3.6f, 3.6f);
+        break;
     case IcoImage:                        // CAPS-69: рамка, гори й сонце
         g.DrawRectangle(&pen, 2.6f, 3.6f, 14.8f, 12.8f);
         {
@@ -10420,7 +10497,7 @@ static void EdDynAdd(RECT& acc, bool& any, const EdObj& o)
                                            (double)(r.bottom - r.top) * (r.bottom - r.top))) + 1;
         r = RECT{ cx - rad, cy - rad, cx + rad, cy + rad };
     }
-    const int pad = EdPx(56) + (int)(o.thick * EdScale() * 4);
+    const int pad = EdPx(56) + (int)(o.thick * EdScale() * 4) + (int)(EdFxExtent(o) * EdScale() * 1.5);   // CAPS-31
     InflateRect(&r, pad, pad);
     if (!any) { acc = r; any = true; } else UnionRect(&acc, &acc, &r);
 }
@@ -11169,6 +11246,14 @@ void EdLayout(HWND hwnd)
                 sep();
             }
 
+            // CAPS-31: ефекти (тінь, свічення) — усім, крім приховування й маркера.
+            if (EdFxAllowed(kk) && !cropMode) {
+                RECT r = EdPill(x, cy, EdPx(42), EdPx(28));
+                EdAdd(r, EdHit::Pick, kEdPickFx);
+                x = r.right + gap;
+                sep();
+            }
+
             // CAPS-34: стиль лінії — усім контурним; наконечники — лише стрілці.
             // Кожен набір згорнуто у ВИПАДНИЙ СЕЛЕКТ (рішення власника 21.09):
             // кнопка показує поточний вибір, решта варіантів — за нею.
@@ -11312,7 +11397,7 @@ void EdLayout(HWND hwnd)
     // Клік відкриває свою панель (іншу закриває), клік по відкритій — згортає.
     if (!g_edOverlay) {
         const int b = EdPx(28);
-        for (int i = 0; i < 2; ++i) {
+        for (int i = 0; i < 3; ++i) {                // CAPS-98: третя — «Позначки»
             RECT r;
             r.left = g_edRcTabs.left + (g_edRcTabs.right - g_edRcTabs.left - b) / 2;
             r.top = g_edRcTabs.top + EdPx(10) + i * (b + EdPx(6));
@@ -11323,6 +11408,8 @@ void EdLayout(HWND hwnd)
     }
     if (g_edPanelTab == 1 && !g_edOverlay && !g_edLibOpen) EdMetaLayout(hwnd);   // CAPS-88
     else if (g_edMetaEd[0]) EdMetaHide();
+    if (g_edPanelTab == 2 && !g_edOverlay && !g_edLibOpen) EdMarksLayout(hwnd);  // CAPS-98
+    else if (g_edMarksEdit) EdMarksHideEdit();
 
     // Розкритий селект додаємо ОСТАННІМ: EdFind іде списком з кінця, тож його
     // ділянки перекривають і полотно, і смугу під ним.
@@ -11738,6 +11825,7 @@ void EdDrawHead(Gdiplus::Graphics& g, const Gdiplus::Color& col, float tipX, flo
 int EdPickCount(int group)
 {
     if (group == kEdPickEnds) return 11;          // 4 початки + 4 кінці + 3 розміри
+    if (group == kEdPickFx) return 6;             // CAPS-31: тінь ×3 + свічення ×3
     return (group == 1 || group == 2) ? 4 : 3;
 }
 
@@ -11748,6 +11836,7 @@ int EdPickValue(int group)
     const bool sel = (g_edSel >= 0 && g_edSel < (int)g_edObjs.size());
     const EdObj* o = sel ? &g_edObjs[g_edSel] : nullptr;
     if (group == kEdPickShape) return o ? o->cshape : g_edCounterShape;   // CAPS-68
+    if (group == kEdPickFx) return o ? (o->shadow | (o->glow << 4)) : (g_edShadowDef | (g_edGlowDef << 4));   // CAPS-31
     if (group == kEdPickThick) {                         // CAPS-65
         const EdKind k = EdStripKind();
         const int def = (k == EdKind::Mark) ? g_edMarkH : EdIsStamped(k) ? g_edStampSize : g_edThick;
@@ -11924,6 +12013,33 @@ void EdEndsSample(Gdiplus::Graphics& g, const RECT& r, int startV, int endV, int
 
 // CAPS-58: кут рамки — гострий, м'який чи круглий. Малюється лівий верхній кут:
 // саме він найкраще читається в маленькій кнопці.
+// CAPS-31: зразок ефектів — квадратик; тінь — темна копія зі зсувом під ним,
+// свічення — світлий ореол довкола. У кнопці показує поточну пару.
+void EdFxSample(Gdiplus::Graphics& g, const RECT& r, int shadow, int glow, const Gdiplus::Color& c)
+{
+    const float d = (float)EdPx(12);
+    const float cx0 = (r.left + r.right) / 2.0f - (shadow ? EdPx(1) : 0), cy0 = (r.top + r.bottom) / 2.0f - (shadow ? EdPx(1) : 0);
+    const float x0 = cx0 - d / 2, y0 = cy0 - d / 2;
+    Gdiplus::Region oldClip; g.GetClip(&oldClip);
+    g.IntersectClip(Gdiplus::Rect(r.left, r.top, r.right - r.left, r.bottom - r.top));
+    if (glow > 0) {
+        const float gw = (float)EdPx(glow == 1 ? 3 : 5);
+        Gdiplus::Pen halo(Gdiplus::Color(glow == 1 ? 120 : 200, c.GetR(), c.GetG(), c.GetB()), gw);
+        halo.SetLineJoin(Gdiplus::LineJoinRound);
+        g.DrawRectangle(&halo, x0 - gw / 2, y0 - gw / 2, d + gw, d + gw);
+    }
+    if (shadow > 0) {
+        const float off = (float)EdPx(shadow == 1 ? 2 : 4);
+        Gdiplus::SolidBrush sb(Gdiplus::Color(shadow == 1 ? 90 : 150, c.GetR(), c.GetG(), c.GetB()));
+        g.FillRectangle(&sb, x0 + off, y0 + off, d, d);
+    }
+    Gdiplus::SolidBrush body(c);
+    Gdiplus::Pen edge(Gdiplus::Color(255, 255, 255, 255), 1.0f);
+    g.FillRectangle(&body, x0, y0, d, d);
+    if (glow > 0 || shadow > 0) g.DrawRectangle(&edge, x0 + 0.5f, y0 + 0.5f, d - 1, d - 1);
+    g.SetClip(&oldClip);
+}
+
 void EdCornerSample(Gdiplus::Graphics& g, const RECT& r, int level, const Gdiplus::Color& c)
 {
     // Кут малюється в квадраті, вписаному в кнопку з полями, і радіус — частка
@@ -12121,6 +12237,13 @@ int EdPickLayout(int group, const RECT& btn, const RECT& client, RECT out[16])
         const int iw = EdPx(170);
         for (int i = 0; i < 3; ++i) out[n++] = RECT{ 0, i * ih, iw, (i + 1) * ih };
         w = iw; h = 3 * ih;
+    } else if (group == kEdPickFx) {              // CAPS-31: два рядки з підписами, як «Кінці»
+        const int lab = EdPx(96), iw = EdPx(52);
+        for (int row = 0; row < 2; ++row)
+            for (int i = 0; i < 3; ++i)
+                out[n++] = RECT{ lab + i * iw, row * (ih + EdPx(2)), lab + (i + 1) * iw, row * (ih + EdPx(2)) + ih };
+        w = lab + 3 * iw;
+        h = 2 * ih + EdPx(2);
     } else {
         const int iw = EdPx(52);
         const int cnt = EdPickCount(group);
@@ -12366,7 +12489,7 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 
     // CAPS-34: кнопки випадних селектів. Кожна показує поточний вибір.
-    for (int gi = 0; gi <= kEdPickShape; ++gi) {
+    for (int gi = 0; gi <= kEdPickFx; ++gi) {
         const RECT* r = EdRegionRect(EdHit::Pick, gi);
         if (!r) continue;
         const bool open = (g_edPickOpen == gi);
@@ -12380,7 +12503,10 @@ void EdPaintStrip(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
             EdEndsSample(g, inner, EdPickValue(2), EdPickValue(1), EdPickValue(3), EdC(t.text));
         else if (gi == kEdPickCorners)
             EdCornerSample(g, inner, EdPickValue(kEdPickCorners), EdC(t.text));
-        else
+        else if (gi == kEdPickFx) {                                        // CAPS-31
+            const int val = EdPickValue(kEdPickFx);
+            EdFxSample(g, inner, val & 15, val >> 4, EdC(t.text));
+        } else
             EdPickSample(g, inner, gi, EdPickValue(gi), EdC(t.text));
         // Маленька стрілка вниз: кнопка з нею читається як список, а не як тогл.
         // CAPS-65: без рамок вона — єдиний знак списку, тож лишається, але
@@ -13633,9 +13759,8 @@ void EdDrawHead(Gdiplus::Graphics& g, const Gdiplus::Color& col, float tipX, flo
 
 // idx — номер позначки в списку. Він потрібен рівно одному місцю (ефектам), але
 // проходить наскрізь: інакше ефект не знав би, що саме під ним.
-void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, double oy, int idx)
+static void EdDrawObjectRaw(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, double oy, int idx)
 {
-    if (!EdObjLive(o)) return;                 // CAPS-80: позначка іншого кадру відео
     float pw = (float)(o.thick * s);
     if (pw < 1.0f) pw = 1.0f;              // тонше пікселя — це вже невидимо
     const Gdiplus::Color col = EdC(o.color, o.alpha * 255 / 100);
@@ -13860,6 +13985,172 @@ void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, dou
     default: break;
     }
     if (rotated) g.Restore(rotState);
+}
+
+// ---- CAPS-31: ефекти позначок — тінь і свічення ----------------------------
+// Позначка малюється в плитку з альфою ТИМ САМИМ кодом, що й на полотно; з
+// альфи робиться маска, зсувається (тінь), розмивається наявним EdBoxBlur і
+// тонується; готовий шар лягає ПІД позначку. Плитка кешується разом із
+// текстовими (g_edTiles): ключ — усі поля позначки, масштаб і дробовий зсув.
+// Тінь зсувається в координатах знімка й НЕ повертається з позначкою (світло
+// згори); свічення симетричне. Пресети (рішення власника: без повзунків).
+struct EdFxPreset { int off, blur, alpha, boost; };   // зсув і радіус — px знімка; alpha 0..255; boost % після розмиття
+const EdFxPreset kEdShadowPreset[3] = { { 0, 0, 0, 100 }, { 2, 2, 120, 100 }, { 5, 5, 170, 100 } };
+const EdFxPreset kEdGlowPreset[3]   = { { 0, 0, 0, 100 }, { 0, 3, 235, 260 }, { 0, 6, 255, 340 } };
+
+static const EdFxPreset& EdFxPresetOf(const EdFxPreset* set, int lvl) { return set[lvl < 0 ? 0 : lvl > 2 ? 2 : lvl]; }
+
+// На скільки ефект виходить за габарити позначки (у пікселях знімка).
+int EdFxExtent(const EdObj& o)
+{
+    if (!EdFxOn(o)) return 0;
+    const EdFxPreset& sh = EdFxPresetOf(kEdShadowPreset, o.shadow);
+    const EdFxPreset& gl = EdFxPresetOf(kEdGlowPreset, o.glow);
+    const int a = sh.off + sh.blur * 3, b = gl.blur * 3;
+    return (a > b ? a : b) + 2;
+}
+
+double EdHeadLen(const EdObj& o, double s);
+float  EdStrokeRadius(const EdObj& o, double s);
+
+// Габарити позначки на поверхні призначення (масштаб s, зсув ox/oy) із запасом
+// на товщину, наконечники, обводку напису, поворот і сам ефект.
+static RECT EdFxBounds(const EdObj& o, double s, double ox, double oy)
+{
+    double x0, y0, x1, y1;
+    if (o.kind == EdKind::Pen && !o.pts.empty()) {
+        x0 = x1 = o.pts[0].x; y0 = y1 = o.pts[0].y;
+        for (size_t i = 1; i < o.pts.size(); ++i) {
+            if (o.pts[i].x < x0) x0 = o.pts[i].x;
+            if (o.pts[i].x > x1) x1 = o.pts[i].x;
+            if (o.pts[i].y < y0) y0 = o.pts[i].y;
+            if (o.pts[i].y > y1) y1 = o.pts[i].y;
+        }
+    } else {
+        x0 = o.x; y0 = o.y; x1 = o.x + o.w; y1 = o.y + o.h;
+        if (x1 < x0) { const double t = x0; x0 = x1; x1 = t; }
+        if (y1 < y0) { const double t = y0; y0 = y1; y1 = t; }
+    }
+    x0 = ox + x0 * s; x1 = ox + x1 * s; y0 = oy + y0 * s; y1 = oy + y1 * s;
+    if (o.rot != 0 && EdCanRotate(o.kind)) {          // повернуту — в описане коло
+        const double cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+        const double rad = 0.5 * sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)) + 1;
+        x0 = cx - rad; x1 = cx + rad; y0 = cy - rad; y1 = cy + rad;
+    }
+    double pad = o.thick * s + EdFxExtent(o) * s + 4;
+    if (EdIsSegment(o.kind)) pad += EdHeadLen(o, s) * 1.2;
+    if (o.kind == EdKind::Text) pad += EdStrokeRadius(o, s) + 2;
+    if (o.kind == EdKind::Counter) pad += o.w * s * 0.1;
+    RECT r = { (LONG)floor(x0 - pad), (LONG)floor(y0 - pad), (LONG)ceil(x1 + pad), (LONG)ceil(y1 + pad) };
+    return r;
+}
+
+static std::wstring EdFxKey(const EdObj& o, double s, double fx, double fy, int bw, int bh)
+{
+    unsigned hp = 0;
+    for (size_t i = 0; i < o.pts.size(); ++i) hp = hp * 31u + (unsigned)o.pts[i].x * 7u + (unsigned)o.pts[i].y;
+    wchar_t head[320];
+    swprintf(head, 320, L"fx|%d|%d|%d|%d|%d|%d|%d|%08X|%d|%d|%d|%d|%08X|%d|%d%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%u|%d|%d|",
+             (int)o.kind, (int)(s * 1000 + 0.5), (int)(fx * 4), (int)(fy * 4), o.w, o.h, o.thick, (unsigned)o.color, o.alpha,
+             o.noMain ? 1 : 0, o.on2, o.alpha2, (unsigned)o.color2, o.size, o.bold ? 1 : 0, o.italic ? 1 : 0, o.align, o.boxw,
+             o.rot, o.dash, o.headFront, o.headBack, o.headSize, o.img, o.crpx, o.cshape, o.stamp, o.shadow, o.glow,
+             EdCounterNumber(o), (int)o.pts.size(), hp, bw, bh);
+    return std::wstring(head) + o.text;
+}
+
+// Шар ефектів для позначки: розміром із EdFxBounds, позначка в ньому — зі
+// зсувом (dx, dy) від лівого верхнього кута. Кешується в g_edTiles.
+static const EdTile* EdFxTile(const EdObj& o, double s, double dx, double dy, int idx, int bw, int bh)
+{
+    const std::wstring key = EdFxKey(o, s, dx - floor(dx), dy - floor(dy), bw, bh);
+    for (size_t i = 0; i < g_edTiles.size(); ++i)
+        if (g_edTiles[i].key == key) return &g_edTiles[i];
+    Gdiplus::Bitmap* src = new Gdiplus::Bitmap(bw, bh, PixelFormat32bppPARGB);
+    if (!src || src->GetLastStatus() != Gdiplus::Ok) { delete src; return nullptr; }
+    {
+        Gdiplus::Graphics g(src);
+        g.Clear(Gdiplus::Color(0, 0, 0, 0));
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+        EdDrawObjectRaw(g, o, s, dx, dy, idx);
+    }
+    Gdiplus::BitmapData sd = {};
+    Gdiplus::Rect all(0, 0, bw, bh);
+    if (src->LockBits(&all, Gdiplus::ImageLockModeRead, PixelFormat32bppPARGB, &sd) != Gdiplus::Ok) { delete src; return nullptr; }
+    std::vector<BYTE> alpha((size_t)bw * bh);
+    for (int y = 0; y < bh; ++y) {
+        const BYTE* row = (const BYTE*)sd.Scan0 + (size_t)y * sd.Stride;
+        for (int x = 0; x < bw; ++x) alpha[(size_t)y * bw + x] = row[x * 4 + 3];
+    }
+    src->UnlockBits(&sd);
+    delete src;
+    const size_t stride = (size_t)bw * 4;
+    std::vector<BYTE> out(stride * bh, 0);                // премультиплікований BGRA
+    auto make = [&](const EdFxPreset& p, bool shadow) {
+        if (p.alpha == 0) return;
+        const int off = (int)(p.off * s + 0.5), rad = (int)(p.blur * s + 0.5);
+        std::vector<BYTE> m(stride * bh, 0);
+        for (int y = 0; y < bh; ++y) {
+            const int sy = y - off;
+            if (sy < 0 || sy >= bh) continue;
+            const BYTE* arow = &alpha[(size_t)sy * bw];
+            BYTE* d = &m[(size_t)y * stride];
+            for (int x = 0; x < bw; ++x) {
+                const int sx = x - off;
+                if (sx < 0 || sx >= bw) continue;
+                const BYTE a = arow[sx];
+                if (!a) continue;
+                if (shadow) d[x * 4 + 3] = a;                                       // чорне: RGB = 0
+                else        d[x * 4] = d[x * 4 + 1] = d[x * 4 + 2] = d[x * 4 + 3] = a;   // біле premultiplied
+            }
+        }
+        if (rad > 0) EdBoxBlur(m.data(), bw, bh, (int)stride, rad);
+        // Підсилення після розмиття робить ореол щільним, а не ледь помітним;
+        // непрозорість пресету — зверху. Усі канали разом: premultiplied.
+        for (size_t i = 0; i < m.size(); i += 4) {
+            unsigned a = m[i + 3] * (unsigned)p.boost / 100u;
+            if (a > 255) a = 255;
+            a = a * (unsigned)p.alpha / 255u;
+            if (shadow) { m[i + 3] = (BYTE)a; }
+            else        { m[i] = m[i + 1] = m[i + 2] = m[i + 3] = (BYTE)a; }
+        }
+        for (size_t i = 0; i < out.size(); i += 4) {      // шар поверх out
+            const unsigned a = m[i + 3];
+            if (!a) continue;
+            const unsigned ia = 255 - a;
+            for (int c = 0; c < 4; ++c) out[i + c] = (BYTE)(m[i + c] + (out[i + c] * ia + 127) / 255);
+        }
+    };
+    if (o.shadow > 0) make(EdFxPresetOf(kEdShadowPreset, o.shadow), true);
+    if (o.glow > 0)   make(EdFxPresetOf(kEdGlowPreset, o.glow), false);
+    Gdiplus::Bitmap* bmp = new Gdiplus::Bitmap(bw, bh, PixelFormat32bppPARGB);
+    Gdiplus::BitmapData bd = {};
+    if (!bmp || bmp->GetLastStatus() != Gdiplus::Ok ||
+        bmp->LockBits(&all, Gdiplus::ImageLockModeWrite, PixelFormat32bppPARGB, &bd) != Gdiplus::Ok) { delete bmp; return nullptr; }
+    for (int y = 0; y < bh; ++y) memcpy((BYTE*)bd.Scan0 + (size_t)y * bd.Stride, &out[(size_t)y * stride], stride);
+    bmp->UnlockBits(&bd);
+    if (g_edTiles.size() >= kEdTileMax) { delete g_edTiles.front().bmp; g_edTiles.erase(g_edTiles.begin()); }
+    EdTile t;
+    t.key = key;
+    t.bmp = bmp;
+    t.pad = 0;
+    g_edTiles.push_back(t);
+    return &g_edTiles.back();
+}
+
+void EdDrawObject(Gdiplus::Graphics& g, const EdObj& o, double s, double ox, double oy, int idx)
+{
+    if (!EdObjLive(o)) return;                 // CAPS-80: позначка іншого кадру відео; CAPS-98: приховано
+    if (EdFxOn(o)) {
+        const RECT b = EdFxBounds(o, s, ox, oy);
+        const int bw = b.right - b.left, bh = b.bottom - b.top;
+        if (bw > 0 && bh > 0 && (LONGLONG)bw * bh <= 48LL * 1024 * 1024) {
+            const EdTile* fx = EdFxTile(o, s, ox - b.left, oy - b.top, idx, bw, bh);
+            if (fx && fx->bmp)
+                g.DrawImage(fx->bmp, Gdiplus::Rect(b.left, b.top, bw, bh), 0, 0, bw, bh, Gdiplus::UnitPixel);
+        }
+    }
+    EdDrawObjectRaw(g, o, s, ox, oy, idx);
 }
 
 // Плитка «шахівниці» — 16×16, дві ледь відмінні сірі. Робиться один раз:
@@ -14469,6 +14760,7 @@ void EdPaintLib(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 }
 
 void EdPaintMetaPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t);   // CAPS-88
+void EdPaintMarksPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t);  // CAPS-98
 
 void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
@@ -14486,15 +14778,16 @@ void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
     DeleteObject(b);
 
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < 3; ++i) {
         const RECT* r = EdRegionRect(EdHit::Panel, i);
         if (!r) continue;
         const bool on = (g_edPanelTab == i);
         EdPaintButton(g, *r, t, on, g_edHotWhat == EdHit::Panel && g_edHotIdx == i, true);
-        EdIcon(g, i == 0 ? IcoProps : IcoMeta, EdIconBox(*r), EdC(on ? t.accent : t.text2), 1.5f);
+        EdIcon(g, i == 0 ? IcoProps : i == 1 ? IcoMeta : IcoMarks, EdIconBox(*r), EdC(on ? t.accent : t.text2), 1.5f);
     }
     if (g_edPanelTab < 0) return;
     if (g_edPanelTab == 1) { EdPaintMetaPanel(dc, g, t); return; }
+    if (g_edPanelTab == 2) { EdPaintMarksPanel(dc, g, t); return; }   // CAPS-98
     if (g_edVideo) { EvPaintPanel(dc, g, t); return; }   // CAPS-78
 
     const int x = g_edRcPanel.left + EdPx(14);
@@ -14689,6 +14982,15 @@ void EdPaintPick(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     if (EdIsPaintPick(g_edPickOpen)) { EdPaintPalette(dc, g, t); return; }
     const int n = EdPickCount(g_edPickOpen);
     const bool ends = (g_edPickOpen == kEdPickEnds), corners = (g_edPickOpen == kEdPickCorners);
+    const bool fx = (g_edPickOpen == kEdPickFx);   // CAPS-31
+    if (fx) {
+        const Str labs[2] = { Str::EdFxShadow, Str::EdFxGlow };
+        for (int row = 0; row < 2; ++row)
+            if (const RECT* c0 = EdRegionRect(EdHit::PickItem, row * 3)) {
+                RECT lr = { g_edPickBox.left + EdPx(8), c0->top, c0->left - EdPx(4), c0->bottom };
+                EdDrawText(dc, lr, S(labs[row]), g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            }
+    }
     if (ends) {
         // Підписи рядків: без них три рядки стрілок знову виглядали б однаково.
         const Str labs[3] = { Str::EdEndsStart, Str::EdEndsEnd, Str::EdEndsSize };
@@ -14708,6 +15010,10 @@ void EdPaintPick(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
             const int row = i < 4 ? 0 : i < 8 ? 1 : 2;
             v = i - (row == 0 ? 0 : row == 1 ? 4 : 8);
             cur = EdPickValue(row == 0 ? 2 : row == 1 ? 1 : 3);
+        } else if (fx) {
+            const int val = EdPickValue(kEdPickFx);
+            v = i % 3;
+            cur = (i < 3) ? (val & 15) : (val >> 4);
         } else {
             cur = EdPickValue(g_edPickOpen);
         }
@@ -14726,6 +15032,8 @@ void EdPaintPick(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
             if (row == 0)      EdEndsSample(g, *r, v, -1, sz, col);
             else if (row == 1) EdEndsSample(g, *r, -1, v, sz, col);
             else               EdEndsSample(g, *r, -1, 1, v, col);
+        } else if (fx) {
+            EdFxSample(g, *r, i < 3 ? v : 0, i < 3 ? 0 : v, col);
         } else if (corners) {
             RECT sr = { r->left, r->top, r->left + EdPx(44), r->bottom };
             EdCornerSample(g, sr, v, col);
@@ -14883,6 +15191,18 @@ void EdThickApply(int idx);
 void EdPickApply(int group, int value)
 {
     if (group == kEdPickThick) { EdThickApply(value); return; }   // CAPS-65
+    if (group == kEdPickFx) {                                      // CAPS-31: 0..2 тінь, 3..5 свічення
+        if (value < 0 || value > 5) return;
+        const bool sh = value < 3;
+        const int v = value % 3;
+        if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size() && EdFxAllowed(g_edObjs[g_edSel].kind)) {
+            EdObj& o = g_edObjs[g_edSel];
+            int& f = sh ? o.shadow : o.glow;
+            if (f != v) { EdPushUndo(); f = v; }
+        }
+        (sh ? g_edShadowDef : g_edGlowDef) = v;   // типове — теж, як колір і товщина
+        return;
+    }
     if (group == kEdPickShape) {                                   // CAPS-68
         if (value < 0 || value > 2) return;
         if (g_edGroupEdit && EdCounterKind()) EdGroupApply(4, value);
@@ -15407,6 +15727,7 @@ void EdPlaceImage(Gdiplus::Bitmap* bmp, POINT imgPt)
     o.img   = id;
     o.alpha = 100;
     o.color = g_edColor;
+    o.shadow = g_edShadowDef; o.glow = g_edGlowDef;   // CAPS-31
     o.w = w; o.h = h;
     o.x = imgPt.x - w / 2;
     o.y = imgPt.y - h / 2;
@@ -16326,6 +16647,9 @@ Str EdTipFor(EdHit what, int idx)
     switch (what) {
     case EdHit::OvCopy:   return Str::EdTipOvCopy;
     case EdHit::OvWindow: return Str::EdTipOvWindow;
+    case EdHit::MarkRow:  return Str::EdTipMarkRow;                    // CAPS-98
+    case EdHit::MarkEye:  return (idx >= 0 && idx < (int)g_edObjs.size() && g_edObjs[idx].hidden)
+                                 ? Str::EdTipMarkShow : Str::EdTipMarkHide;
     case EdHit::InsertImg: return Str::EdTipInsertImg;
     case EdHit::Tool:
         switch (idx) {
@@ -16367,6 +16691,7 @@ Str EdTipFor(EdHit what, int idx)
         if (idx == kEdPickAlpha) return Str::EdTipAlpha;
         if (idx == kEdPickThick) return EdTipFor(EdHit::Thick, 0);   // CAPS-65
         if (idx == kEdPickShape) return Str::EdTipShape;             // CAPS-68
+        if (idx == kEdPickFx) return Str::EdTipFx;                   // CAPS-31
         if (idx == kEdPickEnds) return Str::EdTipEnds;          // CAPS-64
         if (idx == kEdPickCorners) return Str::EdTipCorners;    // CAPS-58
         return idx == 0 ? Str::EdTipDash : idx == 1 ? Str::EdTipHeadFront
@@ -16429,6 +16754,7 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::MetaClear: return Str::EdTipMetaClear;   // CAPS-88
     case EdHit::Panel:   // CAPS-88: вкладка — назва панелі; відкрита — «згорнути»
         if (g_edPanelTab == idx) return Str::EdTipPanelHide;
+        if (idx == 2) return Str::EdTipPanelMarks;                     // CAPS-98
         return idx == 1 ? Str::EdTipPanelMeta : (g_edVideo ? Str::EdTipPanelVideo : Str::EdTipPanelProps);
     case EdHit::Copy:    return Str::EdCopy;
     case EdHit::Store:   return Str::EdTipStore;
@@ -16820,6 +17146,7 @@ void EdTextBegin(HWND hwnd, POINT img, int idx)
         o.italic  = g_edItalic;
         o.align   = g_edAlign;
         EdInit2(o);                   // CAPS-49: обводка — другий колір напису
+        o.shadow  = g_edShadowDef; o.glow = g_edGlowDef;   // CAPS-31
         o.w = o.h = 0;
     }
     g_edEditObj = o;
@@ -17487,6 +17814,20 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_MOUSEMOVE: {
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        if (g_edDrag == EdDrag::MarkRow) {        // CAPS-98: тягнення рядка списку
+            if (!g_edMarksDragging &&
+                abs(pt.x - g_edMarksDragFrom.x) + abs(pt.y - g_edMarksDragFrom.y) < EdPx(5)) return 0;
+            g_edMarksDragging = true;
+            const int rh = EdPx(kEdMarksRowH);
+            bool scrolled = false;                // автопрокрутка біля країв списку
+            if (pt.y < g_edMarksRc.top + EdPx(12) && g_edMarksScroll > 0) { g_edMarksScroll -= rh / 2; scrolled = true; }
+            else if (pt.y > g_edMarksRc.bottom - EdPx(12)) { g_edMarksScroll += rh / 2; scrolled = true; }
+            if (scrolled) EdLayout(hwnd);
+            int drop = -1;
+            EdMarksDropAt(pt, &drop);
+            if (drop != g_edMarksDrop || scrolled) { g_edMarksDrop = drop; InvalidateRect(hwnd, &g_edRcPanel, FALSE); }
+            return 0;
+        }
         if (g_edVideo && !g_edOverlay && EvMouseMove(hwnd, pt)) return 0;   // CAPS-78: перемотка тягненням
         if (g_edDrag == EdDrag::OvSel) {          // CAPS-33: тягнуть ручку рамки
             RECT n = g_edCropOrig;
@@ -18090,7 +18431,29 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case EdHit::MetaClear:                   // CAPS-88
             if (!g_edMeta.Blank() || !g_edMeta.none) EdMetaClearAll(hwnd);
             return 0;
+        case EdHit::MarkRow: {                   // CAPS-98: вибір зі списку + можливе тягнення
+            if (g_edMarksEdit) EdMarksRenameEnd(hwnd, true);
+            const int mi = r->idx;
+            if (mi < 0 || mi >= (int)g_edObjs.size()) return 0;
+            if (wp & MK_SHIFT) EdSelToggle(mi); else EdSelectOne(mi);
+            // Відео: позначка іншого кадру — перейти туди, де її видно.
+            if (g_edVideo && !g_edObjs[mi].hidden && g_edObjs[mi].vf1 != INT_MAX && !EdObjLive(g_edObjs[mi]))
+                EvSeek((g_edObjs[mi].vf0 + 0.25) / g_evFps);
+            g_edMarksDragIdx = mi;
+            g_edMarksDragging = false;
+            g_edMarksDrop = -1;
+            g_edMarksDragFrom = pt;
+            g_edDrag = EdDrag::MarkRow;
+            SetCapture(hwnd);
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        case EdHit::MarkEye:                     // CAPS-98
+            EdMarksToggleHidden(r->idx);
+            return 0;
         case EdHit::Panel:                       // CAPS-88: одна відкрита; повторний клік — згорнути
+            if (g_edMarksEdit) EdMarksRenameEnd(hwnd, true);   // CAPS-98
             g_edPanelTab = (g_edPanelTab == r->idx) ? -1 : r->idx;
             EdLayout(hwnd);
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -18200,6 +18563,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             o.alpha = g_edAlpha;
             o.stamp = g_edStamp;
             EdInit2(o);                   // CAPS-49: у лічильника — колір цифри
+            o.shadow = g_edShadowDef; o.glow = g_edGlowDef;   // CAPS-31
             if (o.kind == EdKind::Counter) {
                 o.cshape = g_edCounterShape;                       // CAPS-68
                 if (o.cshape == 2) o.y = img.y - g_edStampSize;    // вістря — у точку кліку
@@ -18235,6 +18599,8 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_edNew.headSize = g_edHeadSize;
             g_edNew.corners = (g_edNew.kind == EdKind::Rect) ? g_edCorners : 0;   // CAPS-58
             g_edNew.crpx = EdCornerPx(g_edNew.corners);
+            g_edNew.shadow = EdFxAllowed(g_edNew.kind) ? g_edShadowDef : 0;    // CAPS-31
+            g_edNew.glow   = EdFxAllowed(g_edNew.kind) ? g_edGlowDef : 0;
             g_edNewOrigin = img;
             if (g_edNew.kind == EdKind::Mark) {
                 // Смуга маркера має сталу висоту й тягнеться лише вшир, тому
@@ -18284,6 +18650,15 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_LBUTTONUP: {
         if (g_evScrub) { EvScrubEnd(); return 0; }   // CAPS-78: відпустили покажчик таймлайну
         g_edDynValid = false;               // CAPS-60
+        if (g_edDrag == EdDrag::MarkRow) {        // CAPS-98: кинули рядок
+            g_edDrag = EdDrag::None;
+            ReleaseCapture();
+            if (g_edMarksDragging && g_edMarksDrop >= 0) EdMarksMove(g_edMarksDragIdx, g_edMarksDrop);
+            g_edMarksDragIdx = -1; g_edMarksDrop = -1; g_edMarksDragging = false;
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         if (g_edDrag == EdDrag::OvSel) {
             g_edDrag = EdDrag::None;
             ReleaseCapture();
@@ -18363,8 +18738,26 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (g_edDrag == EdDrag::Pan) { g_edDrag = EdDrag::None; ReleaseCapture(); }
         return 0;
 
+    case WM_RBUTTONUP: {                         // CAPS-98: контекстне меню рядка позначки
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        const EdRegion* rr = EdFind(pt);
+        if (rr && rr->what == EdHit::MarkRow && !g_edLibOpen) {
+            if (g_edMarksEdit) EdMarksRenameEnd(hwnd, true);
+            EdSelectOne(rr->idx);
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            EdMarksMenu(hwnd, rr->idx, pt);
+            return 0;
+        }
+        break;
+    }
+
     case WM_LBUTTONDBLCLK: {
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        {   // CAPS-98: подвійний клік по рядку — перейменувати
+            const EdRegion* mr = EdFind(pt);
+            if (mr && mr->what == EdHit::MarkRow && !g_edLibOpen) { EdMarksRenameBegin(hwnd, mr->idx); return 0; }
+        }
         if (g_edLibOpen) {
             const EdRegion* lr = EdFind(pt);
             if (lr && lr->what == EdHit::LibCard) { EdLibSelect(hwnd, lr->idx); EdLibOpenSel(hwnd); }
@@ -18421,6 +18814,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND:
         if (HIWORD(wp) == EN_CHANGE && LOWORD(wp) == kEdEditId) { EdTextFitBox(); return 0; }
         if (HIWORD(wp) == EN_KILLFOCUS && LOWORD(wp) == kEdLibEditId) { EdLibRenameEnd(hwnd, true); return 0; }
+        if (HIWORD(wp) == EN_KILLFOCUS && LOWORD(wp) == kEdMarksEditId) { EdMarksRenameEnd(hwnd, true); return 0; }   // CAPS-98
         if (HIWORD(wp) == EN_KILLFOCUS && LOWORD(wp) >= kEdMetaEditId && LOWORD(wp) < kEdMetaEditId + kEdMetaFields) {
             EdMetaCommit(hwnd, LOWORD(wp) - kEdMetaEditId);   // CAPS-88
             return 0;
@@ -18440,6 +18834,12 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 EdLayout(hwnd);
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
+            return 0;
+        }
+        if (g_edPanelTab == 2 && !g_edObjs.empty() && PtInRect(&g_edMarksRc, pt)) {   // CAPS-98: список
+            g_edMarksScroll -= GET_WHEEL_DELTA_WPARAM(wp) * EdPx(kEdMarksRowH * 2) / WHEEL_DELTA;
+            EdLayout(hwnd);
+            InvalidateRect(hwnd, &g_edRcPanel, FALSE);
             return 0;
         }
         if (g_edVideo && PtInRect(&g_edRcTimeline, pt)) {   // CAPS-78: масштаб таймлайну
@@ -18651,6 +19051,9 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
         case VK_DELETE: EdDeleteSel(); return 0;
+        case VK_F2:                              // CAPS-98: перейменувати вибрану в панелі
+            if (g_edPanelTab == 2 && g_edSel >= 0 && g_edSel < (int)g_edObjs.size()) EdMarksRenameBegin(hwnd, g_edSel);
+            return 0;
         case VK_ESCAPE:
             // Esc знімає рівно один шар за раз: спершу розкритий селект, потім
             // кадр, потім вибір, потім інструмент — і лише тоді закриває вікно.
@@ -19303,7 +19706,8 @@ bool EdWriteFile(const wchar_t* path)
 
 const char kEdDocMagic[8] = { 'L', 'H', 'S', 'H', 'O', 'T', 0x1A, '\n' };
 constexpr WORD kEdDocVerMajor = 1;   // ламає сумісність
-constexpr WORD kEdDocVerMinor = 1;   // лише додає поля: 1.1 — INFO і THMB для бібліотеки
+constexpr WORD kEdDocVerMinor = 2;   // лише додає поля: 1.1 — INFO і THMB для бібліотеки;
+                                     // 1.2 — у OBJ  поля shdw/glow (CAPS-31), name/hidn (CAPS-98)
 
 struct EdKindTag { EdKind kind; const char* tag; };
 const EdKindTag kEdKindTags[] = {
@@ -19510,6 +19914,16 @@ bool LhWriteAll(const wchar_t* path, const std::vector<BYTE>& b)
 }
 
 // PNG: текстові чанки iTXt (UTF-8) перед IEND — ключі зі специфікації PNG.
+// CAPS-96: назва програми з версією — у стандартне поле «програма» (PNG Software,
+// EXIF Software, MP4 ©too). Завжди, коли метадані не прибрано, навіть без решти
+// полів (рішення власника 25.09: без окремого прапорця).
+std::string LhSoftwareTag()
+{
+    wchar_t ver[32] = {};
+    ExeVersionString(ver, 32);
+    return LhUtf8(std::wstring(L"Little Helpers ") + ver);
+}
+
 bool LhPngAddText(const wchar_t* path, const std::wstring& title, const LhMeta& m)
 {
     std::vector<BYTE> b;
@@ -19542,6 +19956,7 @@ bool LhPngAddText(const wchar_t* path, const std::wstring& title, const LhMeta& 
     chunk("Author", LhUtf8(m.author));
     chunk("Copyright", LhUtf8(m.copyright));
     chunk("Keywords", LhUtf8(m.tags));
+    chunk("Software", LhSoftwareTag());   // CAPS-96
     SYSTEMTIME sl;
     if (LhDateParts(m.taken, sl)) {
         char iso[32];
@@ -19574,6 +19989,7 @@ void LhGdipSetProps(Gdiplus::Bitmap* bmp, const std::wstring& title, const LhMet
     ascii(0x010E, LhUtf8(m.desc));        // ImageDescription
     ascii(0x013B, LhUtf8(m.author));      // Artist
     ascii(0x8298, LhUtf8(m.copyright));   // Copyright
+    ascii(0x0131, LhSoftwareTag());       // Software (CAPS-96)
     xp(0x9C9B, title);                    // XPTitle
     xp(0x9C9C, m.desc);                   // XPComment
     xp(0x9C9D, m.author);                 // XPAuthor
@@ -19656,6 +20072,8 @@ bool LhMp4AddMeta(const wchar_t* path, const std::wstring& title, const LhMeta& 
             item(kArt, LhUtf8(m.author));
             item(kCprt, LhUtf8(m.copyright));
             item(kKeyw, LhUtf8(m.tags));
+            const BYTE kToo[4] = { 0xA9, 't', 'o', 'o' };   // CAPS-96: програма
+            item(kToo, LhSoftwareTag());
             SYSTEMTIME sl;
             if (LhDateParts(m.taken, sl)) {
                 char iso[32];
@@ -19774,6 +20192,11 @@ void EdWriteObj(EdWr& w, const EdObj& o)
     if (o.kind == EdKind::Image) fi("img ", o.img);
     if (o.kind == EdKind::Rect || o.kind == EdKind::Image) { fi("crnr", o.corners); fi("crpx", o.crpx); }
     if (o.vf1 != INT_MAX) { fi("vf0 ", o.vf0); fi("vf1 ", o.vf1); }   // CAPS-81: лише позначки відео
+    // CAPS-31/98 (.lhshot 1.2, .lhvideo 1.1): нові поля — лише коли не типові, тож
+    // файл без ефектів і назв байт у байт такий, як його писала 1.1 / 1.0.
+    if (o.shadow || o.glow) { fi("shdw", o.shadow); fi("glow", o.glow); }
+    if (!o.name.empty()) { const size_t at = w.open("name"); w.str(o.name); w.close(at); }
+    if (o.hidden) fb("hidn", true);
 
     w.close(obj);
 }
@@ -20004,6 +20427,10 @@ void EdReadObj(EdRd& r, size_t end, EdObj& o)
         else if (!memcmp(t, "crpx", 4)) o.crpx = r.i32v();
         else if (!memcmp(t, "vf0 ", 4)) o.vf0 = r.i32v();       // CAPS-81
         else if (!memcmp(t, "vf1 ", 4)) o.vf1 = r.i32v();
+        else if (!memcmp(t, "shdw", 4)) o.shadow = r.i32v();   // CAPS-31
+        else if (!memcmp(t, "glow", 4)) o.glow = r.i32v();
+        else if (!memcmp(t, "name", 4)) o.name = r.str();      // CAPS-98
+        else if (!memcmp(t, "hidn", 4)) o.hidden = r.u8v() != 0;
         else if (!memcmp(t, "text", 4)) o.text = r.str();
         else if (!memcmp(t, "pts ", 4)) {
             const DWORD n = r.u32v();
@@ -20426,7 +20853,7 @@ bool VidMetaRead(const std::wstring& mp4, VidMeta& m)
 const char kLhvMagic[8] = { 'L', 'H', 'V', 'I', 'D', 'E', 'O', 0x1A };
 const char kLhvEnd[8]   = { 'L', 'H', 'V', 'E', 'N', 'D', 0, 0 };
 const BYTE kLhvUuid[16] = { 0x6c, 0x68, 0x76, 0x2d, 0x9a, 0x3e, 0x4f, 0x81, 0xb2, 0x5d, 0x0c, 0x77, 0xe1, 0x46, 0x2f, 0xa9 };
-constexpr WORD kLhvVerMajor = 1, kLhvVerMinor = 0;
+constexpr WORD kLhvVerMajor = 1, kLhvVerMinor = 1;   // 1.1 — у OBJ  shdw/glow, name/hidn (CAPS-31/98)
 
 bool LhvIs(const wchar_t* path) { return LhvPathIs(path); }
 
@@ -23513,6 +23940,299 @@ void EdMetaClearAll(HWND hwnd)
     InvalidateRect(hwnd, &g_edRcPanel, FALSE);
 }
 
+// ---- CAPS-98: панель «Позначки» ----
+// Список — той самий g_edObjs у зворотному порядку (верхній рядок = верхній шар,
+// як у графічних редакторах). Назва живе в позначці; порожня — автоназва за
+// видом і номером серед таких самих (знизу вгору), у напису — перші слова.
+int EdKindIcon(EdKind k)
+{
+    switch (k) {
+    case EdKind::Rect:    return IcoRect;
+    case EdKind::Ellipse: return IcoEllipse;
+    case EdKind::Line:    return IcoLine;
+    case EdKind::Pen:     return IcoPen;
+    case EdKind::Text:    return IcoText;
+    case EdKind::Hide:    return IcoHide;
+    case EdKind::Mark:    return IcoMark;
+    case EdKind::Counter: return IcoCounter;
+    case EdKind::Stamp:   return IcoStamp;
+    default:              return IcoImage;
+    }
+}
+
+std::wstring EdObjName(const EdObj& o, int idx)
+{
+    if (!o.name.empty()) return o.name;
+    std::wstring n = S(EdKindName(o.kind));
+    if (o.kind == EdKind::Text) {
+        std::wstring t = o.text;
+        for (wchar_t& c : t) if (c == L'\r' || c == L'\n' || c == L'\t') c = L' ';
+        while (!t.empty() && t.front() == L' ') t.erase(t.begin());
+        if (t.size() > 24) { t.resize(23); t += L'\u2026'; }
+        if (!t.empty()) return n + L": " + t;
+    }
+    if (o.kind == EdKind::Counter) return n + L" " + std::to_wstring(EdCounterNumber(o));
+    int ord = 0;                                    // номер серед таких самих, знизу вгору
+    for (int i = 0; i <= idx && i < (int)g_edObjs.size(); ++i) if (g_edObjs[i].kind == o.kind) ++ord;
+    return n + L" " + std::to_wstring(ord);
+}
+
+void EdMarksLayout(HWND hwnd)
+{
+    const int px = g_edRcPanel.left + EdPx(10), pr = g_edRcPanel.right - EdPx(10);
+    const int top = g_edRcPanel.top + EdPx(14) + EdPx(18) + EdPx(10);
+    g_edMarksRc = { px, top, pr, g_edRcPanel.bottom - EdPx(10) };
+    const int n = (int)g_edObjs.size(), rh = EdPx(kEdMarksRowH);
+    const int total = n * rh, view = g_edMarksRc.bottom - g_edMarksRc.top;
+    if (g_edMarksScroll > total - view) g_edMarksScroll = total - view;
+    if (g_edMarksScroll < 0) g_edMarksScroll = 0;
+    if (g_edSel != g_edMarksSelSeen) {              // вибір змінився — його рядок у поле зору
+        g_edMarksSelSeen = g_edSel;
+        if (g_edSel >= 0 && g_edSel < n) {
+            const int y0 = (n - 1 - g_edSel) * rh - g_edMarksScroll;
+            if (y0 < 0) g_edMarksScroll += y0;
+            else if (y0 + rh > view) g_edMarksScroll += y0 + rh - view;
+            if (g_edMarksScroll < 0) g_edMarksScroll = 0;
+        }
+    }
+    for (int row = 0; row < n; ++row) {
+        const int i = n - 1 - row;                  // верхній рядок — верхній шар
+        RECT r = { g_edMarksRc.left, g_edMarksRc.top + row * rh - g_edMarksScroll,
+                   g_edMarksRc.right, g_edMarksRc.top + (row + 1) * rh - g_edMarksScroll };
+        if (r.bottom <= g_edMarksRc.top || r.top >= g_edMarksRc.bottom) continue;
+        if (r.top < g_edMarksRc.top) r.top = g_edMarksRc.top;
+        if (r.bottom > g_edMarksRc.bottom) r.bottom = g_edMarksRc.bottom;
+        EdAdd(r, EdHit::MarkRow, i);
+        RECT eye = { r.right - EdPx(30), r.top, r.right, r.bottom };
+        EdAdd(eye, EdHit::MarkEye, i);              // після рядка: EdFind іде з кінця
+    }
+    if (g_edMarksEdit) {                            // поле перейменування їде за своїм рядком
+        const RECT* r = EdRegionRect(EdHit::MarkRow, g_edMarksEditIdx);
+        if (r) { MoveWindow(g_edMarksEdit, r->left + EdPx(28), r->top + EdPx(3),
+                            (r->right - EdPx(32)) - (r->left + EdPx(28)), r->bottom - r->top - EdPx(6), TRUE);
+                 ShowWindow(g_edMarksEdit, SW_SHOWNA); }
+        else ShowWindow(g_edMarksEdit, SW_HIDE);
+    }
+}
+
+// Куди впаде рядок: позиція в порядку показу 0..n (лінія між рядками).
+bool EdMarksDropAt(POINT pt, int* out)
+{
+    const int n = (int)g_edObjs.size(), rh = EdPx(kEdMarksRowH);
+    if (n == 0) return false;
+    int pos = (pt.y - g_edMarksRc.top + g_edMarksScroll + rh / 2) / rh;
+    if (pt.y < g_edMarksRc.top) pos = (g_edMarksScroll + rh / 2) / rh;
+    if (pos < 0) pos = 0;
+    if (pos > n) pos = n;
+    *out = pos;
+    return true;
+}
+
+// Позначку idx — на позицію показу dropPos (0 — найвище). Один крок скасування.
+void EdMarksMove(int idx, int dropPos)
+{
+    const int n = (int)g_edObjs.size();
+    if (idx < 0 || idx >= n) return;
+    int to = n - dropPos;                           // індекс у масиві, ПЕРЕД яким вставити (до вилучення)
+    if (to > idx) --to;                             // вилучення зсуває все вище на один
+    if (to < 0) to = 0;
+    if (to >= n) to = n - 1;
+    if (to == idx) return;
+    EdPushUndo();
+    EdObj o = g_edObjs[idx];
+    g_edObjs.erase(g_edObjs.begin() + idx);
+    g_edObjs.insert(g_edObjs.begin() + to, o);
+    EdSelectOne(to);
+}
+
+void EdMarksToggleHidden(int idx)
+{
+    if (idx < 0 || idx >= (int)g_edObjs.size()) return;
+    EdPushUndo();
+    g_edObjs[idx].hidden = !g_edObjs[idx].hidden;
+    if (g_edVideo) ++g_evMarksGen;                  // CAPS-80: проєкт відео став «брудним»
+    if (g_edWnd) { EdLayout(g_edWnd); InvalidateRect(g_edWnd, nullptr, FALSE); }
+}
+
+void EdMarksRename(int idx, const wchar_t* name)
+{
+    if (idx < 0 || idx >= (int)g_edObjs.size()) return;
+    std::wstring v = name ? name : L"";
+    while (!v.empty() && (v.back() == L' ' || v.back() == L'\r' || v.back() == L'\n')) v.pop_back();
+    while (!v.empty() && v.front() == L' ') v.erase(v.begin());
+    if (v == EdObjName(g_edObjs[idx], idx)) return;
+    EdPushUndo();
+    g_edObjs[idx].name = v;                         // порожня — назад до автоназви
+    if (g_edVideo) ++g_evMarksGen;
+}
+
+LRESULT CALLBACK EdMarksEditProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR)
+{
+    if (msg == WM_KEYDOWN && (wp == VK_RETURN || wp == VK_ESCAPE)) {
+        EdMarksRenameEnd(GetParent(h), wp == VK_RETURN);
+        return 0;
+    }
+    if (msg == WM_CHAR && (wp == VK_RETURN || wp == VK_ESCAPE)) return 0;
+    return DefSubclassProc(h, msg, wp, lp);
+}
+
+void EdMarksRenameBegin(HWND hwnd, int idx)
+{
+    if (idx < 0 || idx >= (int)g_edObjs.size()) return;
+    if (g_edMarksEdit) EdMarksRenameEnd(hwnd, true);
+    if (g_edPanelTab != 2) { g_edPanelTab = 2; }
+    EdSelectOne(idx);
+    EdLayout(hwnd);
+    const RECT* rc = EdRegionRect(EdHit::MarkRow, idx);
+    if (!rc) return;
+    g_edMarksEditIdx = idx;
+    const std::wstring cur = EdObjName(g_edObjs[idx], idx);
+    g_edMarksEdit = CreateWindowExW(0, L"EDIT", cur.c_str(), WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                                    rc->left + EdPx(28), rc->top + EdPx(3), (rc->right - EdPx(32)) - (rc->left + EdPx(28)),
+                                    rc->bottom - rc->top - EdPx(6), hwnd, (HMENU)(INT_PTR)kEdMarksEditId,
+                                    (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), nullptr);
+    if (!g_edMarksEdit) return;
+    SendMessageW(g_edMarksEdit, WM_SETFONT, (WPARAM)g_edFont, TRUE);
+    SendMessageW(g_edMarksEdit, EM_SETLIMITTEXT, 80, 0);
+    if (g_edDark) SetWindowTheme(g_edMarksEdit, L"DarkMode_Explorer", nullptr);
+    SetWindowSubclass(g_edMarksEdit, EdMarksEditProc, 1, 0);
+    SetFocus(g_edMarksEdit);
+    SendMessageW(g_edMarksEdit, EM_SETSEL, 0, -1);
+    InvalidateRect(hwnd, &g_edRcPanel, FALSE);
+}
+
+void EdMarksRenameEnd(HWND hwnd, bool apply)
+{
+    if (!g_edMarksEdit) return;
+    wchar_t buf[128] = {};
+    GetWindowTextW(g_edMarksEdit, buf, 128);
+    HWND e = g_edMarksEdit;
+    g_edMarksEdit = nullptr;                        // спершу нуль: DestroyWindow шле EN_KILLFOCUS
+    DestroyWindow(e);
+    SetFocus(hwnd);
+    const int idx = g_edMarksEditIdx;
+    g_edMarksEditIdx = -1;
+    if (apply) EdMarksRename(idx, buf);
+    EdLayout(hwnd);
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+void EdMarksHideEdit()
+{
+    if (g_edMarksEdit && g_edWnd) EdMarksRenameEnd(g_edWnd, true);
+}
+
+void EdMarksMenu(HWND hwnd, int idx, POINT pt)
+{
+    if (idx < 0 || idx >= (int)g_edObjs.size()) return;
+    const bool hidden = g_edObjs[idx].hidden;
+    HMENU m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, 1, S(Str::EdMarksMenuRename));
+    AppendMenuW(m, MF_STRING, 2, S(Str::EdMarksMenuDup));
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, 3, S(Str::EdMarksMenuFront));
+    AppendMenuW(m, MF_STRING, 4, S(Str::EdMarksMenuBack));
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, 5, S(hidden ? Str::EdMarksMenuShow : Str::EdMarksMenuHide));
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, 6, S(Str::EdMarksMenuDelete));
+    POINT sp = pt;
+    ClientToScreen(hwnd, &sp);
+    const int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, sp.x, sp.y, 0, hwnd, nullptr);
+    DestroyMenu(m);
+    switch (cmd) {
+    case 1: EdMarksRenameBegin(hwnd, idx); return;
+    case 2: EdDuplicateSel(); break;
+    case 3: EdRaise(true); break;
+    case 4: EdRaise(false); break;
+    case 5: EdMarksToggleHidden(idx); break;
+    case 6: EdDeleteSel(); break;
+    default: return;
+    }
+    EdLayout(hwnd);
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+void EdPaintMarksPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
+{
+    const int x = g_edRcPanel.left + EdPx(14), xr = g_edRcPanel.right - EdPx(14);
+    RECT h = { x, g_edRcPanel.top + EdPx(14), xr, g_edRcPanel.top + EdPx(14) + EdPx(18) };
+    wchar_t head[96];
+    swprintf(head, 96, L"%s \u00B7 %d", S(Str::EdMarksHead), (int)g_edObjs.size());
+    EdDrawText(dc, h, head, g_edFontSmall, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    if (g_edObjs.empty()) {
+        RECT e = { x, g_edMarksRc.top + EdPx(6), xr, g_edMarksRc.top + EdPx(70) };
+        EdDrawText(dc, e, S(Str::EdMarksEmpty), g_edFont, t.text2, DT_LEFT | DT_WORDBREAK);
+        return;
+    }
+    const int saved = SaveDC(dc);
+    IntersectClipRect(dc, g_edMarksRc.left, g_edMarksRc.top, g_edMarksRc.right, g_edMarksRc.bottom);
+    Gdiplus::GraphicsState st = g.Save();
+    g.SetClip(Gdiplus::Rect(g_edMarksRc.left, g_edMarksRc.top, g_edMarksRc.right - g_edMarksRc.left, g_edMarksRc.bottom - g_edMarksRc.top));
+    const int n = (int)g_edObjs.size(), rh = EdPx(kEdMarksRowH);
+    for (int row = 0; row < n; ++row) {
+        const int i = n - 1 - row;
+        RECT r = { g_edMarksRc.left, g_edMarksRc.top + row * rh - g_edMarksScroll,
+                   g_edMarksRc.right, g_edMarksRc.top + (row + 1) * rh - g_edMarksScroll };
+        if (r.bottom <= g_edMarksRc.top || r.top >= g_edMarksRc.bottom) continue;
+        const EdObj& o = g_edObjs[i];
+        const bool sel = EdIsSelected(i);
+        const bool hot = (g_edHotWhat == EdHit::MarkRow && g_edHotIdx == i);
+        if (sel || hot) {
+            Gdiplus::Color f = EdC(sel ? t.accentBg : t.hot);
+            RECT rr = r;
+            InflateRect(&rr, 0, -EdPx(1));
+            EdFillRound(g, rr, (float)EdPx(6), &f, nullptr);
+        }
+        const COLORREF tx = o.hidden ? t.text2 : (sel ? t.accent : t.text);
+        RECT ib = { r.left + EdPx(6), r.top + (rh - EdPx(18)) / 2, r.left + EdPx(24), r.top + (rh - EdPx(18)) / 2 + EdPx(18) };
+        EdIcon(g, EdKindIcon(o.kind), ib, EdC(tx), 1.5f);
+        int nx = ib.right + EdPx(6);
+        if (o.kind != EdKind::Image && o.kind != EdKind::Hide) {       // зразок кольору
+            RECT cb = { nx, r.top + (rh - EdPx(12)) / 2, nx + EdPx(12), r.top + (rh - EdPx(12)) / 2 + EdPx(12) };
+            Gdiplus::Color cf = EdC(o.color), cbd = EdC(t.border);
+            EdFillRound(g, cb, (float)EdPx(3), &cf, &cbd);
+            nx = cb.right + EdPx(6);
+        }
+        wchar_t tm[48] = {};
+        int tw = 0;
+        if (g_edVideo && o.vf1 != INT_MAX) {                           // відео: проміжок
+            wchar_t a[24], b[24];
+            EvFmtTime(o.vf0 / g_evFps, a, 24);
+            EvFmtTime(o.vf1 / g_evFps, b, 24);
+            swprintf(tm, 48, L"%s\u2013%s", a, b);
+            tw = EdTextWidth(dc, tm, g_edFontSmall) + EdPx(6);
+        }
+        RECT nr = { nx, r.top, r.right - EdPx(30) - tw, r.bottom };
+        if (!(g_edMarksEdit && g_edMarksEditIdx == i))
+            EdDrawText(dc, nr, EdObjName(o, i).c_str(), sel ? g_edFontBold : g_edFont, tx,
+                       DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (tw) {
+            RECT tr = { nr.right, r.top, r.right - EdPx(30), r.bottom };
+            EdDrawText(dc, tr, tm, g_edFontSmall, t.text2, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        }
+        RECT eb = { r.right - EdPx(24), r.top + (rh - EdPx(16)) / 2, r.right - EdPx(6), r.top + (rh - EdPx(16)) / 2 + EdPx(16) };
+        const bool eyeHot = (g_edHotWhat == EdHit::MarkEye && g_edHotIdx == i);
+        EdIcon(g, o.hidden ? IcoHide : IcoEye, eb, EdC(eyeHot ? t.text : t.text2, (o.hidden || eyeHot) ? 255 : 150), 1.4f);
+    }
+    if (g_edDrag == EdDrag::MarkRow && g_edMarksDragging && g_edMarksDrop >= 0) {   // лінія вставки
+        const int y = g_edMarksRc.top + g_edMarksDrop * rh - g_edMarksScroll;
+        Gdiplus::Pen p(EdC(t.accent), (float)EdPx(2));
+        g.DrawLine(&p, (float)(g_edMarksRc.left + EdPx(4)), (float)y, (float)(g_edMarksRc.right - EdPx(4)), (float)y);
+    }
+    g.Restore(st);
+    RestoreDC(dc, saved);
+    const int total = n * rh, view = g_edMarksRc.bottom - g_edMarksRc.top;   // тонка смуга прокрутки
+    if (total > view && view > 0) {
+        int bh = view * view / total;
+        if (bh < EdPx(20)) bh = EdPx(20);
+        const int by = g_edMarksRc.top + (int)((LONGLONG)g_edMarksScroll * (view - bh) / (total - view));
+        RECT sb = { g_edMarksRc.right - EdPx(4), by, g_edMarksRc.right - EdPx(1), by + bh };
+        Gdiplus::Color sc = EdC(t.text2, 110);
+        EdFillRound(g, sb, (float)EdPx(1), &sc, nullptr);
+    }
+}
+
 void EdPaintMetaPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     const int x = g_edRcPanel.left + EdPx(14), xr = g_edRcPanel.right - EdPx(14);
@@ -24604,7 +25324,7 @@ void EvBuildMarkSpans(std::vector<EvMarkSpan>& out, int vw, int vh, int offX, in
         g_evLiveFrame = a;
         for (size_t i = 0; i < g_edObjs.size(); ++i) {
             const EdObj& o = g_edObjs[i];
-            if (o.vf1 == INT_MAX || a < o.vf0 || a >= o.vf1) continue;
+            if (o.vf1 == INT_MAX || a < o.vf0 || a >= o.vf1 || o.hidden) continue;   // CAPS-98: приховане не йде
             if (EdIsEffect(o.kind)) {
                 EvFlushLayer(layer, sp.ops);
                 EvMarkOp op;
