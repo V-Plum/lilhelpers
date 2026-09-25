@@ -902,6 +902,24 @@ X(EdTipZoom100,       L"Піксель у піксель (100 %)",     L"Pixel f
 X(EdTipFit,           L"Вписати у вікно",               L"Fit to window")                              \
 X(EdTipPanelHide,     L"Згорнути панель",               L"Collapse the panel")                         \
 X(EdTipPanelShow,     L"Розгорнути панель",             L"Expand the panel")                           \
+X(EdTipPanelProps,    L"Властивості знімка",            L"Snapshot properties")                        \
+X(EdMetaHead,         L"EXIF / META",                   L"EXIF / META")                                \
+X(EdMetaTitle,        L"Назва",                         L"Title")                                      \
+X(EdMetaDesc,         L"Опис",                          L"Description")                                \
+X(EdMetaAuthor,       L"Автор",                         L"Author")                                     \
+X(EdMetaCopyright,    L"Авторське право",               L"Copyright")                                  \
+X(EdMetaTags,         L"Теги (через кому)",             L"Tags (comma-separated)")                     \
+X(EdMetaTaken,        L"Дата зйомки",                   L"Date taken")                                 \
+X(EdMetaDateCue,      L"25.09.2026 14:30",              L"25.09.2026 14:30")                           \
+X(EdMetaClearBtn,     L"Прибрати всі метадані",         L"Remove all metadata")                        \
+X(EdTipMetaClear,     L"Опис, автор, право й теги — геть; у файли назовні не піде нічого, навіть дата", \
+                      L"Clears description, author, copyright and tags; nothing goes into exported files, not even the date") \
+X(EdMetaNote,         L"Ці поля йдуть у файли з «Зберегти як…» (PNG, JPEG, MP4), а для відео — і з «Копіювати як файл». Дата зйомки — ще й час самого файлу. GPS знімки екрана не мають.", \
+                      L"These fields go into files from \u201cSave as\u2026\u201d (PNG, JPEG, MP4) and, for video, \u201cCopy as a file\u201d. The date taken is also the file\u2019s own time. Screen captures carry no GPS.") \
+X(EdMetaNoneNote,     L"Метадані прибрано: у файли назовні не йде нічого, навіть дата. Заповніть будь-яке поле — і вони повернуться.", \
+                      L"Metadata removed: nothing goes into exported files, not even the date. Fill in any field to bring them back.") \
+X(EdTipPanelVideo,    L"Відео",                         L"Video")                                      \
+X(EdTipPanelMeta,     L"EXIF/META — назва, опис, автор, дата", L"EXIF/META — title, description, author, date") \
 X(EdTipOpenMore,      L"Інші джерела зображення",       L"Other image sources")                        \
 X(EdTipMin,           L"Згорнути",                      L"Minimise")                                   \
 X(EdTipMax,           L"Розгорнути",                    L"Maximise")                                   \
@@ -8727,7 +8745,7 @@ constexpr int kEdCaption = 40;    // заголовок
 constexpr int kEdStrip   = 48;    // смуга властивостей
 constexpr int kEdRail    = 52;    // панель інструментів
 constexpr int kEdPanel   = 260;   // права панель
-constexpr int kEdPanelLo = 30;    // вона ж згорнута
+constexpr int kEdPanelLo = 36;    // CAPS-88: смуга вкладок панелей (була — згорнута панель)
 constexpr int kEdStatus  = 48;
 // Смуга лічильника — найдовша з усіх: чіп, група, початок зі степером,
 // наступний номер, кольори, розміри, прозорість і кнопка нової групи. Разом із
@@ -9057,7 +9075,8 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    VidBtn, VidTrack, VidSpeed, VidLoop, VidMute, VidFrameShot, VidShowFile,   // CAPS-78
                    LibPlayer,
                    VidFilm, VidEdit,     // CAPS-79: стрічка (вибір, проміжок, ручки обрізання) і кнопки правок
-                   VidMarks };           // CAPS-80: доріжка позначок
+                   VidMarks,             // CAPS-80: доріжка позначок
+                   MetaClear };          // CAPS-88: «Прибрати всі метадані»
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -9076,7 +9095,8 @@ enum EdIco { IcoSelect, IcoRect, IcoUndo, IcoRedo, IcoHelp, IcoFront, IcoBack,
              IcoAlL, IcoAlCx, IcoAlR, IcoAlT, IcoAlCy, IcoAlB, IcoDistX, IcoDistY,
              IcoGroup, IcoUngroup,
              IcoStCheck, IcoStCross, IcoStQuestion, IcoStBang, IcoStStar, IcoStWarn,
-             IcoWindow, IcoImage };
+             IcoWindow, IcoImage,
+             IcoProps, IcoMeta };                  // CAPS-88: вкладки правих панелей
 
 enum class EdDrag { None, New, Move, Resize, Pan, Slider, Strength, Crop, CropMove,
                     Tone, Compare, Zoom, Rotate, ManyResize, ManyRotate, OvSel };
@@ -9096,7 +9116,40 @@ HFONT g_edFont = nullptr, g_edFontBold = nullptr, g_edFontSmall = nullptr;
 HICON g_edIcon = nullptr;         // значок у власному заголовку
 int   g_edDpi = 96;
 bool  g_edDark = false;
-bool  g_edPanelOpen = true;
+// CAPS-88 (рішення власника 25.09): праві панелі — вкладки. Відкрита лише одна:
+// 0 — властивості знімка (у відео — «Відео»), 1 — EXIF/META; -1 — усі згорнуті.
+int   g_edPanelTab = -1;
+// CAPS-88: метадані запису (EXIF/META) — те, що людина пише про знімок чи відео.
+// Назва — це назва запису в бібліотеці (g_edDocName / g_evName), дата зйомки —
+// «створено» запису; решта — тут. У файли назовні (PNG, JPEG, MP4) пишемо лише це.
+struct LhMeta {
+    std::wstring desc, author, copyright, tags;
+    ULONGLONG taken = 0;      // дата зйомки, FILETIME (UTC); 0 — невідома
+    bool none = false;        // «Прибрати всі метадані»: назовні не йде нічого, навіть дата
+    bool Blank() const { return desc.empty() && author.empty() && copyright.empty() && tags.empty(); }
+};
+LhMeta g_edMeta;
+void LhGdipSetProps(Gdiplus::Bitmap* bmp, const std::wstring& title, const LhMeta& m);
+bool LhPngAddText(const wchar_t* path, const std::wstring& title, const LhMeta& m);
+void LhSetFileTimes(const wchar_t* path, ULONGLONG ft);
+bool EdDocPatch(const wchar_t* path, const std::wstring* name, const LhMeta* meta);
+bool EdDocRename(const wchar_t* path, const std::wstring& name);
+constexpr int kEdMetaFields = 6;      // назва, опис, автор, авторське право, теги, дата зйомки
+constexpr int kEdMetaEditId = 420;     // 420..425 — поля панелі EXIF/META
+HWND g_edMetaEd[kEdMetaFields] = {};
+RECT g_edMetaLbl[kEdMetaFields] = {};
+RECT g_edMetaInfo = {};
+int  g_edMetaNoteTop = 0;
+// Доріжки смуг позначок (зауваження власника 25.09: третя смуга лягала на другу).
+// Доріжок скільки треба; видно g_evMarkRows (≥2, до 4, більше — коли є вільне
+// місце), решта — прокруткою коліщатком над доріжкою.
+constexpr int kEvLaneH = 12, kEvLanePad = 3;   // логічні px: висота доріжки, поле зверху й знизу
+int    g_evMarkRows = 2;          // скільки доріжок видно (розкладка)
+int    g_evMarkScroll = 0;        // перша видима доріжка
+int    g_evLanesLaid = -1;        // скільки доріжок було при розкладці
+float  g_evLaidZoom = -1.0f;      //  і з яким масштабом відео
+int    g_evLaidH = -1;            //  і висотою вікна
+int EvMarkLanes(std::vector<int>& lane);
 
 Gdiplus::Bitmap* g_edImg = nullptr;
 int      g_edImgW = 0, g_edImgH = 0;
@@ -9253,6 +9306,13 @@ void EvOnEvent(DWORD e);
 void EvPresent();
 void EvClose();
 void EvWheel(POINT pt, int delta, bool pan);
+bool EvMarksWheel(POINT pt, int delta);
+void EdMetaLayout(HWND hwnd);                    // CAPS-88
+void EdMetaHide();
+void EdMetaRefresh();
+void EdMetaCommit(HWND hwnd, int i);
+void EdMetaClearAll(HWND hwnd);
+bool EvMarkLayoutStale();
 void EvHoverHide();
 void EvThumbReady(LPARAM lp);
 void EvStatusText(wchar_t* buf, int n);
@@ -9494,6 +9554,7 @@ int g_edStripLimit = 0;
 int g_edCapLimit = 0;      // те саме для заголовка: доки тягнеться підпис
 RECT  g_edRcCaption = {};
 RECT  g_edRcStrip = {}, g_edRcRail = {}, g_edRcCanvas = {}, g_edRcPanel = {}, g_edRcStatus = {};
+RECT  g_edRcTabs = {};   // CAPS-88: смуга вкладок панелей — праворуч, завжди
 bool  g_edActive = true;          // вікно активне: неактивний підпис приглушуємо
 EdHit g_edHotWhat = EdHit::None;
 int   g_edHotIdx  = -1;
@@ -9641,6 +9702,22 @@ void EdIcon(Gdiplus::Graphics& g, int id, const RECT& box, Gdiplus::Color c, flo
         g.DrawBezier(&pen, 13.37f, 9.63f, 11.9f, 10.9f, 10.0f, 11.1f, 10.0f, 13.3f);
         g.FillEllipse(&br, 9.0f, 15.4f, 2.0f, 2.0f);
         break;
+    // CAPS-88: «Властивості» — три повзунки з ручками в різних місцях.
+    case IcoProps: {
+        const float ys[3] = { 5.0f, 10.0f, 15.0f }, ks[3] = { 7.0f, 13.0f, 9.5f };
+        for (int i = 0; i < 3; ++i) {
+            g.DrawLine(&pen, 3.0f, ys[i], 17.0f, ys[i]);
+            g.FillEllipse(&br, ks[i] - 2.2f, ys[i] - 2.2f, 4.4f, 4.4f);
+        }
+        break;
+    }
+    // CAPS-88: EXIF/META — ярлик із отвором: «підписати», а не «налаштувати».
+    case IcoMeta: {
+        Gdiplus::PointF pts[5] = { { 3.2f, 3.2f }, { 10.4f, 3.2f }, { 17.0f, 9.8f }, { 9.8f, 17.0f }, { 3.2f, 10.4f } };
+        g.DrawPolygon(&pen, pts, 5);
+        g.DrawEllipse(&pen, 5.6f, 5.6f, 2.8f, 2.8f);
+        break;
+    }
     case IcoImage:                        // CAPS-69: рамка, гори й сонце
         g.DrawRectangle(&pen, 2.6f, 3.6f, 14.8f, 12.8f);
         {
@@ -10464,11 +10541,16 @@ float EdZoomMax()
 // Повзунок лінійний за ЛОГАРИФМОМ масштабу: при лінійній шкалі перша чверть
 // ходу з'їдала б увесь корисний діапазон, а решта тягнула б одні й ті самі
 // величезні збільшення.
+// Нижня межа масштабу. Знімок менше «вписаного» не зменшуємо; відео — до половини:
+// під дрібнішим кадром з'являється місце, і таймлайн віддає його доріжкам позначок
+// (зауваження власника 25.09).
+float EdZoomMin() { return g_edVideo ? 0.5f : 1.0f; }
+
 int EdZoomToSlider(float z)
 {
-    const double zmax = EdZoomMax();
-    if (zmax <= 1.0) return 0;
-    double p = log((double)z) / log(zmax);
+    const double zmax = EdZoomMax(), zmin = EdZoomMin();
+    if (zmax <= zmin) return 0;
+    double p = log((double)z / zmin) / log(zmax / zmin);
     if (p < 0.0) p = 0.0;
     if (p > 1.0) p = 1.0;
     return (int)(p * 100.0 + 0.5);
@@ -10476,12 +10558,12 @@ int EdZoomToSlider(float z)
 
 float EdSliderToZoom(int pos)
 {
-    const double zmax = EdZoomMax();
-    if (zmax <= 1.0) return 1.0f;
+    const double zmax = EdZoomMax(), zmin = EdZoomMin();
+    if (zmax <= zmin) return (float)zmin;
     double p = pos / 100.0;
     if (p < 0.0) p = 0.0;
     if (p > 1.0) p = 1.0;
-    return (float)pow(zmax, p);
+    return (float)(zmin * pow(zmax / zmin, p));
 }
 
 // Один шлях зміни масштабу для всіх: колеса, повзунка й кнопки «100 %».
@@ -10492,7 +10574,7 @@ void EdZoomSet(float z, POINT cur)
     if (!g_edImg) return;
     const double fit = EdFitScale();
     const float oldZoom = g_edZoom;
-    if (z < 1.0f) z = 1.0f;
+    if (z < EdZoomMin()) z = EdZoomMin();
     const float zmax = EdZoomMax();
     if (z > zmax) z = zmax;
     if (z == oldZoom) return;
@@ -10677,20 +10759,23 @@ void EdLayout(HWND hwnd)
 
     const int cap = EdPx(kEdCaption);
     const int strip = EdPx(kEdStrip), rail = EdPx(kEdRail), status = EdPx(kEdStatus);
-    const int panel = g_edPanelOpen ? EdPx(kEdPanel) : EdPx(kEdPanelLo);
+    const int tabs = EdPx(kEdPanelLo);
+    const int panel = (g_edPanelTab >= 0) ? EdPx(kEdPanel) : 0;   // CAPS-88: згорнута — лише смуга вкладок
 
     g_edRcCaption = { 0, 0, rc.right, cap };
     g_edRcStrip  = { 0, cap, rc.right, cap + strip };
     g_edRcStatus = { 0, rc.bottom - status, rc.right, rc.bottom };
     g_edRcRail   = { 0, cap + strip, rail, rc.bottom - status };
-    g_edRcPanel  = { rc.right - panel, cap + strip, rc.right, rc.bottom - status };
-    g_edRcCanvas = { rail, cap + strip, rc.right - panel, rc.bottom - status };
+    g_edRcTabs   = { rc.right - tabs, cap + strip, rc.right, rc.bottom - status };
+    g_edRcPanel  = { rc.right - tabs - panel, cap + strip, rc.right - tabs, rc.bottom - status };
+    g_edRcCanvas = { rail, cap + strip, rc.right - tabs - panel, rc.bottom - status };
     // CAPS-33: оверлей — полотно на весь монітор; заголовка, рядка стану й
     // панелі немає; рейка й смуга плавають біля рамки.
     if (g_edOverlay) {
         g_edRcCaption = { 0, 0, 0, 0 };
         g_edRcStatus  = { 0, rc.bottom, rc.right, rc.bottom };
         g_edRcPanel   = { rc.right, 0, rc.right, 0 };
+        g_edRcTabs    = { rc.right, 0, rc.right, 0 };
         g_edRcCanvas  = rc;
         g_edRcRail    = EdOvRailRect(rc);
         g_edRcStrip   = { 0, 0, rc.right, strip };   // уявне місце; нижче переїде до рамки
@@ -10698,7 +10783,33 @@ void EdLayout(HWND hwnd)
 
     // CAPS-78: у відео під полотном — таймлайн; полотно (і вікно кадру) коротше.
     if (g_edVideo && !g_edOverlay) {
-        const int tlh = EdPx(164);             // CAPS-80: +доріжка позначок (4.4.1: вища)
+        // Висота таймлайну — від доріжок позначок: до 4 видно завжди, а коли вікно
+        // вище чи відео дрібніше (під кадром лишається вільне), — стільки, скільки влізе.
+        std::vector<int> lane;
+        const int need = EvMarkLanes(lane);
+        const int laneH = EdPx(kEvLaneH), pad = EdPx(kEvLanePad);
+        const int base = EdPx(164 - 26);
+        int cap = 4;
+        {
+            const int cw = g_edRcCanvas.right - g_edRcCanvas.left - EdPx(24);
+            const int ch4 = (g_edRcCanvas.bottom - g_edRcCanvas.top) - base - (2 * pad + 4 * laneH) - EdPx(24);
+            const int vw = EdViewW(), vh = EdViewH();
+            if (vw > 0 && vh > 0 && cw > 0 && ch4 > 0) {
+                double fit = 1.0;
+                if (vw > cw) fit = (double)cw / vw;
+                if (vh * fit > ch4) fit = (double)ch4 / vh;
+                const int disp = (int)(vh * fit * g_edZoom);
+                if (ch4 > disp) cap += (ch4 - disp) / laneH;
+            }
+        }
+        g_evMarkRows = need <= 2 ? 2 : (need < cap ? need : cap);
+        const int rows = need < g_evMarkRows ? need : g_evMarkRows;
+        if (g_evMarkScroll > need - rows) g_evMarkScroll = need - rows;
+        if (g_evMarkScroll < 0) g_evMarkScroll = 0;
+        g_evLanesLaid = need;
+        g_evLaidZoom = g_edZoom;
+        g_evLaidH = rc.bottom;
+        const int tlh = base + 2 * pad + g_evMarkRows * laneH;
         g_edRcTimeline = { g_edRcCanvas.left, g_edRcCanvas.bottom - tlh, g_edRcCanvas.right, g_edRcCanvas.bottom };
         g_edRcCanvas.bottom -= tlh;
     }
@@ -11146,17 +11257,21 @@ void EdLayout(HWND hwnd)
         ReleaseDC(hwnd, dc);
     }
 
-    // згортання правої панелі
+    // CAPS-88: вкладки правих панелей — значки згори вниз у смузі праворуч.
+    // Клік відкриває свою панель (іншу закриває), клік по відкритій — згортає.
     if (!g_edOverlay) {
-        const int b = EdPx(24);
-        RECT r = { g_edRcPanel.right - EdPx(14) - b, g_edRcPanel.top + EdPx(12),
-                   g_edRcPanel.right - EdPx(14), g_edRcPanel.top + EdPx(12) + b };
-        if (!g_edPanelOpen) {
-            r.left = g_edRcPanel.left + (EdPx(kEdPanelLo) - b) / 2;
+        const int b = EdPx(28);
+        for (int i = 0; i < 2; ++i) {
+            RECT r;
+            r.left = g_edRcTabs.left + (g_edRcTabs.right - g_edRcTabs.left - b) / 2;
+            r.top = g_edRcTabs.top + EdPx(10) + i * (b + EdPx(6));
             r.right = r.left + b;
+            r.bottom = r.top + b;
+            EdAdd(r, EdHit::Panel, i);
         }
-        EdAdd(r, EdHit::Panel, 0);
     }
+    if (g_edPanelTab == 1 && !g_edOverlay && !g_edLibOpen) EdMetaLayout(hwnd);   // CAPS-88
+    else if (g_edMetaEd[0]) EdMetaHide();
 
     // Розкритий селект додаємо ОСТАННІМ: EdFind іде списком з кінця, тож його
     // ділянки перекривають і полотно, і смугу під ним.
@@ -11264,7 +11379,7 @@ void EdLayout(HWND hwnd)
 
     // CAPS-28: геометрія знімка і тон. Живуть у правій панелі, бо стосуються
     // САМОГО ЗНІМКА, а не позначки — це і є межа між панеллю і смугою.
-    if (g_edPanelOpen && !g_edOverlay && !g_edVideo) {   // CAPS-78: у відео панель своя
+    if (g_edPanelTab == 0 && !g_edOverlay && !g_edVideo) {   // CAPS-78: у відео панель своя
         const int px = g_edRcPanel.left + EdPx(14);
         const int pr = g_edRcPanel.right - EdPx(14);
         int y = EdPanelInfoBottom() + EdPx(16);
@@ -14304,22 +14419,33 @@ void EdPaintLib(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     }
 }
 
+void EdPaintMetaPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t);   // CAPS-88
+
 void EdPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
+    // CAPS-88: смуга вкладок праворуч — завжди, панель ліворуч від неї — лише відкрита.
     HBRUSH b = CreateSolidBrush(g_edDark ? t.chrome : RGB(250, 250, 250));
-    FillRect(dc, &g_edRcPanel, b);
+    FillRect(dc, &g_edRcTabs, b);
+    if (g_edPanelTab >= 0) FillRect(dc, &g_edRcPanel, b);
     DeleteObject(b);
-    RECT line = { g_edRcPanel.left, g_edRcPanel.top, g_edRcPanel.left + 1, g_edRcPanel.bottom };
     b = CreateSolidBrush(t.border);
+    RECT line = { g_edRcPanel.left, g_edRcPanel.top, g_edRcPanel.left + 1, g_edRcPanel.bottom };
     FillRect(dc, &line, b);
+    if (g_edPanelTab >= 0) {
+        RECT l2 = { g_edRcTabs.left, g_edRcTabs.top, g_edRcTabs.left + 1, g_edRcTabs.bottom };
+        FillRect(dc, &l2, b);
+    }
     DeleteObject(b);
 
-    if (const RECT* r = EdRegionRect(EdHit::Panel, 0)) {
-        const bool hot = (g_edHotWhat == EdHit::Panel);
-        EdPaintButton(g, *r, t, false, hot, true);
-        EdIcon(g, g_edPanelOpen ? IcoChevR : IcoChevL, EdIconBox(*r), EdC(t.text2), 1.5f);
+    for (int i = 0; i < 2; ++i) {
+        const RECT* r = EdRegionRect(EdHit::Panel, i);
+        if (!r) continue;
+        const bool on = (g_edPanelTab == i);
+        EdPaintButton(g, *r, t, on, g_edHotWhat == EdHit::Panel && g_edHotIdx == i, true);
+        EdIcon(g, i == 0 ? IcoProps : IcoMeta, EdIconBox(*r), EdC(on ? t.accent : t.text2), 1.5f);
     }
-    if (!g_edPanelOpen) return;
+    if (g_edPanelTab < 0) return;
+    if (g_edPanelTab == 1) { EdPaintMetaPanel(dc, g, t); return; }
     if (g_edVideo) { EvPaintPanel(dc, g, t); return; }   // CAPS-78
 
     const int x = g_edRcPanel.left + EdPx(14);
@@ -16227,7 +16353,10 @@ Str EdTipFor(EdHit what, int idx)
     case EdHit::Zoom:    return Str::EdTipZoom;
     case EdHit::Zoom100: return Str::EdTipZoom100;
     case EdHit::Fit:     return Str::EdTipFit;
-    case EdHit::Panel:   return g_edPanelOpen ? Str::EdTipPanelHide : Str::EdTipPanelShow;
+    case EdHit::MetaClear: return Str::EdTipMetaClear;   // CAPS-88
+    case EdHit::Panel:   // CAPS-88: вкладка — назва панелі; відкрита — «згорнути»
+        if (g_edPanelTab == idx) return Str::EdTipPanelHide;
+        return idx == 1 ? Str::EdTipPanelMeta : (g_edVideo ? Str::EdTipPanelVideo : Str::EdTipPanelProps);
     case EdHit::Copy:    return Str::EdCopy;
     case EdHit::Store:   return Str::EdTipStore;
     case EdHit::LibBack: return Str::EdLibBack;
@@ -17246,6 +17375,9 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 1;
 
     case WM_PAINT: {
+        // Доріжок позначок стало інакше чи змінився масштаб відео — висота таймлайну
+        // інша, тож перемалювати треба все (розкладку нижче рахує EdLayout).
+        if (EvMarkLayoutStale()) InvalidateRect(hwnd, nullptr, FALSE);
         HRGN upd = CreateRectRgn(0, 0, 0, 0);
         if (GetUpdateRgn(hwnd, upd, FALSE) == ERROR) { DeleteObject(upd); upd = nullptr; }
         PAINTSTRUCT ps;
@@ -17530,6 +17662,17 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (LPCWSTR c = EvCursorAt(p)) { SetCursor(LoadCursorW(nullptr, c)); return TRUE; }
         }
         break;
+
+    case WM_CTLCOLOREDIT: {               // CAPS-88: поля EXIF/META у темній темі
+        static HBRUSH metaDark = nullptr;
+        bool meta = false;
+        for (int i = 0; i < kEdMetaFields; ++i) if ((HWND)lp == g_edMetaEd[i]) meta = true;
+        if (!meta || !g_edDark) break;
+        SetTextColor((HDC)wp, kDkText);
+        SetBkColor((HDC)wp, kDkEdit);
+        if (!metaDark) metaDark = CreateSolidBrush(kDkEdit);
+        return (LRESULT)metaDark;
+    }
 
     case WM_MOUSELEAVE:
         if (g_edVideo) EvMarksHover(POINT{ INT_MIN, INT_MIN });   // 4.4.1
@@ -17869,8 +18012,11 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (ob) EdOpenMenu(hwnd, *ob);
             return 0;
         }
-        case EdHit::Panel:
-            g_edPanelOpen = !g_edPanelOpen;
+        case EdHit::MetaClear:                   // CAPS-88
+            if (!g_edMeta.Blank() || !g_edMeta.none) EdMetaClearAll(hwnd);
+            return 0;
+        case EdHit::Panel:                       // CAPS-88: одна відкрита; повторний клік — згорнути
+            g_edPanelTab = (g_edPanelTab == r->idx) ? -1 : r->idx;
             EdLayout(hwnd);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -18200,6 +18346,10 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND:
         if (HIWORD(wp) == EN_CHANGE && LOWORD(wp) == kEdEditId) { EdTextFitBox(); return 0; }
         if (HIWORD(wp) == EN_KILLFOCUS && LOWORD(wp) == kEdLibEditId) { EdLibRenameEnd(hwnd, true); return 0; }
+        if (HIWORD(wp) == EN_KILLFOCUS && LOWORD(wp) >= kEdMetaEditId && LOWORD(wp) < kEdMetaEditId + kEdMetaFields) {
+            EdMetaCommit(hwnd, LOWORD(wp) - kEdMetaEditId);   // CAPS-88
+            return 0;
+        }
         break;
 
     // ⚠ Коліщатко ПРОКРУЧУЄ, а не зумить (зауваження власника 21.09). Зум лишився
@@ -18218,6 +18368,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
         if (g_edVideo && PtInRect(&g_edRcTimeline, pt)) {   // CAPS-78: масштаб таймлайну
+            if (EvMarksWheel(pt, GET_WHEEL_DELTA_WPARAM(wp))) return 0;   // доріжки позначок прокручуються
             EvWheel(pt, GET_WHEEL_DELTA_WPARAM(wp), (LOWORD(wp) & (MK_CONTROL | MK_SHIFT)) != 0);
             return 0;
         }
@@ -18525,7 +18676,14 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
                   bool hdr, bool toneMapped, float sdrWhite = -1.0f)
 {
     if (!bmp) return;
+    EdMetaHide();                      // CAPS-88: незафіксоване в полях — ще в попередній документ
     if (g_edVideo) EvClose();          // CAPS-78: новий документ-зображення — режим «Знімок»
+    {   // CAPS-88: новий знімок — метадані з нуля, дата зйомки — зараз
+        g_edMeta = LhMeta{};
+        FILETIME ft = {};
+        GetSystemTimeAsFileTime(&ft);
+        g_edMeta.taken = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    }
 
     static bool registered = false;
     if (!registered) {
@@ -18573,7 +18731,7 @@ void EdOpenBitmap(HINSTANCE hInst, Gdiplus::Bitmap* bmp, const wchar_t* label,
     g_edTool = kEdStartTool;            // CAPS-66
     g_edZoom = 1.0f;
     g_edPanX = g_edPanY = 0;
-    g_edPanelOpen = true;
+    g_edPanelTab = -1;                 // CAPS-88: при відкритті редактора всі панелі згорнуті
     g_edCrop = RECT{ 0, 0, 0, 0 };      // новий знімок приходить без кадру
     g_edCropping = false;
     g_edCounterGroup = 0;               // новий знімок — нумерація з початку сама
@@ -19031,10 +19189,13 @@ bool EdWriteFile(const wchar_t* path)
                 ep.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
                 ep.Parameter[0].NumberOfValues = 1;
                 ep.Parameter[0].Value = &q;
+                if (!g_edMeta.none) LhGdipSetProps(flat, g_edDocName, g_edMeta);   // CAPS-88: EXIF
                 ok = flat->Save(path, &enc, &ep) == Gdiplus::Ok;
             } else {
                 ok = flat->Save(path, &enc, nullptr) == Gdiplus::Ok;
+                if (ok && !g_edMeta.none) LhPngAddText(path, g_edDocName, g_edMeta);   // CAPS-88: iTXt
             }
+            if (ok && !g_edMeta.none) LhSetFileTimes(path, g_edMeta.taken);
         }
         delete flat;
     }
@@ -19141,6 +19302,295 @@ struct EdRd {
     }
     void skip(size_t k) { if (need(k)) at += k; }
 };
+
+// ---- CAPS-88: блок DESC (метадані запису) — у .lhshot, .lhmeta і .lhvideo ----
+void LhMetaPut(EdWr& w, const LhMeta& m)
+{
+    const size_t at = w.open("DESC");
+    w.u8v(1);
+    w.str(m.desc); w.str(m.author); w.str(m.copyright); w.str(m.tags);
+    w.u8v(m.none ? 1 : 0);
+    w.close(at);
+}
+
+void LhMetaGet(const BYTE* p, size_t len, LhMeta& m)
+{
+    EdRd r{ p, len, 0, false };
+    if (r.u8v() < 1) return;
+    LhMeta t;
+    t.desc = r.str(); t.author = r.str(); t.copyright = r.str(); t.tags = r.str();
+    t.none = r.u8v() != 0;
+    if (r.bad) return;
+    t.taken = m.taken;
+    m = t;
+}
+
+// Дата зйомки = час файлу: і «створено», і «змінено» (рішення власника 25.09).
+void LhSetFileTimes(const wchar_t* path, ULONGLONG ft)
+{
+    if (!path || !*path || !ft) return;
+    HANDLE f = CreateFileW(path, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    FILETIME t;
+    t.dwLowDateTime = (DWORD)ft;
+    t.dwHighDateTime = (DWORD)(ft >> 32);
+    SetFileTime(f, &t, nullptr, &t);
+    CloseHandle(f);
+}
+
+// Дата у полі — місцевий час «дд.мм.рррр гг:хх[:сс]»; у моделі — FILETIME UTC.
+std::wstring LhDateText(ULONGLONG ft)
+{
+    if (!ft) return L"";
+    FILETIME u; u.dwLowDateTime = (DWORD)ft; u.dwHighDateTime = (DWORD)(ft >> 32);
+    SYSTEMTIME su, sl;
+    if (!FileTimeToSystemTime(&u, &su) || !SystemTimeToTzSpecificLocalTime(nullptr, &su, &sl)) return L"";
+    wchar_t b[32];
+    swprintf(b, 32, L"%02u.%02u.%04u %02u:%02u", sl.wDay, sl.wMonth, sl.wYear, sl.wHour, sl.wMinute);
+    return b;
+}
+
+bool LhDateParse(const std::wstring& txt, ULONGLONG& out)
+{
+    int d = 0, mo = 0, y = 0, h = 0, mi = 0, se = 0;
+    const int n = swscanf(txt.c_str(), L"%d.%d.%d %d:%d:%d", &d, &mo, &y, &h, &mi, &se);
+    if (n != 3 && n != 5 && n != 6) return false;
+    if (y < 1980 || y > 2200 || mo < 1 || mo > 12 || d < 1 || d > 31 || h < 0 || h > 23 || mi < 0 || mi > 59 || se < 0 || se > 59) return false;
+    SYSTEMTIME sl = {}, su = {};
+    sl.wYear = (WORD)y; sl.wMonth = (WORD)mo; sl.wDay = (WORD)d; sl.wHour = (WORD)h; sl.wMinute = (WORD)mi; sl.wSecond = (WORD)se;
+    FILETIME f;
+    if (!TzSpecificLocalTimeToSystemTime(nullptr, &sl, &su) || !SystemTimeToFileTime(&su, &f)) return false;
+    out = ((ULONGLONG)f.dwHighDateTime << 32) | f.dwLowDateTime;
+    return true;
+}
+
+// EXIF хоче «рррр:мм:дд гг:хх:сс» місцевого часу; ISO — для PNG і MP4.
+bool LhDateParts(ULONGLONG ft, SYSTEMTIME& sl)
+{
+    if (!ft) return false;
+    FILETIME u; u.dwLowDateTime = (DWORD)ft; u.dwHighDateTime = (DWORD)(ft >> 32);
+    SYSTEMTIME su;
+    return FileTimeToSystemTime(&u, &su) && SystemTimeToTzSpecificLocalTime(nullptr, &su, &sl);
+}
+
+std::string LhUtf8(const std::wstring& w)
+{
+    if (w.empty()) return std::string();
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    std::string s((size_t)(n > 0 ? n : 0), '\0');
+    if (n > 0) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &s[0], n, nullptr, nullptr);
+    return s;
+}
+
+// ---- CAPS-88: метадані у файли назовні — власним кодом ----
+// Не через системні обробники властивостей (IPropertyStore): для .mp4/.png їх
+// реєструють і сторонні програми, а чужий COM у процесі з правами адміністратора —
+// те саме, від чого відмовились для прев'ю (журнал рішень, CAPS-16).
+DWORD LhCrc32(const BYTE* p, size_t n, DWORD c = 0xFFFFFFFFu)
+{
+    static DWORD tab[256];
+    static bool ready = false;
+    if (!ready) {
+        for (DWORD i = 0; i < 256; ++i) { DWORD k = i; for (int j = 0; j < 8; ++j) k = (k & 1) ? 0xEDB88320u ^ (k >> 1) : k >> 1; tab[i] = k; }
+        ready = true;
+    }
+    for (size_t i = 0; i < n; ++i) c = tab[(c ^ p[i]) & 0xFF] ^ (c >> 8);
+    return c;
+}
+
+bool LhReadAll(const wchar_t* path, std::vector<BYTE>& b)
+{
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER sz = {};
+    bool ok = GetFileSizeEx(f, &sz) && sz.QuadPart > 0 && sz.QuadPart < (512LL << 20);
+    if (ok) {
+        b.resize((size_t)sz.QuadPart);
+        DWORD got = 0;
+        ok = ReadFile(f, b.data(), (DWORD)b.size(), &got, nullptr) && got == b.size();
+    }
+    CloseHandle(f);
+    return ok;
+}
+
+bool LhWriteAll(const wchar_t* path, const std::vector<BYTE>& b)
+{
+    const std::wstring tmp = std::wstring(path) + L".meta.part";
+    HANDLE f = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    DWORD put = 0;
+    const bool ok = WriteFile(f, b.data(), (DWORD)b.size(), &put, nullptr) && put == b.size();
+    CloseHandle(f);
+    if (!ok || !MoveFileExW(tmp.c_str(), path, MOVEFILE_REPLACE_EXISTING)) { DeleteFileW(tmp.c_str()); return false; }
+    return true;
+}
+
+// PNG: текстові чанки iTXt (UTF-8) перед IEND — ключі зі специфікації PNG.
+bool LhPngAddText(const wchar_t* path, const std::wstring& title, const LhMeta& m)
+{
+    std::vector<BYTE> b;
+    if (!LhReadAll(path, b) || b.size() < 8 + 12 || memcmp(b.data(), "\x89PNG\r\n\x1a\n", 8)) return false;
+    size_t at = 8, iend = 0;
+    while (at + 12 <= b.size()) {
+        const DWORD len = ((DWORD)b[at] << 24) | ((DWORD)b[at + 1] << 16) | ((DWORD)b[at + 2] << 8) | b[at + 3];
+        if (!memcmp(&b[at + 4], "IEND", 4)) { iend = at; break; }
+        at += 12 + (size_t)len;
+    }
+    if (!iend) return false;
+    std::vector<BYTE> add;
+    auto chunk = [&](const char* key, const std::string& text) {
+        if (text.empty()) return;
+        std::vector<BYTE> d;
+        d.insert(d.end(), { 'i', 'T', 'X', 't' });
+        d.insert(d.end(), key, key + strlen(key));
+        d.insert(d.end(), { 0, 0, 0, 0, 0 });      // кінець ключа, без стиснення, метод, мова «», перекладений ключ «»
+        d.insert(d.end(), text.begin(), text.end());
+        const DWORD len = (DWORD)(d.size() - 4);
+        const BYTE hl[4] = { (BYTE)(len >> 24), (BYTE)(len >> 16), (BYTE)(len >> 8), (BYTE)len };
+        add.insert(add.end(), hl, hl + 4);
+        add.insert(add.end(), d.begin(), d.end());
+        const DWORD c = LhCrc32(d.data(), d.size()) ^ 0xFFFFFFFFu;
+        const BYTE hc[4] = { (BYTE)(c >> 24), (BYTE)(c >> 16), (BYTE)(c >> 8), (BYTE)c };
+        add.insert(add.end(), hc, hc + 4);
+    };
+    chunk("Title", LhUtf8(title));
+    chunk("Description", LhUtf8(m.desc));
+    chunk("Author", LhUtf8(m.author));
+    chunk("Copyright", LhUtf8(m.copyright));
+    chunk("Keywords", LhUtf8(m.tags));
+    SYSTEMTIME sl;
+    if (LhDateParts(m.taken, sl)) {
+        char iso[32];
+        sprintf(iso, "%04u-%02u-%02uT%02u:%02u:%02u", sl.wYear, sl.wMonth, sl.wDay, sl.wHour, sl.wMinute, sl.wSecond);
+        chunk("Creation Time", iso);
+    }
+    if (add.empty()) return true;
+    b.insert(b.begin() + (ptrdiff_t)iend, add.begin(), add.end());
+    return LhWriteAll(path, b);
+}
+
+// JPEG: EXIF пише сам GDI+ із властивостей бітмапа. ASCII-теги — UTF-8 (так роблять
+// і камери, і редактори), а для Провідника — ще й XP-теги в UTF-16.
+void LhGdipSetProps(Gdiplus::Bitmap* bmp, const std::wstring& title, const LhMeta& m)
+{
+    auto ascii = [&](PROPID id, const std::string& v) {
+        if (v.empty()) return;
+        std::string z = v; z.push_back('\0');
+        Gdiplus::PropertyItem pi;
+        pi.id = id; pi.type = PropertyTagTypeASCII; pi.length = (ULONG)z.size(); pi.value = (void*)z.data();
+        bmp->SetPropertyItem(&pi);
+    };
+    auto xp = [&](PROPID id, const std::wstring& v) {
+        if (v.empty()) return;
+        std::wstring z = v; z.push_back(L'\0');
+        Gdiplus::PropertyItem pi;
+        pi.id = id; pi.type = PropertyTagTypeByte; pi.length = (ULONG)(z.size() * sizeof(wchar_t)); pi.value = (void*)z.data();
+        bmp->SetPropertyItem(&pi);
+    };
+    ascii(0x010E, LhUtf8(m.desc));        // ImageDescription
+    ascii(0x013B, LhUtf8(m.author));      // Artist
+    ascii(0x8298, LhUtf8(m.copyright));   // Copyright
+    xp(0x9C9B, title);                    // XPTitle
+    xp(0x9C9C, m.desc);                   // XPComment
+    xp(0x9C9D, m.author);                 // XPAuthor
+    std::wstring kw = m.tags;
+    for (wchar_t& c : kw) if (c == L',') c = L';';   // Провідник ділить теги крапкою з комою
+    xp(0x9C9E, kw);                       // XPKeywords
+    SYSTEMTIME sl;
+    if (LhDateParts(m.taken, sl)) {
+        char dt[24];
+        sprintf(dt, "%04u:%02u:%02u %02u:%02u:%02u", sl.wYear, sl.wMonth, sl.wDay, sl.wHour, sl.wMinute, sl.wSecond);
+        ascii(0x9003, dt);                // DateTimeOriginal
+        ascii(0x0132, dt);                // DateTime
+    }
+}
+
+// MP4: moov/udta/meta/ilst (як iTunes: так читають і Провідник, і ffprobe, і
+// програвачі). Лише коли moov — останній блок файла (так пише Media Foundation):
+// тоді дописаний udta не зсуває жодного зсуву даних у mdat.
+static void LhBoxBE(std::vector<BYTE>& v, size_t at) { const DWORD n = (DWORD)(v.size() - at); v[at] = (BYTE)(n >> 24); v[at + 1] = (BYTE)(n >> 16); v[at + 2] = (BYTE)(n >> 8); v[at + 3] = (BYTE)n; }
+static size_t LhBoxOpen(std::vector<BYTE>& v, const BYTE* type) { const size_t at = v.size(); v.insert(v.end(), { 0, 0, 0, 0 }); v.insert(v.end(), type, type + 4); return at; }
+
+bool LhMp4AddMeta(const wchar_t* path, const std::wstring& title, const LhMeta& m)
+{
+    HANDLE f = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER sz = {};
+    GetFileSizeEx(f, &sz);
+    LONGLONG at = 0, moovAt = -1, moovLen = 0;
+    while (at + 8 <= sz.QuadPart) {
+        BYTE h[16];
+        LARGE_INTEGER p; p.QuadPart = at;
+        DWORD got = 0;
+        if (!SetFilePointerEx(f, p, nullptr, FILE_BEGIN) || !ReadFile(f, h, 16, &got, nullptr) || got < 8) break;
+        LONGLONG len = ((LONGLONG)h[0] << 24) | ((LONGLONG)h[1] << 16) | ((LONGLONG)h[2] << 8) | h[3];
+        if (len == 1 && got >= 16) { len = 0; for (int i = 8; i < 16; ++i) len = (len << 8) | h[i]; }
+        else if (len == 0) len = sz.QuadPart - at;
+        if (len < 8) break;
+        if (!memcmp(h + 4, "moov", 4)) { moovAt = at; moovLen = len; }
+        at += len;
+    }
+    bool ok = false;
+    if (moovAt >= 0 && moovAt + moovLen == sz.QuadPart && moovLen < (64LL << 20)) {
+        std::vector<BYTE> mv((size_t)moovLen);
+        LARGE_INTEGER p; p.QuadPart = moovAt;
+        DWORD got = 0;
+        if (SetFilePointerEx(f, p, nullptr, FILE_BEGIN) && ReadFile(f, mv.data(), (DWORD)mv.size(), &got, nullptr) && got == mv.size()
+            && ((mv[0] | mv[1] | mv[2]) != 0 || mv[3] != 1)) {
+            std::vector<BYTE> out;
+            const BYTE tMoov[4] = { 'm', 'o', 'o', 'v' };
+            const size_t mo = LhBoxOpen(out, tMoov);
+            size_t c = 8;
+            while (c + 8 <= mv.size()) {                     // діти moov — усі, крім старого udta
+                const size_t len = ((size_t)mv[c] << 24) | ((size_t)mv[c + 1] << 16) | ((size_t)mv[c + 2] << 8) | mv[c + 3];
+                if (len < 8 || c + len > mv.size()) break;
+                if (memcmp(&mv[c + 4], "udta", 4)) out.insert(out.end(), mv.begin() + (ptrdiff_t)c, mv.begin() + (ptrdiff_t)(c + len));
+                c += len;
+            }
+            const BYTE tUdta[4] = { 'u', 'd', 't', 'a' }, tMeta[4] = { 'm', 'e', 't', 'a' }, tHdlr[4] = { 'h', 'd', 'l', 'r' };
+            const BYTE tIlst[4] = { 'i', 'l', 's', 't' }, tData[4] = { 'd', 'a', 't', 'a' };
+            const size_t ud = LhBoxOpen(out, tUdta);
+            const size_t me = LhBoxOpen(out, tMeta);
+            out.insert(out.end(), { 0, 0, 0, 0 });            // версія й прапорці
+            const size_t hd = LhBoxOpen(out, tHdlr);
+            out.insert(out.end(), { 0, 0, 0, 0, 0, 0, 0, 0, 'm', 'd', 'i', 'r', 'a', 'p', 'p', 'l', 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+            LhBoxBE(out, hd);
+            const size_t il = LhBoxOpen(out, tIlst);
+            auto item = [&](const BYTE* key, const std::string& v) {
+                if (v.empty()) return;
+                const size_t it = LhBoxOpen(out, key);
+                const size_t da = LhBoxOpen(out, tData);
+                out.insert(out.end(), { 0, 0, 0, 1, 0, 0, 0, 0 });   // тип 1 — UTF-8, мова 0
+                out.insert(out.end(), v.begin(), v.end());
+                LhBoxBE(out, da);
+                LhBoxBE(out, it);
+            };
+            const BYTE kNam[4] = { 0xA9, 'n', 'a', 'm' }, kCmt[4] = { 0xA9, 'c', 'm', 't' }, kArt[4] = { 0xA9, 'A', 'R', 'T' };
+            const BYTE kCprt[4] = { 'c', 'p', 'r', 't' }, kDay[4] = { 0xA9, 'd', 'a', 'y' }, kKeyw[4] = { 'k', 'e', 'y', 'w' };
+            item(kNam, LhUtf8(title));
+            item(kCmt, LhUtf8(m.desc));
+            item(kArt, LhUtf8(m.author));
+            item(kCprt, LhUtf8(m.copyright));
+            item(kKeyw, LhUtf8(m.tags));
+            SYSTEMTIME sl;
+            if (LhDateParts(m.taken, sl)) {
+                char iso[32];
+                sprintf(iso, "%04u-%02u-%02uT%02u:%02u:%02u", sl.wYear, sl.wMonth, sl.wDay, sl.wHour, sl.wMinute, sl.wSecond);
+                item(kDay, iso);
+            }
+            LhBoxBE(out, il);
+            LhBoxBE(out, me);
+            LhBoxBE(out, ud);
+            LhBoxBE(out, mo);
+            DWORD put = 0;
+            ok = SetFilePointerEx(f, p, nullptr, FILE_BEGIN) && SetEndOfFile(f)
+                 && WriteFile(f, out.data(), (DWORD)out.size(), &put, nullptr) && put == out.size();
+        }
+    }
+    CloseHandle(f);
+    return ok;
+}
 
 // ---- бітмап у PNG і назад -------------------------------------------------
 
@@ -19325,11 +19775,14 @@ bool EdDocWrite(const wchar_t* path, const std::wstring& name)
     w.raw(&kEdDocVerMajor, 2);
     w.raw(&kEdDocVerMinor, 2);
 
-    {   // хто, коли, звідки
+    {   // хто, коли, звідки. CAPS-88: «коли» — дата зйомки: пересохранення її не зсуває
         const size_t at = w.open("META");
-        FILETIME ft = {};
-        GetSystemTimeAsFileTime(&ft);
-        w.u64v(((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime);
+        if (!g_edMeta.taken) {
+            FILETIME ft = {};
+            GetSystemTimeAsFileTime(&ft);
+            g_edMeta.taken = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+        }
+        w.u64v(g_edMeta.taken);
         w.str(name);
         w.str(g_edSource);
         wchar_t ver[32] = {};
@@ -19337,6 +19790,7 @@ bool EdDocWrite(const wchar_t* path, const std::wstring& name)
         w.str(ver);
         w.close(at);
     }
+    LhMetaPut(w, g_edMeta);             // CAPS-88
     {   // Для бібліотеки — те, що вона показує, без читання самого знімка:
         // розмір кадру, скільки позначок, і мініатюра ЗВЕДЕНОГО кадру.
         const size_t at = w.open("INFO");
@@ -19499,6 +19953,8 @@ struct EdDoc {
     int seq = 0, startNum = 1, counterGroup = 0, nextGrp = 1;
     int scale1000 = 1000;               // CAPS-58: масштаб монітора зйомки × 1000
     std::wstring name, source;
+    ULONGLONG created = 0;              // CAPS-88: дата зйомки
+    LhMeta meta;                        //          і решта метаданих
     void free()
     {
         delete src; src = nullptr;
@@ -19538,9 +19994,11 @@ int EdDocRead(const wchar_t* path, EdDoc& d)
         if (r.bad || r.at + len > r.n) { r.bad = true; break; }
         const size_t next = r.at + len;
         if (!memcmp(t, "META", 4)) {
-            r.u64v();
+            d.created = r.u64v();
             d.name = r.str();
             d.source = r.str();
+        } else if (!memcmp(t, "DESC", 4)) {     // CAPS-88
+            LhMetaGet(raw.data() + r.at, len, d.meta);
         } else if (!memcmp(t, "SRC ", 4)) {
             d.src = EdPngDecode(raw.data() + r.at, len);
         } else if (!memcmp(t, "BANK", 4)) {
@@ -19613,6 +20071,8 @@ void EdDocApply(EdDoc& d, const wchar_t* path)
     g_edObjs = d.objs;
     g_edCrop = d.crop;
     g_edCropping = false;
+    g_edMeta = d.meta;                  // CAPS-88
+    g_edMeta.taken = d.created;
     g_edSeq = d.seq;
     g_edStartNum = d.startNum;
     g_edShotScale = d.scale1000 / 1000.0;   // CAPS-58
@@ -19798,6 +20258,7 @@ struct VidMeta {
     LONGLONG dur = 0;                     // 100 нс
     std::vector<BYTE> thumbPng;
     std::vector<BYTE> mouse;              // CAPS-76: журнал миші (MOUS), як є
+    LhMeta meta;                          // CAPS-88: опис, автор, право, теги
 };
 
 bool VidMetaWrite(const std::wstring& mp4, const VidMeta& m)
@@ -19824,6 +20285,7 @@ bool VidMetaWrite(const std::wstring& mp4, const VidMeta& m)
         w.raw(m.mouse.data(), m.mouse.size());
         w.close(at);
     }
+    LhMetaPut(w, m.meta);                 // CAPS-88
     // Через .tmp і підміну: обірваний запис не лишить напівфайл. Прихований —
     // у «Показати теку» людина бачить свої відео, а не службові файли.
     const std::wstring path = VidMetaPath(mp4), tmp = path + L".tmp";
@@ -19865,6 +20327,7 @@ bool VidMetaRead(const std::wstring& mp4, VidMeta& m)
         else if (!memcmp(t, "INFO", 4)) { m.w = b.i32v(); m.h = b.i32v(); m.dur = (LONGLONG)b.u64v(); }
         else if (!memcmp(t, "THMB", 4)) { m.thumbPng.assign(raw.data() + r.at, raw.data() + r.at + len); }
         else if (!memcmp(t, "MOUS", 4)) { m.mouse.assign(raw.data() + r.at, raw.data() + r.at + len); }
+        else if (!memcmp(t, "DESC", 4)) { LhMetaGet(raw.data() + r.at, len, m.meta); }   // CAPS-88
         r.at += len;
     }
     return !r.bad;
@@ -19988,6 +20451,42 @@ bool LhvPeek(const wchar_t* path, EdLibItem& it)
     return true;
 }
 
+// CAPS-88: метадані змінено — META (дата, назва) і DESC у хвості, решта блоків як є
+// (незбережені правки й позначки сюди не потрапляють).
+bool LhvPatchMeta(const wchar_t* path)
+{
+    std::vector<BYTE> p;
+    if (!LhvReadPayload(path, p)) return false;
+    EdWr w;
+    w.raw(p.data(), 12);
+    size_t at = 12;
+    bool done = false;
+    while (at + 8 <= p.size()) {
+        char t[4];
+        DWORD len = 0;
+        memcpy(t, &p[at], 4);
+        memcpy(&len, &p[at + 4], 4);
+        const size_t body = at + 8;
+        if (body + len > p.size()) return false;
+        if (!memcmp(t, "META", 4)) {
+            EdRd r{ p.data(), body + len, body, false };
+            r.u64v();
+            r.str();
+            const size_t m = w.open("META");
+            w.u64v(g_evCreated);
+            w.str(g_evName);
+            if (!r.bad && r.at < body + len) w.raw(p.data() + r.at, body + len - r.at);
+            w.close(m);
+            LhMetaPut(w, g_edMeta);
+            done = true;
+        } else if (memcmp(t, "DESC", 4)) {
+            w.raw(p.data() + at, 8 + len);
+        }
+        at = body + len;
+    }
+    return done && LhvWriteTail(path, w.b);
+}
+
 // Назву змінено в бібліотеці — переписати лише META у хвості, решту блоків як є.
 bool LhvRename(const wchar_t* path, const std::wstring& name)
 {
@@ -20073,8 +20572,10 @@ void VidLibScanInto(const wchar_t* dir, bool keep)
             const ULONGLONG keepCreated = had ? m.created : 0;
             std::vector<BYTE> keepMouse;             // CAPS-76: журнал миші переживає перерахунок кешу
             if (had) keepMouse.swap(m.mouse);
+            const LhMeta keepMeta = had ? m.meta : LhMeta{};   // CAPS-88: і метадані
             m = VidMeta{};
             m.mouse.swap(keepMouse);
+            m.meta = keepMeta;
             m.srcSize = size;
             m.srcTime = mtime;
             m.created = keepCreated ? keepCreated : mtime;
@@ -20140,7 +20641,9 @@ bool VidMetaRename(const std::wstring& mp4, const std::wstring& name)
 {
     if (LhvIs(mp4.c_str())) return LhvRename(mp4.c_str(), name);   // CAPS-81: у проєкті назва — у хвості
     VidMeta m;
-    if (!VidMetaRead(mp4, m)) return false;
+    // Свіжий запис без кешу (.lhmeta ще не було): заводимо — кеш «від іншого файлу»,
+    // бібліотека дорахує кадр і розмір сама, а назву збереже (CAPS-88: назва з панелі).
+    if (!VidMetaRead(mp4, m)) m = VidMeta{};
     m.name = name;
     return VidMetaWrite(mp4, m);
 }
@@ -21634,6 +22137,7 @@ void EvClose()
 // Відео в редакторі. Назву беремо з бібліотеки (.lhmeta), інакше — ім'я файлу.
 bool EvOpen(HINSTANCE hInst, const wchar_t* path)
 {
+    EdMetaHide();                                // CAPS-88: незафіксоване — у попередній документ
     Gdiplus::Bitmap* poster = nullptr;
     LONGLONG dur = 0;
     if (!VideoGrabFrame(path, &poster, &dur) || !poster) {
@@ -21661,6 +22165,8 @@ bool EvOpen(HINSTANCE hInst, const wchar_t* path)
         g_evBytes = ((ULONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
         if (!g_evCreated) g_evCreated = ((ULONGLONG)fa.ftLastWriteTime.dwHighDateTime << 32) | fa.ftLastWriteTime.dwLowDateTime;
     }
+    g_edMeta = m.meta;                           // CAPS-88 (проєкт .lhvideo перепише своїм у LhvApply)
+    g_edMeta.taken = g_evCreated;
     g_evDur = dur / 1e7;
     g_evW = (int)poster->GetWidth();
     g_evH = (int)poster->GetHeight();
@@ -21916,7 +22422,8 @@ void EvLayout(HWND hwnd)
     RECT film = { g_evRcFilm.left - EdPx(6), g_evRcRuler.bottom + EdPx(2), g_evRcFilm.right + EdPx(6), g_evRcFilm.bottom + EdPx(4) };
     EdAdd(film, EdHit::VidFilm, 0);
     // CAPS-80: доріжка позначок — під стрічкою
-    g_evRcMarks = { g_evRcFilm.left, g_evRcFilm.bottom + EdPx(8), g_evRcFilm.right, g_evRcFilm.bottom + EdPx(34) };
+    g_evRcMarks = { g_evRcFilm.left, g_evRcFilm.bottom + EdPx(8), g_evRcFilm.right,
+                    g_evRcFilm.bottom + EdPx(8) + 2 * EdPx(kEvLanePad) + g_evMarkRows * EdPx(kEvLaneH) };
     { RECT mk = { g_evRcMarks.left - EdPx(6), g_evRcMarks.top - EdPx(1), g_evRcMarks.right + EdPx(6), g_evRcMarks.bottom + EdPx(2) };
       EdAdd(mk, EdHit::VidMarks, 0); }
 
@@ -21942,7 +22449,7 @@ void EvLayout(HWND hwnd)
     }
 
     // права панель: відомості, «Відкрити кадр як знімок», унизу «Показати в Провіднику»
-    if (g_edPanelOpen) {
+    if (g_edPanelTab == 0) {
         const int px = g_edRcPanel.left + EdPx(14), pr = g_edRcPanel.right - EdPx(14);
         int y = g_edRcPanel.top + EdPx(14) + EdPx(18) + EdPx(12);   // заголовок «Відео»
         y += EdPx(22) + EdPx(20) + EdPx(10);                         // назва, «Записано»
@@ -21953,6 +22460,207 @@ void EvLayout(HWND hwnd)
         RECT sb = { px, g_edRcPanel.bottom - EdPx(14) - EdPx(32), pr, g_edRcPanel.bottom - EdPx(14) };
         EdAdd(sb, EdHit::VidShowFile, 0);
     }
+}
+
+// ---- CAPS-88: панель EXIF/META ----
+// Поля — справжні EDIT (як перейменування в бібліотеці): набір тексту, виділення,
+// вставка — системні. Живуть, лише поки відкрита вкладка; зміна фіксується, коли
+// поле втрачає фокус (Enter, Tab, клік деінде) — і одразу пишеться в запис.
+void EdMetaCommit(HWND hwnd, int i);
+void EdMetaHide();
+
+std::wstring EdMetaText(int i)
+{
+    switch (i) {
+    case 0: return g_edVideo ? g_evName : g_edDocName;
+    case 1: return g_edMeta.desc;
+    case 2: return g_edMeta.author;
+    case 3: return g_edMeta.copyright;
+    case 4: return g_edMeta.tags;
+    default: return LhDateText(g_edMeta.taken);
+    }
+}
+
+// Enter у рядку — зафіксувати; Esc — повернути, як було; Tab — до наступного поля.
+LRESULT CALLBACK EdMetaEditProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR)
+{
+    const int i = (int)id;
+    if (msg == WM_KEYDOWN) {
+        if (wp == VK_ESCAPE) { SetWindowTextW(h, EdMetaText(i).c_str()); SetFocus(GetParent(h)); return 0; }
+        if (wp == VK_RETURN && i != 1) { SetFocus(GetParent(h)); return 0; }
+        if (wp == VK_TAB) {
+            const int n = (i + (GetKeyState(VK_SHIFT) < 0 ? kEdMetaFields - 1 : 1)) % kEdMetaFields;
+            if (g_edMetaEd[n]) { SetFocus(g_edMetaEd[n]); SendMessageW(g_edMetaEd[n], EM_SETSEL, 0, -1); }
+            return 0;
+        }
+    }
+    if (msg == WM_CHAR && (wp == VK_ESCAPE || wp == VK_TAB || (wp == VK_RETURN && i != 1))) return 0;
+    return DefSubclassProc(h, msg, wp, lp);
+}
+
+void EdMetaLayout(HWND hwnd)
+{
+    const int px = g_edRcPanel.left + EdPx(14), pr = g_edRcPanel.right - EdPx(14);
+    int y = g_edRcPanel.top + EdPx(14) + EdPx(18) + EdPx(8);          // заголовок
+    g_edMetaInfo = { px, y, pr, y + EdPx(20) };
+    y = g_edMetaInfo.bottom + EdPx(8);
+    for (int i = 0; i < kEdMetaFields; ++i) {
+        g_edMetaLbl[i] = { px, y, pr, y + EdPx(18) };
+        y += EdPx(20);
+        const int h = (i == 1) ? EdPx(58) : EdPx(26);
+        if (!g_edMetaEd[i]) {
+            DWORD st = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL;
+            if (i == 1) st = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN;
+            g_edMetaEd[i] = CreateWindowExW(0, L"EDIT", EdMetaText(i).c_str(), st, px, y, pr - px, h, hwnd,
+                                            (HMENU)(INT_PTR)(kEdMetaEditId + i), (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), nullptr);
+            if (g_edMetaEd[i]) {
+                SendMessageW(g_edMetaEd[i], WM_SETFONT, (WPARAM)g_edFont, TRUE);
+                SendMessageW(g_edMetaEd[i], EM_SETLIMITTEXT, i == 1 ? 2000 : 300, 0);
+                if (i == 5) SendMessageW(g_edMetaEd[i], EM_SETCUEBANNER, FALSE, (LPARAM)S(Str::EdMetaDateCue));
+                if (g_edDark) SetWindowTheme(g_edMetaEd[i], L"DarkMode_Explorer", nullptr);
+                SetWindowSubclass(g_edMetaEd[i], EdMetaEditProc, (UINT_PTR)i, 0);
+            }
+        } else {
+            MoveWindow(g_edMetaEd[i], px, y, pr - px, h, TRUE);
+        }
+        y += h + EdPx(8);
+    }
+    y += EdPx(4);
+    RECT b = { px, y, pr, y + EdPx(32) };
+    EdAdd(b, EdHit::MetaClear, 0);
+    g_edMetaNoteTop = b.bottom + EdPx(10);
+}
+
+// Поля — геть (вкладку закрили, документ змінився). Незафіксоване — спершу в запис.
+void EdMetaHide()
+{
+    for (int i = 0; i < kEdMetaFields; ++i) if (g_edMetaEd[i] && g_edWnd) EdMetaCommit(g_edWnd, i);
+    for (int i = 0; i < kEdMetaFields; ++i) {
+        HWND h = g_edMetaEd[i];
+        g_edMetaEd[i] = nullptr;                  // спершу нуль: DestroyWindow шле EN_KILLFOCUS
+        if (h) DestroyWindow(h);
+    }
+}
+
+// Поля показують модель (новий документ, «Прибрати всі метадані»).
+void EdMetaRefresh()
+{
+    for (int i = 0; i < kEdMetaFields; ++i) if (g_edMetaEd[i]) SetWindowTextW(g_edMetaEd[i], EdMetaText(i).c_str());
+}
+
+bool EdLibScanRefresh();
+
+// Записати метадані в сам запис: у знімок — блоки META/DESC, у відео — .lhmeta чи
+// хвіст проєкту. Дата зйомки — ще й час файлу. Не збережений ще документ — лише
+// в пам'яті: піде у файл разом із ним.
+bool LhvPatchMeta(const wchar_t* path);
+void EdMetaPersist()
+{
+    if (g_edVideo) {
+        if (!g_evPath[0]) return;
+        if (g_edMeta.taken) g_evCreated = g_edMeta.taken;
+        if (LhvIs(g_evPath)) {
+            LhvPatchMeta(g_evPath);
+            LhSetFileTimes(g_evPath, g_edMeta.taken);
+        } else {
+            LhSetFileTimes(g_evPath, g_edMeta.taken);   // спершу час: кеш .lhmeta прив'язаний до нього
+            VidMeta m;
+            VidMetaRead(g_evPath, m);
+            m.meta = g_edMeta;
+            m.created = g_evCreated;
+            m.name = g_evName;
+            WIN32_FILE_ATTRIBUTE_DATA fa = {};
+            if (GetFileAttributesExW(g_evPath, GetFileExInfoStandard, &fa)) {
+                m.srcSize = ((ULONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+                m.srcTime = ((ULONGLONG)fa.ftLastWriteTime.dwHighDateTime << 32) | fa.ftLastWriteTime.dwLowDateTime;
+            }
+            if (!m.w) { m.w = g_evW; m.h = g_evH; m.dur = (LONGLONG)(g_evDur * 1e7 + 0.5); }
+            VidMetaWrite(g_evPath, m);
+        }
+    } else if (g_edDocPath[0]) {
+        EdDocPatch(g_edDocPath, nullptr, &g_edMeta);
+        LhSetFileTimes(g_edDocPath, g_edMeta.taken);
+    }
+    EdLibScanRefresh();
+}
+
+void EdMetaCommit(HWND hwnd, int i)
+{
+    if (i < 0 || i >= kEdMetaFields || !g_edMetaEd[i]) return;
+    wchar_t buf[2048] = {};
+    GetWindowTextW(g_edMetaEd[i], buf, 2048);
+    std::wstring v = buf;
+    while (!v.empty() && (v.back() == L' ' || v.back() == L'\r' || v.back() == L'\n')) v.pop_back();
+    while (!v.empty() && v.front() == L' ') v.erase(v.begin());
+    if (v == EdMetaText(i)) return;
+    bool changed = true;
+    switch (i) {
+    case 0:                                        // назва = назва запису; порожню не пишемо
+        if (v.empty()) { SetWindowTextW(g_edMetaEd[i], EdMetaText(i).c_str()); return; }
+        if (g_edVideo) {
+            if (g_evPath[0] && !VidMetaRename(g_evPath, v)) { MessageBoxW(hwnd, S(Str::EdLibErrRename), kAppName, MB_OK | MB_ICONWARNING); return; }
+            lstrcpynW(g_evName, v.c_str(), 128);
+        } else {
+            if (g_edDocPath[0] && !EdDocRename(g_edDocPath, v)) { MessageBoxW(hwnd, S(Str::EdLibErrRename), kAppName, MB_OK | MB_ICONWARNING); return; }
+            lstrcpynW(g_edDocName, v.c_str(), 128);
+        }
+        EdLibScanRefresh();
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return;
+    case 1: g_edMeta.desc = v; break;
+    case 2: g_edMeta.author = v; break;
+    case 3: g_edMeta.copyright = v; break;
+    case 4: g_edMeta.tags = v; break;
+    default: {
+        ULONGLONG ft = 0;
+        if (!LhDateParse(v, ft)) {                 // не дата — повертаємо, як було
+            MessageBeep(MB_ICONWARNING);
+            SetWindowTextW(g_edMetaEd[i], EdMetaText(i).c_str());
+            return;
+        }
+        g_edMeta.taken = ft;
+        SetWindowTextW(g_edMetaEd[i], EdMetaText(i).c_str());   // у нашому вигляді
+        break;
+    }
+    }
+    if (i >= 1 && i <= 4 && !v.empty()) g_edMeta.none = false;   // щось заповнили — метадані знову йдуть назовні
+    if (changed) EdMetaPersist();
+    InvalidateRect(hwnd, &g_edRcPanel, FALSE);
+}
+
+void EdMetaClearAll(HWND hwnd)
+{
+    g_edMeta.desc.clear(); g_edMeta.author.clear(); g_edMeta.copyright.clear(); g_edMeta.tags.clear();
+    g_edMeta.none = true;
+    EdMetaRefresh();
+    EdMetaPersist();
+    InvalidateRect(hwnd, &g_edRcPanel, FALSE);
+}
+
+void EdPaintMetaPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
+{
+    const int x = g_edRcPanel.left + EdPx(14), xr = g_edRcPanel.right - EdPx(14);
+    RECT h = { x, g_edRcPanel.top + EdPx(14), xr, g_edRcPanel.top + EdPx(14) + EdPx(18) };
+    EdDrawText(dc, h, S(Str::EdMetaHead), g_edFontSmall, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    wchar_t info[96];
+    if (g_edVideo) {
+        wchar_t d[32];
+        FormatDuration((LONGLONG)(g_evDur * 1e7), d, 32);
+        swprintf(info, 96, L"%d \u00D7 %d \u00B7 %s \u00B7 MP4", g_evW, g_evH, d);
+    } else {
+        swprintf(info, 96, L"%d \u00D7 %d", EdViewW(), EdViewH());
+    }
+    EdDrawText(dc, g_edMetaInfo, info, g_edFont, t.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    const Str lbl[kEdMetaFields] = { Str::EdMetaTitle, Str::EdMetaDesc, Str::EdMetaAuthor, Str::EdMetaCopyright, Str::EdMetaTags, Str::EdMetaTaken };
+    for (int i = 0; i < kEdMetaFields; ++i)
+        EdDrawText(dc, g_edMetaLbl[i], S(lbl[i]), g_edFont, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    if (const RECT* r = EdRegionRect(EdHit::MetaClear, 0)) {
+        const bool can = !g_edMeta.Blank() || !g_edMeta.none;
+        EdPaintButton(g, *r, t, false, can && g_edHotWhat == EdHit::MetaClear, false);
+        EdDrawText(dc, *r, S(Str::EdMetaClearBtn), g_edFont, can ? t.text : t.text2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    RECT n = { x, g_edMetaNoteTop, xr, g_edRcPanel.bottom - EdPx(14) };
+    EdDrawText(dc, n, S(g_edMeta.none ? Str::EdMetaNoneNote : Str::EdMetaNote), g_edFont, t.text2, DT_LEFT | DT_WORDBREAK);
 }
 
 // Гліфи транспорту — фігурами, тими самими пропорціями, що й решта піктограм.
@@ -22629,30 +23337,41 @@ int  g_evMarkFrom0 = 0, g_evMarkFrom1 = 0, g_evMarkGrab = 0;
 int  g_evMarkHot = -1, g_evMarkHotKind = 0;
 
 // Смуги позначок у дві доріжки: наступна, що перетинає попередню, — нижче.
-void EvMarkLanes(std::vector<int>& lane)
+int EvMarkLanes(std::vector<int>& lane)
 {
     lane.assign(g_edObjs.size(), -1);
-    int end[2] = { INT_MIN, INT_MIN };
+    std::vector<int> end;                      // де кінчається остання смуга кожної доріжки
     std::vector<int> order;
     for (size_t i = 0; i < g_edObjs.size(); ++i) if (g_edObjs[i].vf1 != INT_MAX) order.push_back((int)i);
-    std::sort(order.begin(), order.end(), [](int a, int b) { return g_edObjs[(size_t)a].vf0 < g_edObjs[(size_t)b].vf0; });
+    std::stable_sort(order.begin(), order.end(), [](int a, int b) { return g_edObjs[(size_t)a].vf0 < g_edObjs[(size_t)b].vf0; });
     for (int i : order) {
         const EdObj& o = g_edObjs[(size_t)i];
-        const int l = (o.vf0 >= end[0]) ? 0 : (o.vf0 >= end[1] ? 1 : (end[0] <= end[1] ? 0 : 1));
-        lane[(size_t)i] = l;
-        if (o.vf1 > end[l]) end[l] = o.vf1;
+        size_t l = 0;
+        while (l < end.size() && end[l] > o.vf0) ++l;   // перша доріжка, де смуга вже скінчилась
+        if (l == end.size()) end.push_back(INT_MIN);
+        lane[(size_t)i] = (int)l;
+        end[l] = o.vf1;
     }
+    return (int)end.size();
 }
 
+int EvMarkRowsNow(int need) { return need < 1 ? 1 : (need < g_evMarkRows ? need : g_evMarkRows); }
+
+// Смуга позначки на доріжці; прокручена за межі видимого — порожній прямокутник.
 RECT EvMarkBar(int i, const std::vector<int>& lane)
 {
     const EdObj& o = g_edObjs[(size_t)i];
-    // 4.4.1: друга доріжка — лише коли позначки перетинаються; інакше смуга на всю висоту
-    const bool two = std::find(lane.begin(), lane.end(), 1) != lane.end();
-    const int pad = EdPx(3);
-    const int lh = (g_evRcMarks.bottom - g_evRcMarks.top - 2 * pad) / (two ? 2 : 1);
-    const int top = g_evRcMarks.top + pad + lane[(size_t)i] * lh;
-    RECT r = { EvTimeToX(o.vf0 / g_evFps), top + 1, EvTimeToX(o.vf1 / g_evFps), top + lh - 1 };
+    int need = 0;
+    for (int l : lane) if (l + 1 > need) need = l + 1;
+    // Одна доріжка — смуга на всю висоту (4.4.1); більше — по доріжці на рядок.
+    const int rows = EvMarkRowsNow(need);
+    const int pad = EdPx(kEvLanePad);
+    const int lh = (g_evRcMarks.bottom - g_evRcMarks.top - 2 * pad) / rows;
+    const int v = lane[(size_t)i] - g_evMarkScroll;
+    if (v < 0 || v >= rows) return RECT{ 0, 0, 0, 0 };
+    const int top = g_evRcMarks.top + pad + v * lh;
+    // кілька доріжок — зазор 3 px, інакше сусідні смуги зливаються в одну
+    RECT r = { EvTimeToX(o.vf0 / g_evFps), top + 1, EvTimeToX(o.vf1 / g_evFps), top + lh - (rows > 1 ? 2 : 1) };
     if (r.right - r.left < EdPx(4)) r.right = r.left + EdPx(4);
     return r;
 }
@@ -22673,6 +23392,7 @@ void EvPaintMarks(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     for (size_t i = 0; i < g_edObjs.size(); ++i) {
         if (lane[i] < 0) continue;
         const RECT r = EvMarkBar((int)i, lane);
+        if (r.right <= r.left) continue;         // прокручена за межі видимого
         const EdObj& o = g_edObjs[i];
         const COLORREF c = EdIsEffect(o.kind) && o.kind == EdKind::Hide ? RGB(120, 120, 128) : o.color;
         const bool drag = (int)i == g_evMarkDrag;
@@ -22716,6 +23436,19 @@ void EvPaintMarks(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
         }
     }
     g.ResetClip();
+    {   // доріжок більше, ніж видно, — тонка смуга прокрутки праворуч
+        int need = 0;
+        for (int l : lane) if (l + 1 > need) need = l + 1;
+        const int rows = EvMarkRowsNow(need);
+        if (need > rows) {
+            const int pad = EdPx(kEvLanePad), inner = (m.bottom - m.top) - 2 * pad;
+            const int x = m.right + EdPx(2), w = EdPx(3);
+            Gdiplus::SolidBrush tr(g_edDark ? Gdiplus::Color(255, 60, 60, 66) : Gdiplus::Color(255, 214, 214, 220));
+            g.FillRectangle(&tr, x, m.top + pad, w, inner);
+            Gdiplus::SolidBrush th(EdC(t.accent));
+            g.FillRectangle(&th, x, m.top + pad + inner * g_evMarkScroll / need, w, inner * rows / need);
+        }
+    }
 }
 
 int EvMarkAt(POINT pt, int* kind)
@@ -22725,6 +23458,7 @@ int EvMarkAt(POINT pt, int* kind)
     for (int i = (int)g_edObjs.size() - 1; i >= 0; --i) {
         if (lane[(size_t)i] < 0) continue;
         const RECT r = EvMarkBar(i, lane);
+        if (r.right <= r.left) continue;
         RECT hit = r;
         InflateRect(&hit, EdPx(4), 1);
         if (!PtInRect(&hit, pt)) continue;
@@ -22770,6 +23504,35 @@ void EvMarksHover(POINT pt)
     g_evMarkHot = i;
     g_evMarkHotKind = kind;
     if (g_edWnd) InvalidateRect(g_edWnd, &g_edRcTimeline, FALSE);
+}
+
+// Коліщатко над доріжкою позначок, коли доріжок більше, ніж видно, — прокрутка
+// на доріжку за клацання. Інакше — як скрізь на таймлайні (масштаб).
+bool EvMarksWheel(POINT pt, int delta)
+{
+    RECT mk = { g_evRcMarks.left - EdPx(6), g_evRcMarks.top, g_evRcMarks.right + EdPx(8), g_evRcMarks.bottom };
+    if (!PtInRect(&mk, pt)) return false;
+    std::vector<int> lane;
+    const int need = EvMarkLanes(lane), rows = EvMarkRowsNow(need);
+    if (need <= rows) return false;
+    const int step = delta > 0 ? -1 : 1;
+    int sc = g_evMarkScroll + step;
+    if (sc > need - rows) sc = need - rows;
+    if (sc < 0) sc = 0;
+    if (sc != g_evMarkScroll) {
+        g_evMarkScroll = sc;
+        EvMarksHover(pt);
+        if (g_edWnd) InvalidateRect(g_edWnd, &g_edRcTimeline, FALSE);
+    }
+    return true;
+}
+
+// Розкладку треба перерахувати: з'явилась/зникла доріжка, змінився масштаб відео.
+bool EvMarkLayoutStale()
+{
+    if (!g_edVideo || g_edOverlay) return false;
+    std::vector<int> lane;
+    return EvMarkLanes(lane) != g_evLanesLaid || g_edZoom != g_evLaidZoom;
 }
 
 // Натиснули на доріжці позначок: вибрати й почати тягнути (усю — чи край).
@@ -22944,6 +23707,7 @@ std::vector<BYTE> LhvBuild()
         w.str(ver);
         w.close(at);
     }
+    LhMetaPut(w, g_edMeta);                      // CAPS-88
     {   const size_t at = w.open("INFO");
         w.i32v(g_evW); w.i32v(g_evH); w.u64v((ULONGLONG)(g_evDur * 1e7 + 0.5));
         w.i32v((int)(g_evFps * 1000 + 0.5)); w.u8v(g_evAudio ? 1 : 0); w.i32v(EvFrames());
@@ -23007,6 +23771,8 @@ bool LhvApply(const wchar_t* path)
     std::vector<EdObj> objs;
     int seq = 0, startNum = 1, cgroup = 0, nextGrp = 1, scale1000 = 1000;
     std::vector<BYTE> mouse;
+    LhMeta meta;                                 // CAPS-88
+    bool haveMeta = false;
     while (!r.bad && r.at + 8 <= r.n) {
         char t[4];
         r.raw(t, 4);
@@ -23045,6 +23811,7 @@ bool LhvApply(const wchar_t* path)
                 objs.push_back(o);
             }
         } else if (!memcmp(t, "MOUS", 4)) mouse.assign(p.data() + r.at, p.data() + next);
+        else if (!memcmp(t, "DESC", 4)) { LhMetaGet(p.data() + r.at, len, meta); haveMeta = true; }
         r.at = next;
     }
     // Правки — лише якщо вони про ці кадри: частини суцільно покривають [0, N).
@@ -23067,6 +23834,8 @@ bool LhvApply(const wchar_t* path)
     g_edSeq = seq; g_edStartNum = startNum; g_edCounterGroup = cgroup; g_edNextGrp = nextGrp > 0 ? nextGrp : 1;
     g_edShotScale = scale1000 / 1000.0;
     g_evMouseLog = mouse;
+    if (haveMeta) g_edMeta = meta;               // CAPS-88
+    g_edMeta.taken = g_evCreated;
     // щойно відкритий проєкт — нічого не змінено
     g_evSavedKeep = EvKeepSegs();
     g_evMarksSavedGen = g_evMarksGen;
@@ -23091,6 +23860,7 @@ struct EvSaveJob {
     std::vector<EvSeg> keep;
     int marksGen = 0;              // CAPS-80: які позначки збережено
     std::vector<BYTE> tail;        // CAPS-81: проєкт (mode 3) — хвіст після копії відео
+    LhMeta meta;                   // CAPS-88: метадані документа на мить збереження
 };
 
 EvSaveJob* g_evJob = nullptr;
@@ -23355,6 +24125,13 @@ DWORD WINAPI EvSaveThread(LPVOID param)
         else VidLibRetention(j->out);
     }
     if (FAILED(hr)) DeleteFileW(j->x.dst);
+    // CAPS-88: готовий MP4 назовні — з метаданими (як iTunes: moov/udta/meta/ilst) і
+    // датою зйомки як часом файлу; «Прибрати всі метадані» — нічого з цього.
+    if (SUCCEEDED(hr) && (j->mode == 1 || j->mode == 2) && !j->meta.none) {
+        LhMp4AddMeta(j->out, j->name, j->meta);
+        LhSetFileTimes(j->out, j->meta.taken);
+    }
+    if (SUCCEEDED(hr) && j->mode == 3) LhSetFileTimes(j->out, j->meta.taken);   // проєкт — теж дата зйомки
     if (SUCCEEDED(hr) && j->mode == 0) {
         // Назва й дата — одразу; мініатюру й розмір бібліотека дорахує сама (кеш
         // прив'язаний до розміру й часу файла, тут вони свідомо нульові).
@@ -23363,6 +24140,7 @@ DWORD WINAPI EvSaveThread(LPVOID param)
         GetSystemTimeAsFileTime(&now);
         m.created = ((ULONGLONG)now.dwHighDateTime << 32) | now.dwLowDateTime;
         m.name = j->name;
+        m.meta = j->meta;                        // CAPS-88
         VidMetaWrite(j->out, m);
         VidLibRetention(j->out);
     }
@@ -23489,6 +24267,7 @@ bool EvSaveStart(int mode, bool closeAfter)
     j->marksGen = g_evMarksGen;
     if (marked) EvBuildMarkSpans(j->x.spans, g_evW, g_evH);   // CAPS-80: шари й ефекти — тут, у потоці вікна
     j->name = g_evName;
+    j->meta = g_edMeta;                          // CAPS-88
     if (edited && !EndsWithI(j->name.c_str(), S(Str::VidCutSuffix))) j->name += S(Str::VidCutSuffix);
     else if (!edited && marked && !EndsWithI(j->name.c_str(), S(Str::VidMarkedSuffix))) j->name += S(Str::VidMarkedSuffix);
     g_evJob = j;
@@ -23608,6 +24387,7 @@ bool EvSaveProject(bool closeAfter)
     j->marksGen = g_evMarksGen;
     j->tail = payload;
     j->name = g_evName;
+    j->meta = g_edMeta;                          // CAPS-88
     g_evJob = j;
     g_evJobThread = CreateThread(nullptr, 0, EvSaveThread, j, 0, nullptr);
     if (!g_evJobThread) { g_evJob = nullptr; delete j; return false; }
@@ -23663,6 +24443,17 @@ void EvStatusText(wchar_t* buf, int n)
         return;
     }
     swprintf(buf, n, S(Str::VidFrameOf), EvFrames() > 0 ? EvFrameIdx(g_evPos) + 1 : 0, EvFrames());
+}
+
+void EdLibScan();
+bool EdLibScanRefresh()
+{
+    if (!g_edWnd || !g_edLibOpen) return false;
+    EdLibScan();
+    if (g_edLibSel >= (int)g_edLib.size()) g_edLibSel = g_edLib.empty() ? -1 : 0;
+    EdLayout(g_edWnd);
+    InvalidateRect(g_edWnd, nullptr, FALSE);
+    return true;
 }
 
 void EdLibScan()
@@ -23830,19 +24621,11 @@ void EdLibDeleteSel(HWND hwnd)
 
 // Перейменування міняє ЛИШЕ блок META: файл переписується блок за блоком у
 // сусідній .part і підміняється — так само безпечно, як і збереження.
-bool EdDocRename(const wchar_t* path, const std::wstring& name)
+// CAPS-88: переписати в .lhshot лише META (назва й/або дата) і DESC — решта блоків як є.
+bool EdDocPatch(const wchar_t* path, const std::wstring* name, const LhMeta* meta)
 {
-    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                           FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return false;
-    LARGE_INTEGER sz = {};
-    if (!GetFileSizeEx(f, &sz) || sz.QuadPart < 12 || sz.QuadPart > 512LL * 1024 * 1024) { CloseHandle(f); return false; }
-    std::vector<BYTE> raw((size_t)sz.QuadPart);
-    DWORD got = 0;
-    const BOOL ok = ReadFile(f, raw.data(), (DWORD)raw.size(), &got, nullptr);
-    CloseHandle(f);
-    if (!ok || got != raw.size() || memcmp(raw.data(), kEdDocMagic, 8)) return false;
-
+    std::vector<BYTE> raw;
+    if (!LhReadAll(path, raw) || raw.size() < 12 || memcmp(raw.data(), kEdDocMagic, 8)) return false;
     EdWr w;
     w.raw(raw.data(), 12);
     EdRd r{ raw.data(), raw.size(), 12, false };
@@ -23853,29 +24636,28 @@ bool EdDocRename(const wchar_t* path, const std::wstring& name)
         if (r.bad || r.at + len > r.n) return false;
         if (!memcmp(t, "META", 4) && !done) {
             EdRd m{ raw.data() + r.at, len, 0, false };
-            const ULONGLONG created = m.u64v();
-            m.str();                             // стара назва
+            ULONGLONG created = m.u64v();
+            std::wstring nm = m.str();
             const std::wstring source = m.str();
             const std::wstring ver = m.str();
+            if (name) nm = *name;
+            if (meta && meta->taken) created = meta->taken;
             const size_t at = w.open("META");
-            w.u64v(created); w.str(name); w.str(source); w.str(ver);
+            w.u64v(created); w.str(nm); w.str(source); w.str(ver);
             w.close(at);
+            if (meta) LhMetaPut(w, *meta);
             done = true;
-        } else {
+        } else if (!(meta && !memcmp(t, "DESC", 4))) {
             w.tag(t); w.u32v(len); w.raw(raw.data() + r.at, len);
         }
         r.at += len;
     }
-    if (!done) return false;
-    std::wstring tmp = std::wstring(path) + L".part";
-    HANDLE o = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (o == INVALID_HANDLE_VALUE) return false;
-    DWORD put = 0;
-    const BOOL wok = WriteFile(o, w.b.data(), (DWORD)w.b.size(), &put, nullptr) && put == w.b.size();
-    CloseHandle(o);
-    if (!wok) { DeleteFileW(tmp.c_str()); return false; }
-    if (!MoveFileExW(tmp.c_str(), path, MOVEFILE_REPLACE_EXISTING)) { DeleteFileW(tmp.c_str()); return false; }
-    return true;
+    return done && LhWriteAll(path, w.b);
+}
+
+bool EdDocRename(const wchar_t* path, const std::wstring& name)
+{
+    return EdDocPatch(path, &name, nullptr);
 }
 
 // Enter і Esc у полі перейменування: без підкласу вони лишилися б у EDIT.
@@ -23994,6 +24776,7 @@ bool EdIsDocFile(const wchar_t* path)
 // EdDocRead, тож той, хто викликав, сам вирішує, що сказати користувачеві.
 int EdDocOpen(const wchar_t* path)
 {
+    EdMetaHide();                                // CAPS-88
     EdDoc d;
     const int rc = EdDocRead(path, d);
     if (rc == 0) EdDocApply(d, path);
@@ -24006,6 +24789,7 @@ int EdDocOpen(const wchar_t* path)
 bool EdDocSaveTo(const wchar_t* path)
 {
     if (!EdDocWrite(path, g_edDocName)) return false;
+    LhSetFileTimes(path, g_edMeta.taken);          // CAPS-88: дата зйомки = час файлу
     lstrcpynW(g_edDocPath, path, MAX_PATH);
     g_edSaved = true;
     return true;
