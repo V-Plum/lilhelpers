@@ -643,7 +643,6 @@ X(VidTipEnd,          L"У кінець (End)",                L"To end (End)") 
 X(VidTipLoop,         L"Повтор по колу",                L"Loop")                                       \
 X(VidTipMute,         L"Звук: увімкнути / вимкнути",    L"Sound on / off")                             \
 X(VidTipCopyFrame,    L"Копіювати кадр (Ctrl+C)",       L"Copy frame (Ctrl+C)")                        \
-X(VidToolLater,       L"У відео кадрування немає",      L"No cropping in video")                       \
 X(VidMarksEmpty,      L"Позначки: виберіть інструмент і малюйте на кадрі — з'являться тут на 3 с", \
                       L"Marks: pick a tool and draw on the frame — each shows here for 3 s")          \
 X(VidTipMarks,        L"Тягніть — пересунути; за край — змінити, коли видно",                          \
@@ -658,6 +657,37 @@ X(VidEditedFmt,       L"Кадр %d з %d · після правок %s", L"Fram
 X(VidExportingFmt,    L"Зберігаю відео… %d %%",         L"Saving video… %d %%")                        \
 X(VidSaveAsItem,      L"Зберегти як…",                  L"Save as…")                                   \
 X(VidCopyFileItem,    L"Копіювати як файл",             L"Copy as a file")                             \
+X(VidBtnSize,         L"Розмір відео…",                 L"Video size…")                                \
+X(VidSizeTitle,       L"Розмір відео",                  L"Video size")                                 \
+X(VidSizeNote,        L"Лише зменшення. Ширина й висота стануть парними — цього вимагає H.264.\n"    \
+                      L"Позначки переїдуть разом із кадром.",                                          \
+                      L"Downscale only. Width and height become even — H.264 requires it.\n"          \
+                      L"Marks move along with the frame.")                                             \
+X(VidFactOut,         L"Після правок",                  L"After edits")                                \
+X(VidGifItem,         L"Експорт у GIF…",                L"Export as GIF…")                             \
+X(GifTitle,           L"Експорт у GIF",                 L"Export as GIF")                              \
+X(GifFpsL,            L"Кадрів за секунду",             L"Frames per second")                          \
+X(GifWidthL,          L"Ширина",                        L"Width")                                      \
+X(GifColorsL,         L"Кольорів",                      L"Colours")                                    \
+X(GifDither,          L"Згладжувати переходи кольорів (дизеринг)",                                    \
+                      L"Dither colour transitions")                                                    \
+X(GifLoopL,           L"Повтор",                        L"Loop")                                       \
+X(GifLoopInf,         L"Безкінечно",                    L"Forever")                                    \
+X(GifLoopOnce,        L"Один раз",                      L"Once")                                       \
+X(GifEstFmt,          L"Приблизний розмір: %s (%d кадрів)", L"Estimated size: %s (%d frames)")         \
+X(GifEstWait,         L"Рахую розмір…",                 L"Estimating size…")                           \
+X(GifBigNote,         L"Файл буде великий: GIF погано підходить для довгих записів — "                 \
+                      L"зменште частоту кадрів, ширину чи фрагмент.",                                  \
+                      L"The file will be large: GIF suits short clips — lower the frame rate, "        \
+                      L"width or trim the clip.")                                                      \
+X(GifExportBtn,       L"Експортувати",                  L"Export")                                     \
+X(GifSavingFmt,       L"Зберігаю GIF… %d %%",           L"Saving GIF… %d %%")                          \
+X(GifSavedFmt,        L"GIF збережено: %s",             L"GIF saved: %s")                              \
+X(GifFmt,             L"Анімований GIF",                L"Animated GIF")                               \
+X(GifSaveTitle,       L"Зберегти GIF",                  L"Save GIF")                                   \
+X(GifErr,             L"Не вдалося зберегти GIF.",      L"Could not save the GIF.")                    \
+X(VidTipSize,         L"Зменшити відео (кадр і розмір застосовуються при збереженні MP4 і в GIF)",     \
+                      L"Downscale the video (crop and size apply when saving MP4 and in GIF)")         \
 X(VidCopiedFile,      L"Відео скопійовано як файл",     L"Video copied as a file")                     \
 X(VidErrExport,       L"Не вдалося зберегти відео.",    L"Could not save the video.")                  \
 X(VidNothingLeft,     L"Усе вирізано — нема чого зберігати.", L"Everything is cut — nothing to save.") \
@@ -9046,6 +9076,7 @@ struct EdSnap {
     int exposure, gamma, contrast, rot;
     bool mirror;
     int srcId;        // який саме оригінал був у роботі
+    int vidW = 0, vidH = 0;   // CAPS-90: розмір документа відео (0 — не відео)
 };
 
 struct EdTile {
@@ -9076,7 +9107,8 @@ enum class EdHit { None, Canvas, Tool, Swatch, Opacity, Undo, Redo, Help,
                    LibPlayer,
                    VidFilm, VidEdit,     // CAPS-79: стрічка (вибір, проміжок, ручки обрізання) і кнопки правок
                    VidMarks,             // CAPS-80: доріжка позначок
-                   MetaClear };          // CAPS-88: «Прибрати всі метадані»
+                   MetaClear,            // CAPS-88: «Прибрати всі метадані»
+                   VidResize };          // CAPS-90: «Розмір відео…» у правій панелі
 
 struct EdRegion { RECT r; EdHit what; int idx; };
 
@@ -9223,6 +9255,13 @@ bool EdObjLive(const EdObj& o)
     return f >= o.vf0 && f < o.vf1;
 }
 RECT      g_edRcTimeline = {};
+// CAPS-90: відео можна зменшити й кадрувати (як знімок). Документ редактора —
+// кадр, масштабований до g_evDocW×g_evDocH (0 — як джерело); кадр (g_edCrop)
+// і позначки — у ЦИХ координатах. Джерело не чіпається: геометрія — рецепт
+// проєкту, застосовується при збереженні MP4 і в GIF.
+int       g_evDocW = 0, g_evDocH = 0;
+RECT      g_evSavedCrop = {};
+int       g_evSavedDocW = 0, g_evSavedDocH = 0;
 wchar_t   g_evPath[MAX_PATH] = {}, g_evName[128] = {};
 double    g_evDur = 0, g_evPos = 0, g_evFps = 30, g_evRate = 1.0, g_evTlZoom = 1.0, g_evTlOff = 0;
 int       g_evW = 0, g_evH = 0, g_evRev = 0;
@@ -9286,7 +9325,11 @@ bool EvConfirmClose();
 bool EvConfirmReplace();
 void EvSaved(LPARAM lp);
 void EvSaveTick();
+void EvApplyDocSize();                           // CAPS-90
+void EvFreezeForEdit();
 void EvNoteMarkUndo();                         // CAPS-80
+void EvRefreeze();                             // CAPS-90
+bool EvHasGeom();
 void EvAdoptMarks();
 bool EvViewWanted();
 void EvOverSync();
@@ -9334,6 +9377,8 @@ void LibClearAll();
 extern const wchar_t* kRegEdLast;   // визначено біля решти ключів реєстру редактора
 const wchar_t* EdLibDir();            // тека бібліотеки, створюється на місці
 void EdToast(Str s);
+wchar_t g_edToastText[160] = {};       // CAPS-89: тост із готовим текстом (розмір файлу тощо)
+void EdToastText(const wchar_t* t);
 bool EdSelBounds(RECT* out);          // спільні габарити вибраного
 bool EdManySel();                     // вибрано двоє й більше
 std::vector<int> EdSelAll();          // головний вибраний плюс решта
@@ -10162,6 +10207,7 @@ void EdSnapTone(EdSnap& s)
     s.exposure = g_edExposure; s.gamma = g_edGamma; s.contrast = g_edContrast;
     s.rot = g_edRot;           s.mirror = g_edMirror;
     s.srcId = g_edSrcId;
+    s.vidW = g_evDocW;         s.vidH = g_evDocH;   // CAPS-90
 }
 
 void EdPushUndo()
@@ -10200,6 +10246,11 @@ void EdApply(const EdSnap& s)
     g_edRot = s.rot; g_edMirror = s.mirror;
     if (geom || tone) EdRebuildImage();
     if (geom && g_edWnd) { EdFitView(); EdLayout(g_edWnd); }
+    // CAPS-90: інший розмір документа відео — кадр перезаморозити в новому масштабі
+    if (g_edVideo && (s.vidW != g_evDocW || s.vidH != g_evDocH)) {
+        g_evDocW = s.vidW; g_evDocH = s.vidH;
+        EvRefreeze();
+    }
 }
 
 void EdUndoAction()
@@ -12514,11 +12565,9 @@ void EdPaintRail(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
             DeleteObject(sb);
         }
         const bool active = ((int)g_edTool == i);
-        // CAPS-78: у відео поки працює лише «Вибір»; решта — сірі, на своїх місцях (CAPS-80)
-        const bool off = g_edVideo && i == 10;   // CAPS-80: у відео нема лише кадрування
-        const bool hot = (g_edHotWhat == EdHit::Tool && g_edHotIdx == i) && !off;
+        const bool hot = (g_edHotWhat == EdHit::Tool && g_edHotIdx == i);
         EdPaintButton(g, *r, t, active, hot, !active);
-        EdIcon(g, icos[i], EdIconBox(*r), EdC(active ? t.accent : (off ? t.text2 : t.text), off ? 110 : 255), 1.5f);
+        EdIcon(g, icos[i], EdIconBox(*r), EdC(active ? t.accent : t.text), 1.5f);
     }
     // CAPS-69: «Зображення» — не інструмент, а дія (вибрати файл), тож ніколи
     // не буває «увімкненою».
@@ -14755,7 +14804,7 @@ void EdPaintStatus(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     // жодній кнопці; підтвердження дій — галочкою на самій кнопці.
     const bool toast = (g_edToast != Str::Empty) && (int)(g_edToastUntil - GetTickCount()) > 0;
     if (toast)
-        lstrcpynW(buf, S(g_edToast), 128);
+        lstrcpynW(buf, g_edToastText[0] ? g_edToastText : S(g_edToast), 128);
     else if (g_edVideo)                                     // CAPS-78: «Кадр N з M»
         EvStatusText(buf, 128);                             // CAPS-79: ширина — під «після правок»
     else if (g_edSel >= 0 && g_edSel < (int)g_edObjs.size())
@@ -15931,6 +15980,8 @@ LPCWSTR EdCursorFor(POINT pt)
 // Тіла нижче — біля решти дій над знімком; діалогу вони потрібні вже тут.
 bool EdResizeImage(int nw, int nh, bool scaleText, bool sharp);
 bool EdResizeCanvas(int nw, int nh);
+bool EvResizeTo(int nw, int nh, bool scaleText);   // CAPS-90
+bool EvSizeDialog(HWND owner);
 
 // ---- CAPS-44: діалог розміру -------------------------------------------
 //
@@ -15945,6 +15996,7 @@ HWND g_edSzW = nullptr, g_edSzH = nullptr;
 HWND g_edSzPctW = nullptr, g_edSzPctH = nullptr;
 HWND g_edSzKeep = nullptr, g_edSzText = nullptr, g_edSzSharp = nullptr;
 bool g_edSzCanvas = false;      // полотно чи зображення
+bool g_edSzVideo = false;       // CAPS-90: відео — лише зменшення, парні сторони
 // Вимкнув один раз — лишається вимкненим (зауваження власника). Стан живе,
 // поки живе програма: у реєстр його не пишемо, щоб не плодити ключів заради
 // однієї галочки.
@@ -16103,8 +16155,8 @@ bool EdSizeDialog(HWND owner, bool canvas)
 {
     if (!g_edImg || g_edSzWnd) return false;
     g_edSzCanvas = canvas;
-    g_edSzOrigW = g_edImgW;
-    g_edSzOrigH = g_edImgH;
+    g_edSzOrigW = g_edSzVideo ? EdViewW() : g_edImgW;   // CAPS-90: у відео — видиме (кадр)
+    g_edSzOrigH = g_edSzVideo ? EdViewH() : g_edImgH;
     g_edSzOk = false;
 
     static bool reg = false;
@@ -16123,13 +16175,13 @@ bool EdSizeDialog(HWND owner, bool canvas)
     const int pad = EdPx(14), lh = EdPx(24), gap = EdPx(10);
     // ⚠ Висота залежить від того, на скільки рядків розлізеться примітка: у
     // діалозі зображення вона довша й накривала кнопки.
-    const int w = EdPx(canvas ? 360 : 380), h = EdPx(canvas ? 276 : 348);
+    const int w = EdPx(canvas ? 360 : 380), h = EdPx(canvas ? 276 : (g_edSzVideo ? 324 : 348));
     RECT orc;
     GetWindowRect(owner, &orc);
     const int px = orc.left + ((orc.right - orc.left) - w) / 2;
     const int py = orc.top + ((orc.bottom - orc.top) - h) / 3;
     g_edSzWnd = CreateWindowExW(WS_EX_DLGMODALFRAME, L"lilhelpers_size",
-                                S(canvas ? Str::EdSizeCanTitle : Str::EdSizeImgTitle),
+                                S(g_edSzVideo ? Str::VidSizeTitle : canvas ? Str::EdSizeCanTitle : Str::EdSizeImgTitle),
                                 WS_POPUPWINDOW | WS_CAPTION, px, py, w, h,
                                 owner, nullptr, inst, nullptr);
     if (!g_edSzWnd) return false;
@@ -16166,14 +16218,18 @@ bool EdSizeDialog(HWND owner, bool canvas)
         g_edSzText = EdSzMake(g_edSzWnd, L"BUTTON", S(Str::EdSizeText), BS_AUTOCHECKBOX,
                               pad, y, w - pad * 2, lh, 14);
         y += lh;
-        g_edSzSharp = EdSzMake(g_edSzWnd, L"BUTTON", S(Str::EdSizeSharp), BS_AUTOCHECKBOX,
-                               pad, y, w - pad * 2, lh, 15);
-        y += lh + EdPx(4);
+        g_edSzSharp = nullptr;
+        if (!g_edSzVideo) {                   // CAPS-90: у відео «різко» нема сенсу — кодек згладить
+            g_edSzSharp = EdSzMake(g_edSzWnd, L"BUTTON", S(Str::EdSizeSharp), BS_AUTOCHECKBOX,
+                                   pad, y, w - pad * 2, lh, 15);
+            y += lh;
+        }
+        y += EdPx(4);
     } else {
         g_edSzText = nullptr;
         g_edSzSharp = nullptr;
     }
-    EdSzMake(g_edSzWnd, L"STATIC", S(canvas ? Str::EdSizeNoteCan : Str::EdSizeNoteImg), 0,
+    EdSzMake(g_edSzWnd, L"STATIC", S(g_edSzVideo ? Str::VidSizeNote : canvas ? Str::EdSizeNoteCan : Str::EdSizeNoteImg), 0,
              pad, y, w - pad * 2, lh * (canvas ? 2 : 3), 0);
 
     // ⚠ Кнопки ставимо від КЛІЄНТСЬКОЇ висоти, а не від висоти вікна: підпис
@@ -16209,8 +16265,25 @@ bool EdSizeDialog(HWND owner, bool canvas)
 
     if (!g_edSzOk) return false;
     if (g_edSzLastW < 1 || g_edSzLastH < 1) return false;
+    if (g_edSzVideo) {                        // CAPS-90: лише зменшення — більше за видиме не буває
+        int nw = g_edSzLastW, nh = g_edSzLastH;
+        if (nw > g_edSzOrigW) nw = g_edSzOrigW;
+        if (nh > g_edSzOrigH) nh = g_edSzOrigH;
+        return EvResizeTo(nw, nh, g_edSzLastText);
+    }
     return canvas ? EdResizeCanvas(g_edSzLastW, g_edSzLastH)
                   : EdResizeImage(g_edSzLastW, g_edSzLastH, g_edSzLastText, g_edSzLastSharp);
+}
+
+// CAPS-90: «Розмір відео…» — той самий діалог у режимі відео.
+bool EvSizeDialog(HWND owner)
+{
+    if (!g_edVideo) return false;
+    EvFreezeForEdit();
+    g_edSzVideo = true;
+    const bool r = EdSizeDialog(owner, false);
+    g_edSzVideo = false;
+    return r;
 }
 
 // ---- CAPS-37: підказки над кнопками -------------------------------------
@@ -16247,7 +16320,7 @@ Str EdTipFor(EdHit what, int idx)
             if (idx == 1 && EvSelIsOff()) return Str::VidTipRestore;
             if (idx >= 0 && idx < 4) return ve[idx];
         }
-        if (what == EdHit::Tool && idx == 10) return Str::VidToolLater;
+        if (what == EdHit::VidResize) return Str::VidTipSize;   // CAPS-90
         if (what == EdHit::VidMarks) return Str::VidTipMarks;
     }
     switch (what) {
@@ -17040,6 +17113,8 @@ void EdCropFinish(bool apply)
     if (apply) {
         RECT n = g_edCropEdit;
         EdCropClamp(n);
+        // CAPS-90: у відео кадр парний — H.264 не вміє непарних сторін.
+        if (g_edVideo) { n.right -= (n.right - n.left) & 1; n.bottom -= (n.bottom - n.top) & 1; }
         // Кадр на весь знімок — це відсутність кадру, а не кадр «як є»:
         // інакше «Скинути» мусив би вміти два різні порожні стани.
         const bool whole = (n.left <= 0 && n.top <= 0 &&
@@ -18615,7 +18690,7 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == 7) {
             const bool toastOver = (int)(g_edToastUntil - GetTickCount()) <= 0;
             const bool tickOver  = (int)(g_edTickUntil  - GetTickCount()) <= 0;
-            if (toastOver) g_edToast = Str::Empty;
+            if (toastOver) { g_edToast = Str::Empty; g_edToastText[0] = 0; }
             if (tickOver)  g_edTickWhat = EdHit::None;
             if (toastOver && tickOver) KillTimer(hwnd, 7);
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -18993,12 +19068,20 @@ HGLOBAL EdPngGlobal(Gdiplus::Bitmap* bmp)
 
 void EdToast(Str s)
 {
+    g_edToastText[0] = 0;
     g_edToast = s;
     g_edToastUntil = GetTickCount() + 2200;
     if (g_edWnd) {
         SetTimer(g_edWnd, 7, 400, nullptr);
         InvalidateRect(g_edWnd, nullptr, FALSE);
     }
+}
+
+void EdToastText(const wchar_t* t)
+{
+    EdToast(Str::GifSavedFmt);                 // будь-який не-порожній ключ: текст — свій
+    lstrcpynW(g_edToastText, t, 160);
+    g_edToastUntil = GetTickCount() + 3500;    // довше: тут число, яке хочуть прочитати
 }
 
 // Галочка на кнопці: той самий таймер 7, що й у тосту, — він і гасить.
@@ -20805,6 +20888,11 @@ HWND                   g_evView = nullptr;
 UINT                   g_evScW = 0, g_evScH = 0;
 bool                   g_evReady = false;      // рушій готовий (CANPLAY)
 bool                   g_evSeeking = false;    // перемотка ще не завершилась
+// Після перемотки рушій віддає новий кадр не одразу: SEEKED уже прийшов, а
+// TransferVideoFrame ще віддає чорне. Тому автозаморозка (EvTick) чекає, поки
+// OnVideoStreamTick справді віддасть кадр, або ~300 мс — запобіжник.
+bool                   g_evFrameFresh = false;
+int                    g_evStaleTicks = 0;
 double                 g_evSeekQueued = -1.0;  // наступна ціль, поки йде попередня
 ULONGLONG              g_evRevT0 = 0;
 double                 g_evRevPos0 = 0;
@@ -20863,7 +20951,14 @@ struct EvMarkOp { int type = 0; RECT r = {}; std::vector<BYTE> px; int param = 0
 struct EvMarkSpan { int a = 0, b = 0; std::vector<EvMarkOp> ops; };
 
 struct EvExportJob {
-    std::vector<EvMarkSpan> spans;     // CAPS-80: порожньо — позначок нема
+    std::vector<EvMarkSpan> spans;     // CAPS-80: порожньо — позначок нема (у координатах ВИХОДУ)
+    RECT crop = { 0, 0, 0, 0 };        // CAPS-90: кадр у пікселях ДЖЕРЕЛА (порожній — усе)
+    int outW = 0, outH = 0;            // CAPS-90: розмір виходу (0 — як джерело); парні
+    // CAPS-89: анімований GIF замість MP4
+    bool gif = false;
+    int gifFps = 15, gifW = 0, gifH = 0, gifColors = 256, gifLoop = 0;   // loop: 0 безкінечно, 1 один раз
+    bool gifDither = true;
+    ULONGLONG gifBytes = 0;            // скільки записано (для тосту й харнесу)
     wchar_t src[MAX_PATH] = {};
     wchar_t dst[MAX_PATH] = {};
     std::vector<EvSeg> keep;
@@ -20882,6 +20977,69 @@ struct EvExportJob {
 };
 
 inline LONGLONG EvTimeOf(LONGLONG frame, double fps) { return (LONGLONG)((double)frame * 1e7 / fps + 0.5); }
+
+// CAPS-90: кадр джерела (BGRA, рядок = sw*4) → вихід dw×dh: вирізати crop і
+// зменшити усередненням площ (для зменшення воно чесніше за бікубік і без
+// кілець на дрібному тексті). Без зміни розміру — лише копія рядків.
+inline void EvGeomFrame(const BYTE* src, int sw, int sh, RECT crop, std::vector<BYTE>& dst, int dw, int dh)
+{
+    if (crop.right <= crop.left || crop.bottom <= crop.top) crop = RECT{ 0, 0, sw, sh };
+    if (crop.left < 0) crop.left = 0;
+    if (crop.top < 0) crop.top = 0;
+    if (crop.right > sw) crop.right = sw;
+    if (crop.bottom > sh) crop.bottom = sh;
+    const int cw = crop.right - crop.left, ch = crop.bottom - crop.top;
+    dst.resize((size_t)dw * dh * 4);
+    if (cw < 1 || ch < 1 || dw < 1 || dh < 1) return;
+    if (cw == dw && ch == dh) {
+        for (int y = 0; y < dh; ++y)
+            memcpy(&dst[(size_t)y * dw * 4], src + ((size_t)(crop.top + y) * sw + crop.left) * 4, (size_t)dw * 4);
+        return;
+    }
+    // Таблиці ваг по стовпцях: для кожного вихідного — з якого джерельного й скільки, вага = перекриття.
+    std::vector<int> cs(dw), cn(dw);
+    std::vector<float> cwgt;
+    cwgt.reserve((size_t)dw * 3);
+    const double kx = (double)cw / dw, ky = (double)ch / dh;
+    for (int ox = 0; ox < dw; ++ox) {
+        const double x0 = ox * kx, x1 = (ox + 1) * kx;
+        const int s0 = (int)x0, s1 = (int)ceil(x1) > cw ? cw : (int)ceil(x1);
+        cs[ox] = s0; cn[ox] = s1 - s0;
+        for (int sx = s0; sx < s1; ++sx) {
+            const double a = sx > x0 ? sx : x0, b = (sx + 1) < x1 ? (sx + 1) : x1;
+            cwgt.push_back((float)(b > a ? b - a : 0.0));
+        }
+    }
+    std::vector<int> coff(dw);
+    for (int ox = 0, o = 0; ox < dw; ++ox) { coff[ox] = o; o += cn[ox]; }
+    std::vector<float> acc((size_t)dw * 3);
+    const float norm = (float)(1.0 / (kx * ky));
+    for (int oy = 0; oy < dh; ++oy) {
+        const double y0 = oy * ky, y1 = (oy + 1) * ky;
+        const int t0 = (int)y0, t1 = (int)ceil(y1) > ch ? ch : (int)ceil(y1);
+        std::fill(acc.begin(), acc.end(), 0.0f);
+        for (int sy = t0; sy < t1; ++sy) {
+            const double a = sy > y0 ? sy : y0, b = (sy + 1) < y1 ? (sy + 1) : y1;
+            const float wy = (float)(b > a ? b - a : 0.0);
+            if (wy <= 0.0f) continue;
+            const BYTE* row = src + ((size_t)(crop.top + sy) * sw + crop.left) * 4;
+            for (int ox = 0; ox < dw; ++ox) {
+                const float* wx = &cwgt[(size_t)coff[ox]];
+                const BYTE* px = row + (size_t)cs[ox] * 4;
+                float b0 = 0, g0 = 0, r0 = 0;
+                for (int i = 0; i < cn[ox]; ++i, px += 4) { b0 += px[0] * wx[i]; g0 += px[1] * wx[i]; r0 += px[2] * wx[i]; }
+                acc[(size_t)ox * 3] += b0 * wy; acc[(size_t)ox * 3 + 1] += g0 * wy; acc[(size_t)ox * 3 + 2] += r0 * wy;
+            }
+        }
+        BYTE* d = &dst[(size_t)oy * dw * 4];
+        for (int ox = 0; ox < dw; ++ox, d += 4) {
+            float v = acc[(size_t)ox * 3] * norm + 0.5f;     d[0] = (BYTE)(v < 0 ? 0 : v > 255 ? 255 : v);
+            v = acc[(size_t)ox * 3 + 1] * norm + 0.5f;       d[1] = (BYTE)(v < 0 ? 0 : v > 255 ? 255 : v);
+            v = acc[(size_t)ox * 3 + 2] * norm + 0.5f;       d[2] = (BYTE)(v < 0 ? 0 : v > 255 ? 255 : v);
+            d[3] = 255;
+        }
+    }
+}
 
 // Позиція кадру idx у новому відео; -1 — вирізано.
 inline LONGLONG EvMapFrame(const std::vector<EvSeg>& keep, int idx)
@@ -20977,6 +21135,12 @@ inline HRESULT EvMarksEmit(EvExportJob* j, IMFSinkWriter* sw, DWORD vOut, IMFSam
     }
     if (l2) { b2->Unlock2D(); b2->Release(); } else b->Unlock();
     b->Release();
+    // CAPS-90: кадр і розмір — до позначок (вони вже в координатах виходу)
+    const bool geom = j->outW > 0 && j->outH > 0;
+    const int ow = geom ? j->outW : (int)vw, oh = geom ? j->outH : (int)vh;
+    const size_t obytes = (size_t)ow * oh * 4;
+    std::vector<BYTE> base;
+    if (geom) EvGeomFrame(frame.data(), (int)vw, (int)vh, j->crop, base, ow, oh);
     HRESULT hr = S_OK;
     for (size_t k = 0; k < j->keep.size() && SUCCEEDED(hr); ++k) {
         const int from = idx > j->keep[k].a ? idx : j->keep[k].a;
@@ -20984,13 +21148,13 @@ inline HRESULT EvMarksEmit(EvExportJob* j, IMFSinkWriter* sw, DWORD vOut, IMFSam
         for (int f = from; f < to && SUCCEEDED(hr); ++f) {
             const EvMarkSpan* sp = nullptr;
             for (const EvMarkSpan& x : j->spans) if (f >= x.a && f < x.b) { sp = &x; break; }
-            comp = frame;
-            if (sp) EvApplyMarks(comp.data(), (int)vw, (int)vh, sp->ops);
+            comp = geom ? base : frame;
+            if (sp) EvApplyMarks(comp.data(), ow, oh, sp->ops);
             IMFMediaBuffer* ob = nullptr;
-            hr = MFCreateMemoryBuffer((DWORD)bytes, &ob);
+            hr = MFCreateMemoryBuffer((DWORD)obytes, &ob);
             BYTE* d = nullptr;
             if (SUCCEEDED(hr)) hr = ob->Lock(&d, nullptr, nullptr);
-            if (SUCCEEDED(hr)) { memcpy(d, comp.data(), bytes); ob->Unlock(); ob->SetCurrentLength((DWORD)bytes); }
+            if (SUCCEEDED(hr)) { memcpy(d, comp.data(), obytes); ob->Unlock(); ob->SetCurrentLength((DWORD)obytes); }
             IMFSample* os = nullptr;
             if (SUCCEEDED(hr)) hr = MFCreateSample(&os);
             if (SUCCEEDED(hr)) hr = os->AddBuffer(ob);
@@ -21032,8 +21196,10 @@ inline HRESULT EvExportRun(EvExportJob* j)
     LONGLONG totalKeep = 0;
     for (size_t i = 0; i < j->keep.size(); ++i) totalKeep += j->keep[i].b - j->keep[i].a;
     const int lastFrame = j->keep.back().b;
-    // CAPS-80: з позначками кадр потрібен у пам'яті (RGB32) — туди малюються шари й ефекти
-    const bool marks = !j->spans.empty();
+    // CAPS-80: з позначками кадр потрібен у пам'яті (RGB32) — туди малюються шари й
+    // ефекти; CAPS-90: з кадром чи іншим розміром — теж (вирізати й зменшити).
+    const bool geom = j->outW > 0 && j->outH > 0;
+    const bool marks = !j->spans.empty() || geom;
     UINT32 vw = 0, vh = 0;
     std::vector<BYTE> frame, comp;
 
@@ -21085,8 +21251,11 @@ inline HRESULT EvExportRun(EvExportJob* j)
         br = MFGetAttributeUINT32(nat, MF_MT_AVG_BITRATE, 0);
         nat->Release();
         if (!fn || !fd) { fn = (UINT32)(fps * 1000 + 0.5); fd = 1000; }
+        // CAPS-90: вихід — кадр і розмір із завдання
+        const UINT32 ow = geom ? (UINT32)j->outW : w, oh = geom ? (UINT32)j->outH : h;
         // бітрейт джерела з запасом: друге стиснення без запасу помітно мило б дрібний текст
         double obr = br ? br * 1.25 : (double)w * h * fps * 0.15;
+        if (geom && w * h > 0) obr *= (double)ow * oh / ((double)w * h);   // менший кадр — менше бітів
         if (obr < 1e6) obr = 1e6;
         if (obr > 1e8) obr = 1e8;
 
@@ -21126,7 +21295,7 @@ inline HRESULT EvExportRun(EvExportJob* j)
         vo->SetUINT32(MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709);
         vo->SetUINT32(MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709);
         vo->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235);
-        MFSetAttributeSize(vo, MF_MT_FRAME_SIZE, w, h);
+        MFSetAttributeSize(vo, MF_MT_FRAME_SIZE, ow, oh);
         MFSetAttributeRatio(vo, MF_MT_FRAME_RATE, fn, fd);
         MFSetAttributeRatio(vo, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
         hr = sw->AddStream(vo, &vOut);
@@ -21151,8 +21320,8 @@ inline HRESULT EvExportRun(EvExportJob* j)
             rgbIn->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
             rgbIn->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
             rgbIn->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-            rgbIn->SetUINT32(MF_MT_DEFAULT_STRIDE, w * 4);
-            MFSetAttributeSize(rgbIn, MF_MT_FRAME_SIZE, w, h);
+            rgbIn->SetUINT32(MF_MT_DEFAULT_STRIDE, ow * 4);
+            MFSetAttributeSize(rgbIn, MF_MT_FRAME_SIZE, ow, oh);
             MFSetAttributeRatio(rgbIn, MF_MT_FRAME_RATE, fn, fd);
             MFSetAttributeRatio(rgbIn, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
         }
@@ -21327,6 +21496,652 @@ inline HRESULT EvExportRun(EvExportJob* j)
     return hr;
 }
 
+
+// ===================== CAPS-89: експорт в анімований GIF =====================
+// Свій кодувальник: WIC-ів GIF дає слабку палітру й не вміє різниці кадрів.
+// Палітра — ГЛОБАЛЬНА (медіанний розріз по гістограмі 6 біт/канал із проб
+// у різних місцях запису): так кадри порівнянні між собою, і незмінні пікселі
+// йдуть прозорими — файл менший у рази на записах екрана. Один слот палітри —
+// прозорість. Затримка — у сотих секунди за розкладом частоти, накопиченим:
+// 15 кадрів/с дають 6.67 сотих, і без накопичення ролик плив би на секунди.
+
+struct GifPal { int n = 0; BYTE c[256][3]; };
+
+inline int GifBin(BYTE r, BYTE g, BYTE b) { return ((r >> 2) << 12) | ((g >> 2) << 6) | (b >> 2); }
+
+inline void GifHistAdd(std::vector<unsigned>& hist, const BYTE* bgra, int w, int h)
+{
+    if (hist.size() != 262144) hist.assign(262144, 0);
+    const size_t n = (size_t)w * h;
+    for (size_t i = 0; i < n; ++i, bgra += 4) ++hist[GifBin(bgra[2], bgra[1], bgra[0])];
+}
+
+// Медіанний розріз: коробки з бінів; ділимо найважчу вздовж найдовшої осі по
+// медіані, доки не набереться n кольорів. Колір коробки — зважене середнє.
+void GifMedianCut(const std::vector<unsigned>& hist, int n, GifPal& out)
+{
+    struct Box { std::vector<int> bins; unsigned long long cnt; int r0, r1, g0, g1, b0, b1; };
+    auto bounds = [&](Box& bx) {
+        bx.r0 = bx.g0 = bx.b0 = 63; bx.r1 = bx.g1 = bx.b1 = 0; bx.cnt = 0;
+        for (int i : bx.bins) {
+            const int r = i >> 12, g = (i >> 6) & 63, b = i & 63;
+            if (r < bx.r0) bx.r0 = r; if (r > bx.r1) bx.r1 = r;
+            if (g < bx.g0) bx.g0 = g; if (g > bx.g1) bx.g1 = g;
+            if (b < bx.b0) bx.b0 = b; if (b > bx.b1) bx.b1 = b;
+            bx.cnt += hist[(size_t)i];
+        }
+    };
+    std::vector<Box> boxes(1);
+    for (int i = 0; i < 262144; ++i) if (hist[(size_t)i]) boxes[0].bins.push_back(i);
+    if (boxes[0].bins.empty()) { out.n = 1; out.c[0][0] = out.c[0][1] = out.c[0][2] = 0; return; }
+    bounds(boxes[0]);
+    while ((int)boxes.size() < n) {
+        int best = -1;
+        unsigned long long bestScore = 0;
+        for (size_t k = 0; k < boxes.size(); ++k) {
+            const Box& bx = boxes[k];
+            const int span = (bx.r1 - bx.r0) > (bx.g1 - bx.g0) ? ((bx.r1 - bx.r0) > (bx.b1 - bx.b0) ? bx.r1 - bx.r0 : bx.b1 - bx.b0)
+                                                              : ((bx.g1 - bx.g0) > (bx.b1 - bx.b0) ? bx.g1 - bx.g0 : bx.b1 - bx.b0);
+            if (bx.bins.size() < 2 || span == 0) continue;
+            const unsigned long long score = bx.cnt * (unsigned long long)(span + 1);
+            if (score > bestScore) { bestScore = score; best = (int)k; }
+        }
+        if (best < 0) break;
+        Box& bx = boxes[(size_t)best];
+        const int dr = bx.r1 - bx.r0, dg = bx.g1 - bx.g0, db = bx.b1 - bx.b0;
+        const int axis = (dr >= dg && dr >= db) ? 0 : (dg >= db ? 1 : 2);
+        std::sort(bx.bins.begin(), bx.bins.end(), [axis](int a, int b) {
+            const int ka = axis == 0 ? a >> 12 : axis == 1 ? (a >> 6) & 63 : a & 63;
+            const int kb = axis == 0 ? b >> 12 : axis == 1 ? (b >> 6) & 63 : b & 63;
+            return ka < kb;
+        });
+        unsigned long long acc = 0;
+        size_t cut = 0;
+        for (; cut < bx.bins.size() - 1; ++cut) { acc += hist[(size_t)bx.bins[cut]]; if (acc * 2 >= bx.cnt) { ++cut; break; } }
+        if (cut == 0) cut = 1;
+        if (cut >= bx.bins.size()) cut = bx.bins.size() - 1;
+        Box nb;
+        nb.bins.assign(bx.bins.begin() + (ptrdiff_t)cut, bx.bins.end());
+        bx.bins.resize(cut);
+        bounds(bx);
+        bounds(nb);
+        boxes.push_back(std::move(nb));
+    }
+    out.n = 0;
+    for (const Box& bx : boxes) {
+        double r = 0, g = 0, b = 0, w = 0;
+        for (int i : bx.bins) {
+            const double c = (double)hist[(size_t)i];
+            r += ((i >> 12) * 4 + 2) * c; g += (((i >> 6) & 63) * 4 + 2) * c; b += ((i & 63) * 4 + 2) * c; w += c;
+        }
+        if (w <= 0) continue;
+        out.c[out.n][0] = (BYTE)(r / w + 0.5); out.c[out.n][1] = (BYTE)(g / w + 0.5); out.c[out.n][2] = (BYTE)(b / w + 0.5);
+        if (++out.n >= 256) break;
+    }
+}
+
+// Найближчий колір палітри — через кеш на 15-бітному ключі (32768 записів).
+struct GifQuant {
+    GifPal pal;
+    std::vector<BYTE> lut;
+    void Reset() { lut.assign(32768, 0xFF); }
+    inline int Map(int r, int g, int b) {
+        const int key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+        BYTE& e = lut[(size_t)key];
+        if (e != 0xFF) return e;
+        int best = 0, bd = INT_MAX;
+        for (int i = 0; i < pal.n; ++i) {
+            const int dr = r - pal.c[i][0], dg = g - pal.c[i][1], db = b - pal.c[i][2];
+            const int d = dr * dr * 2 + dg * dg * 3 + db * db;   // око чутливіше до зеленого
+            if (d < bd) { bd = d; best = i; }
+        }
+        e = (BYTE)best;
+        return best;
+    }
+};
+
+// Кадр BGRA → індекси палітри; з дизерингом Флойда–Стайнберга (помилка
+// розходиться на сусідів), без нього — просто найближчий.
+void GifQuantize(GifQuant& q, const BYTE* bgra, int w, int h, bool dither, std::vector<BYTE>& idx)
+{
+    idx.resize((size_t)w * h);
+    if (!dither) {
+        for (size_t i = 0; i < (size_t)w * h; ++i, bgra += 4) idx[i] = (BYTE)q.Map(bgra[2], bgra[1], bgra[0]);
+        return;
+    }
+    std::vector<int> cur((size_t)(w + 2) * 3, 0), nxt((size_t)(w + 2) * 3, 0);
+    for (int y = 0; y < h; ++y) {
+        std::fill(nxt.begin(), nxt.end(), 0);
+        const BYTE* row = bgra + (size_t)y * w * 4;
+        for (int x = 0; x < w; ++x) {
+            int r = row[x * 4 + 2] + cur[(size_t)(x + 1) * 3] / 16;
+            int g = row[x * 4 + 1] + cur[(size_t)(x + 1) * 3 + 1] / 16;
+            int b = row[x * 4] + cur[(size_t)(x + 1) * 3 + 2] / 16;
+            r = r < 0 ? 0 : r > 255 ? 255 : r; g = g < 0 ? 0 : g > 255 ? 255 : g; b = b < 0 ? 0 : b > 255 ? 255 : b;
+            const int i = q.Map(r, g, b);
+            idx[(size_t)y * w + x] = (BYTE)i;
+            const int er = r - q.pal.c[i][0], eg = g - q.pal.c[i][1], eb = b - q.pal.c[i][2];
+            int* c1 = &cur[(size_t)(x + 2) * 3];           // праворуч 7/16
+            c1[0] += er * 7; c1[1] += eg * 7; c1[2] += eb * 7;
+            int* n0 = &nxt[(size_t)x * 3];                 // ліворуч-знизу 3/16
+            n0[0] += er * 3; n0[1] += eg * 3; n0[2] += eb * 3;
+            int* n1 = &nxt[(size_t)(x + 1) * 3];           // знизу 5/16
+            n1[0] += er * 5; n1[1] += eg * 5; n1[2] += eb * 5;
+            int* n2 = &nxt[(size_t)(x + 2) * 3];           // праворуч-знизу 1/16
+            n2[0] += er; n2[1] += eg; n2[2] += eb;
+        }
+        cur.swap(nxt);
+    }
+}
+
+// LZW (GIF-варіант): змінна довжина коду, очищення на переповненні таблиці,
+// підблоки по 255 байтів. Словник — відкрита адресація на 8192 комірки.
+void GifLzw(const BYTE* data, size_t n, int minCode, std::vector<BYTE>& out)
+{
+    const int clearCode = 1 << minCode, eoi = clearCode + 1;
+    int codeSize = minCode + 1, next = eoi + 1;
+    unsigned acc = 0;
+    int bits = 0;
+    std::vector<BYTE> block;
+    block.reserve(256);
+    auto put = [&](int code) {
+        acc |= (unsigned)code << bits;
+        bits += codeSize;
+        while (bits >= 8) {
+            block.push_back((BYTE)(acc & 0xFF));
+            acc >>= 8; bits -= 8;
+            if (block.size() == 255) { out.push_back(255); out.insert(out.end(), block.begin(), block.end()); block.clear(); }
+        }
+    };
+    struct Ent { int key; int code; };
+    std::vector<Ent> tab(8192);
+    auto clearTab = [&]() { for (Ent& e : tab) e.key = -1; next = eoi + 1; codeSize = minCode + 1; };
+    auto find = [&](int key) -> int {
+        unsigned h = ((unsigned)key * 2654435761u) >> 19;
+        for (;;) {
+            Ent& e = tab[h & 8191];
+            if (e.key == key) return e.code;
+            if (e.key == -1) return -1;
+            ++h;
+        }
+    };
+    auto insert = [&](int key, int code) {
+        unsigned h = ((unsigned)key * 2654435761u) >> 19;
+        for (;;) { Ent& e = tab[h & 8191]; if (e.key == -1) { e.key = key; e.code = code; return; } ++h; }
+    };
+    clearTab();
+    put(clearCode);
+    if (n == 0) { put(eoi); }
+    else {
+        int prefix = data[0];
+        for (size_t i = 1; i < n; ++i) {
+            const int c = data[i];
+            const int key = (prefix << 8) | c;
+            const int found = find(key);
+            if (found >= 0) { prefix = found; continue; }
+            put(prefix);
+            if (next < 4096) {
+                insert(key, next);
+                if (next == (1 << codeSize)) ++codeSize;
+                ++next;
+            } else {
+                put(clearCode);
+                clearTab();
+            }
+            prefix = c;
+        }
+        put(prefix);
+        put(eoi);
+    }
+    if (bits > 0) block.push_back((BYTE)(acc & 0xFF));
+    if (!block.empty()) { out.push_back((BYTE)block.size()); out.insert(out.end(), block.begin(), block.end()); }
+    out.push_back(0);
+}
+
+inline void GifPut16(std::vector<BYTE>& b, int v) { b.push_back((BYTE)(v & 0xFF)); b.push_back((BYTE)((v >> 8) & 0xFF)); }
+
+// Заголовок: екран, глобальна палітра (доповнена до степеня двійки; останній
+// слот — прозорість), повтор. bits — розмір таблиці (2..8).
+void GifHeader(std::vector<BYTE>& b, int w, int h, const GifPal& pal, int bits, int loop)
+{
+    const char* hdr = "GIF89a";
+    b.insert(b.end(), hdr, hdr + 6);
+    GifPut16(b, w); GifPut16(b, h);
+    b.push_back((BYTE)(0x80 | ((bits - 1) << 4) | (bits - 1)));
+    b.push_back(0); b.push_back(0);
+    const int size = 1 << bits;
+    for (int i = 0; i < size; ++i) {
+        if (i < pal.n) { b.push_back(pal.c[i][0]); b.push_back(pal.c[i][1]); b.push_back(pal.c[i][2]); }
+        else { b.push_back(0); b.push_back(0); b.push_back(0); }
+    }
+    if (loop == 0) {                       // безкінечно; «один раз» — без розширення
+        static const BYTE ns[] = { 0x21, 0xFF, 0x0B, 'N','E','T','S','C','A','P','E','2','.','0', 0x03, 0x01, 0, 0, 0 };
+        b.insert(b.end(), ns, ns + sizeof(ns));
+    }
+}
+
+// Один кадр: GCE (лишити попереднє, прозорість, затримка) + дескриптор + LZW.
+void GifFrame(std::vector<BYTE>& b, const BYTE* idx, int fw, int x, int y, int w, int h, int delay, int transIdx, int bits)
+{
+    b.push_back(0x21); b.push_back(0xF9); b.push_back(4);
+    b.push_back((BYTE)((1 << 2) | (transIdx >= 0 ? 1 : 0)));
+    GifPut16(b, delay < 0 ? 0 : delay > 65535 ? 65535 : delay);
+    b.push_back((BYTE)(transIdx >= 0 ? transIdx : 0));
+    b.push_back(0);
+    b.push_back(0x2C);
+    GifPut16(b, x); GifPut16(b, y); GifPut16(b, w); GifPut16(b, h);
+    b.push_back(0);
+    const int minCode = bits < 2 ? 2 : bits;
+    b.push_back((BYTE)minCode);
+    std::vector<BYTE> sub((size_t)w * h);
+    for (int r = 0; r < h; ++r) memcpy(&sub[(size_t)r * w], idx + (size_t)(y + r) * fw + x, (size_t)w);
+    GifLzw(sub.data(), sub.size(), minCode, b);
+}
+
+// Потік кадрів → файл: різниця з попереднім (прямокутник змін, поза змінами —
+// прозоро), однакові кадри лише подовжують попередній.
+struct GifStream {
+    HANDLE f = INVALID_HANDLE_VALUE;
+    std::vector<BYTE> mem;                 // без файлу — у пам'ять (оцінка розміру)
+    int w = 0, h = 0, bits = 8, transIdx = 255;
+    std::vector<BYTE> prev, pend;          // pend — ще не записаний кадр (щоб домалювати затримку)
+    RECT pendRc = {};
+    int pendDelay = 0;
+    bool pendTrans = false, havePend = false, first = true;
+    ULONGLONG bytes = 0;
+    int sumDelay = 0;                      // скільки сотих уже записано (для підгонки кінця)
+    bool Write(const std::vector<BYTE>& b) {
+        bytes += b.size();
+        if (f == INVALID_HANDLE_VALUE) { mem.insert(mem.end(), b.begin(), b.end()); return true; }
+        DWORD wr = 0;
+        return WriteFile(f, b.data(), (DWORD)b.size(), &wr, nullptr) && wr == b.size();
+    }
+    bool Flush() {
+        if (!havePend) return true;
+        std::vector<BYTE> b;
+        GifFrame(b, pend.data(), w, pendRc.left, pendRc.top, pendRc.right - pendRc.left, pendRc.bottom - pendRc.top,
+                 pendDelay, pendTrans ? transIdx : -1, bits);
+        sumDelay += pendDelay;
+        havePend = false;
+        return Write(b);
+    }
+    bool Push(std::vector<BYTE>& idx, int delay) {
+        if (first) {
+            first = false;
+            prev = idx;
+            pend = idx; pendRc = RECT{ 0, 0, w, h }; pendDelay = delay; pendTrans = false; havePend = true;
+            return true;
+        }
+        int x0 = w, y0 = h, x1 = -1, y1 = -1;
+        for (int y = 0; y < h; ++y) {
+            const BYTE* a = &idx[(size_t)y * w];
+            const BYTE* p = &prev[(size_t)y * w];
+            if (!memcmp(a, p, (size_t)w)) continue;
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+            int xa = 0, xb = w - 1;
+            while (xa < w && a[xa] == p[xa]) ++xa;
+            while (xb > xa && a[xb] == p[xb]) --xb;
+            if (xa < x0) x0 = xa;
+            if (xb > x1) x1 = xb;
+        }
+        if (x1 < 0) { pendDelay += delay; return true; }   // той самий кадр — лише довше
+        if (!Flush()) return false;
+        pend = idx;
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x)
+                if (idx[(size_t)y * w + x] == prev[(size_t)y * w + x]) pend[(size_t)y * w + x] = (BYTE)transIdx;
+        pendRc = RECT{ x0, y0, x1 + 1, y1 + 1 };
+        pendDelay = delay;
+        pendTrans = true;
+        havePend = true;
+        prev.swap(idx);
+        return true;
+    }
+    // totalCs > 0 — скільки має тривати все: останній кадр коротшає чи довшає,
+    // щоб сума збіглась із тривалістю джерела (розклад частоти округлює вгору).
+    bool Finish(int totalCs = 0) {
+        if (havePend && totalCs > 0) {
+            const int rest = totalCs - sumDelay;
+            if (rest >= 1) pendDelay = rest;
+        }
+        if (!Flush()) return false;
+        std::vector<BYTE> t(1, 0x3B);
+        return Write(t);
+    }
+};
+
+inline int GifDelayFor(int m, int fps)
+{
+    return (int)((m + 1) * 100.0 / fps + 0.5) - (int)(m * 100.0 / fps + 0.5);
+}
+
+// Кадр із семпла RGB32 → BGRA в пам'яті (крок рядка — з буфера).
+inline bool EvSampleToRgb(IMFSample* s, UINT32 vw, UINT32 vh, std::vector<BYTE>& frame)
+{
+    IMFMediaBuffer* b = nullptr;
+    if (FAILED(s->GetBufferByIndex(0, &b)) || !b) return false;
+    IMF2DBuffer* b2 = nullptr;
+    BYTE* p = nullptr;
+    LONG pitch = 0;
+    DWORD len = 0;
+    const bool l2 = SUCCEEDED(b->QueryInterface(IID_IMF2DBuffer, (void**)&b2)) && b2 && SUCCEEDED(b2->Lock2D(&p, &pitch));
+    if (!l2) {
+        if (b2) { b2->Release(); b2 = nullptr; }
+        if (FAILED(b->Lock(&p, nullptr, &len))) { b->Release(); return false; }
+        pitch = (LONG)vw * 4;
+        for (LONG c = (LONG)vw * 4; c <= (LONG)vw * 4 + 4096; c += 4)
+            if (len % (DWORD)c == 0 && len / (DWORD)c >= vh) { pitch = c; break; }
+    }
+    const size_t row = (size_t)vw * 4;
+    frame.resize(row * vh);
+    const bool down = pitch < 0;
+    for (UINT32 y = 0; y < vh; ++y) {
+        const BYTE* src = down ? p + (size_t)(-pitch) * (vh - 1 - y) : p + (size_t)pitch * y;
+        memcpy(&frame[(size_t)y * row], src, row);
+    }
+    if (l2) { b2->Unlock2D(); b2->Release(); } else b->Unlock();
+    b->Release();
+    return true;
+}
+
+// Читач лише відео, програмно, RGB32 — для GIF апаратний шлях не потрібен: кадри
+// й так ідуть у пам'ять.
+HRESULT EvGifOpenReader(const wchar_t* src, IMFSourceReader** out, DWORD* vSi, UINT32* w, UINT32* h)
+{
+    IMFAttributes* ra = nullptr;
+    if (FAILED(MFCreateAttributes(&ra, 2))) return E_OUTOFMEMORY;
+    ra->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+    IMFSourceReader* rd = nullptr;
+    HRESULT hr = LhOpenReader(src, ra, &rd);
+    ra->Release();
+    if (FAILED(hr)) return hr;
+    *vSi = MAXDWORD;
+    for (DWORD i = 0; i < 16; ++i) {
+        IMFMediaType* t = nullptr;
+        if (FAILED(rd->GetNativeMediaType(i, 0, &t))) break;
+        GUID major = GUID_NULL;
+        t->GetGUID(MF_MT_MAJOR_TYPE, &major);
+        t->Release();
+        if (major == MFMediaType_Video) { *vSi = i; break; }
+    }
+    if (*vSi == MAXDWORD) { rd->Release(); return HRESULT_FROM_WIN32(ERROR_INVALID_DATA); }
+    rd->SetStreamSelection((DWORD)MF_SOURCE_READER_ALL_STREAMS, FALSE);
+    rd->SetStreamSelection(*vSi, TRUE);
+    IMFMediaType* nat = nullptr;
+    hr = rd->GetNativeMediaType(*vSi, 0, &nat);
+    if (FAILED(hr)) { rd->Release(); return hr; }
+    MFGetAttributeSize(nat, MF_MT_FRAME_SIZE, w, h);
+    nat->Release();
+    IMFMediaType* vt = nullptr;
+    MFCreateMediaType(&vt);
+    vt->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    vt->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+    hr = rd->SetCurrentMediaType(*vSi, nullptr, vt);
+    vt->Release();
+    if (FAILED(hr)) { rd->Release(); return hr; }
+    *out = rd;
+    return S_OK;
+}
+
+// Кадр джерела f → готовий маленький кадр GIF (кадр, розмір, позначки, ширина GIF).
+struct EvGifCtx {
+    EvExportJob* j = nullptr;
+    UINT32 vw = 0, vh = 0;
+    int ow = 0, oh = 0, gw = 0, gh = 0;
+    std::vector<BYTE> frame, base, comp, small;
+};
+
+inline void EvGifCook(EvGifCtx& c, int f)
+{
+    const bool geom = c.j->outW > 0 && c.j->outH > 0;
+    if (geom) EvGeomFrame(c.frame.data(), (int)c.vw, (int)c.vh, c.j->crop, c.base, c.ow, c.oh);
+    else c.base = c.frame;
+    const EvMarkSpan* sp = nullptr;
+    for (const EvMarkSpan& x : c.j->spans) if (f >= x.a && f < x.b) { sp = &x; break; }
+    if (sp) EvApplyMarks(c.base.data(), c.ow, c.oh, sp->ops);
+    if (c.gw == c.ow && c.gh == c.oh) c.small.swap(c.base);
+    else EvGeomFrame(c.base.data(), c.ow, c.oh, RECT{ 0, 0, c.ow, c.oh }, c.small, c.gw, c.gh);
+}
+
+// Номер кадру джерела за номером у виході (обернене до EvMapFrame).
+inline int EvSrcOfOut(const std::vector<EvSeg>& keep, LONGLONG out)
+{
+    for (const EvSeg& s : keep) {
+        const LONGLONG n = s.b - s.a;
+        if (out < n) return s.a + (int)out;
+        out -= n;
+    }
+    return keep.empty() ? 0 : keep.back().b - 1;
+}
+
+// Прочитати кадр f: із перемоткою до ключового й далі семпли до потрібного, або
+// (seek = false) послідовно з поточного місця — для СУСІДНЬОГО кадру.
+inline bool EvGifSeekFrame(IMFSourceReader* rd, DWORD vSi, int f, double fps, UINT32 vw, UINT32 vh, std::vector<BYTE>& frame, bool seek = true)
+{
+    if (seek) {
+        PROPVARIANT pv;
+        PropVariantInit(&pv);
+        pv.vt = VT_I8;
+        pv.hVal.QuadPart = EvTimeOf(f, fps);
+        if (FAILED(rd->SetCurrentPosition(GUID_NULL, pv))) return false;
+    }
+    for (int guard = 0; guard < 4000; ++guard) {
+        DWORD si = 0, fl = 0;
+        LONGLONG ts = 0;
+        IMFSample* s = nullptr;
+        if (FAILED(rd->ReadSample(vSi, 0, &si, &fl, &ts, &s))) return false;
+        if (fl & MF_SOURCE_READERF_ENDOFSTREAM) { if (s) s->Release(); return !frame.empty(); }
+        if (!s) continue;
+        LONGLONG dur = 0;
+        s->GetSampleDuration(&dur);
+        const int idx = (int)((double)ts * fps / 1e7 + 0.5);
+        int n = (int)((double)dur * fps / 1e7 + 0.5);
+        if (n < 1) n = 1;
+        const bool hit = f < idx + n;
+        if (hit || frame.empty()) EvSampleToRgb(s, vw, vh, frame);
+        s->Release();
+        if (hit) return true;
+    }
+    return false;
+}
+
+// Глобальна палітра з проб і (за бажанням) оцінка розміру. Для оцінки кожна
+// проба — ПАРА сусідніх вихідних кадрів: перший дає «повний» кадр, другий —
+// різницю з ним, тобто рівно те, що робить справжній експорт. Так оцінка не
+// потребує коефіцієнтів «на око» і не бреше ані з дизерингом, ані без.
+int EvGifSample(EvGifCtx& c, IMFSourceReader* rd, DWORD vSi, double fps, LONGLONG totalOut, GifQuant& q,
+                ULONGLONG* est, volatile LONG* cancel)
+{
+    const int S = totalOut < 12 ? (int)totalOut : 12;
+    if (S <= 0) return 0;
+    std::vector<unsigned> hist;
+    std::vector<std::vector<BYTE>> firsts, seconds;
+    const int gfps = c.j->gifFps < 1 ? 1 : c.j->gifFps;
+    LONGLONG step = (LONGLONG)(fps / gfps + 0.5);
+    if (step < 1) step = 1;
+    for (int i = 0; i < S; ++i) {
+        if (cancel && InterlockedCompareExchange(cancel, 0, 0)) return 0;
+        const LONGLONG out = (LONGLONG)((i + 0.5) * totalOut / S);
+        const int f = EvSrcOfOut(c.j->keep, out);
+        if (!EvGifSeekFrame(rd, vSi, f, fps, c.vw, c.vh, c.frame)) continue;
+        EvGifCook(c, f);
+        GifHistAdd(hist, c.small.data(), c.gw, c.gh);
+        if (!est) continue;
+        firsts.push_back(c.small);
+        const LONGLONG out2 = out + step < totalOut ? out + step : totalOut - 1;
+        const int f2 = EvSrcOfOut(c.j->keep, out2);
+        if (f2 > f && EvGifSeekFrame(rd, vSi, f2, fps, c.vw, c.vh, c.frame, false)) {
+            EvGifCook(c, f2);
+            GifHistAdd(hist, c.small.data(), c.gw, c.gh);
+            seconds.push_back(c.small);
+        } else {
+            seconds.push_back(firsts.back());
+        }
+    }
+    if (hist.empty()) return 0;
+    const int colors = c.j->gifColors < 4 ? 4 : c.j->gifColors > 256 ? 256 : c.j->gifColors;
+    GifMedianCut(hist, colors - 1, q.pal);           // один слот — прозорість
+    q.Reset();
+    if (est) {
+        int bits = 1;
+        while ((1 << bits) < q.pal.n + 1) ++bits;
+        if (bits < 2) bits = 2;
+        std::vector<BYTE> hdr, idx;
+        GifHeader(hdr, c.gw, c.gh, q.pal, bits, c.j->gifLoop);
+        double fullSum = 0, diffSum = 0;
+        for (size_t i = 0; i < firsts.size(); ++i) {
+            GifStream gs;
+            gs.w = c.gw; gs.h = c.gh; gs.bits = bits; gs.transIdx = (1 << bits) - 1;
+            GifQuantize(q, firsts[i].data(), c.gw, c.gh, c.j->gifDither, idx);
+            gs.Push(idx, 7);
+            gs.Flush();
+            const ULONGLONG full = gs.bytes;
+            GifQuantize(q, seconds[i].data(), c.gw, c.gh, c.j->gifDither, idx);
+            gs.Push(idx, 7);
+            gs.Flush();
+            fullSum += (double)full;
+            diffSum += (double)(gs.bytes - full);
+        }
+        const double n = (double)firsts.size();
+        const LONGLONG outFrames = (LONGLONG)(totalOut * (double)gfps / fps + 0.5);
+        *est = hdr.size() + 1 + (ULONGLONG)(fullSum / n + diffSum / n * (outFrames > 1 ? outFrames - 1 : 0));
+    }
+    return (int)firsts.size() ? (int)firsts.size() : S;
+}
+
+inline void EvGifSetup(EvGifCtx& c, EvExportJob* j, UINT32 w, UINT32 h)
+{
+    c.j = j; c.vw = w; c.vh = h;
+    const bool geom = j->outW > 0 && j->outH > 0;
+    c.ow = geom ? j->outW : (int)w;
+    c.oh = geom ? j->outH : (int)h;
+    c.gw = j->gifW > 0 && j->gifW < c.ow ? j->gifW : c.ow;
+    c.gh = (int)((double)c.oh * c.gw / c.ow + 0.5);
+    if (c.gh < 1) c.gh = 1;
+    if (c.gw > 65535) c.gw = 65535;
+    if (c.gh > 65535) c.gh = 65535;
+}
+
+inline HRESULT EvGifRun(EvExportJob* j)
+{
+    if (j->keep.empty()) return E_INVALIDARG;
+    const double fps = j->fps > 0 ? j->fps : 30.0;
+    const int gfps = j->gifFps < 1 ? 1 : j->gifFps;
+    IMFSourceReader* rd = nullptr;
+    DWORD vSi = 0;
+    UINT32 w = 0, h = 0;
+    HRESULT hr = EvGifOpenReader(j->src, &rd, &vSi, &w, &h);
+    if (FAILED(hr)) return hr;
+    LONGLONG totalOut = 0;
+    for (const EvSeg& s : j->keep) totalOut += s.b - s.a;
+    EvGifCtx c;
+    EvGifSetup(c, j, w, h);
+    GifQuant q;
+    if (EvGifSample(c, rd, vSi, fps, totalOut, q, nullptr, &j->cancel) <= 0 || q.pal.n <= 0) {
+        rd->Release();
+        return InterlockedCompareExchange(&j->cancel, 0, 0) ? E_ABORT : E_FAIL;
+    }
+    int bits = 1;
+    while ((1 << bits) < q.pal.n + 1) ++bits;
+    if (bits < 2) bits = 2;
+    DeleteFileW(j->dst);
+    GifStream gs;
+    gs.f = CreateFileW(j->dst, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (gs.f == INVALID_HANDLE_VALUE) { rd->Release(); return HRESULT_FROM_WIN32(GetLastError()); }
+    gs.w = c.gw; gs.h = c.gh; gs.bits = bits; gs.transIdx = (1 << bits) - 1;
+    {
+        std::vector<BYTE> hdr;
+        GifHeader(hdr, c.gw, c.gh, q.pal, bits, j->gifLoop);
+        if (!gs.Write(hdr)) hr = E_FAIL;
+    }
+    // Із початку того, що лишилось.
+    {
+        PROPVARIANT pv;
+        PropVariantInit(&pv);
+        pv.vt = VT_I8;
+        pv.hVal.QuadPart = j->keep[0].a > 0 ? EvTimeOf(j->keep[0].a, fps) : 0;
+        rd->SetCurrentPosition(GUID_NULL, pv);
+    }
+    const int lastFrame = j->keep.back().b;
+    std::vector<BYTE> idx;
+    int emitted = 0;
+    double nextT = 0.0;
+    LONGLONG done = 0;
+    bool eos = false;
+    while (SUCCEEDED(hr) && !eos) {
+        if (InterlockedCompareExchange(&j->cancel, 0, 0)) { hr = E_ABORT; break; }
+        DWORD si = 0, fl = 0;
+        LONGLONG ts = 0;
+        IMFSample* s = nullptr;
+        hr = rd->ReadSample(vSi, 0, &si, &fl, &ts, &s);
+        if (FAILED(hr)) break;
+        if (fl & MF_SOURCE_READERF_ENDOFSTREAM) eos = true;
+        if (!s) continue;
+        LONGLONG dur = 0;
+        s->GetSampleDuration(&dur);
+        const int fi = (int)((double)ts * fps / 1e7 + 0.5);
+        int n = (int)((double)dur * fps / 1e7 + 0.5);
+        if (n < 1) n = 1;
+        bool cooked = false;
+        for (size_t k = 0; k < j->keep.size() && SUCCEEDED(hr); ++k) {
+            const int from = fi > j->keep[k].a ? fi : j->keep[k].a;
+            const int to = fi + n < j->keep[k].b ? fi + n : j->keep[k].b;
+            for (int f = from; f < to && SUCCEEDED(hr); ++f) {
+                ++done;
+                const LONGLONG out = EvMapFrame(j->keep, f);
+                const double t = (double)out / fps;
+                if (t + 1e-9 < nextT) continue;
+                if (!cooked) {
+                    if (!EvSampleToRgb(s, w, h, c.frame)) { hr = E_FAIL; break; }
+                    EvGifCook(c, f);
+                    cooked = true;
+                    GifQuantize(q, c.small.data(), c.gw, c.gh, j->gifDither, idx);
+                } else {
+                    // той самий семпл на кілька слотів — ті самі індекси (Push їх з'їв: відновимо з prev)
+                    idx = gs.first ? idx : gs.prev;
+                }
+                std::vector<BYTE> push = idx;
+                if (!gs.Push(push, GifDelayFor(emitted, gfps))) { hr = E_FAIL; break; }
+                ++emitted;
+                nextT = (double)emitted / gfps;
+            }
+        }
+        s->Release();
+        if (fi + n >= lastFrame) eos = true;
+        InterlockedExchange(&j->progress, (LONG)(done * 999 / (totalOut > 0 ? totalOut : 1)));
+    }
+    if (SUCCEEDED(hr) && emitted == 0) hr = E_FAIL;
+    if (SUCCEEDED(hr) && !gs.Finish((int)(totalOut * 100.0 / fps + 0.5))) hr = E_FAIL;
+    CloseHandle(gs.f);
+    rd->Release();
+    if (FAILED(hr)) DeleteFileW(j->dst);
+    j->framesOut = emitted;
+    j->gifBytes = gs.bytes;
+    InterlockedExchange(&j->progress, 1000);
+    return hr;
+}
+
+// Оцінка розміру для діалогу: палітра з проб + ті самі проби закодовані.
+ULONGLONG EvGifEstimate(EvExportJob* j, volatile LONG* cancel)
+{
+    if (j->keep.empty()) return 0;
+    const double fps = j->fps > 0 ? j->fps : 30.0;
+    IMFSourceReader* rd = nullptr;
+    DWORD vSi = 0;
+    UINT32 w = 0, h = 0;
+    if (FAILED(EvGifOpenReader(j->src, &rd, &vSi, &w, &h))) return 0;
+    LONGLONG totalOut = 0;
+    for (const EvSeg& s : j->keep) totalOut += s.b - s.a;
+    EvGifCtx c;
+    EvGifSetup(c, j, w, h);
+    GifQuant q;
+    ULONGLONG est = 0;
+    EvGifSample(c, rd, vSi, fps, totalOut, q, &est, cancel);
+    rd->Release();
+    return est;
+}
+
 // ---- CAPS-79: правки --------------------------------------------------------
 // Модель — у номерах кадрів. Частини покривають усе відео [0, N) і лише
 // позначаються вирізаними: розріз (S) ділить частину, Delete вимикає вибрану
@@ -21421,7 +22236,8 @@ bool EvEdited()
 }
 
 // Є що зберігати: те, що лишається, не збігається з уже збереженим (CAPS-80: або позначки).
-bool EvDirty() { return !g_evEd.parts.empty() && (!EvSameSegs(EvKeepSegs(), g_evSavedKeep) || g_evMarksGen != g_evMarksSavedGen); }
+bool EvGeomDirty() { return !EqualRect(&g_edCrop, &g_evSavedCrop) || g_evDocW != g_evSavedDocW || g_evDocH != g_evSavedDocH; }   // CAPS-90
+bool EvDirty() { return !g_evEd.parts.empty() && (!EvSameSegs(EvKeepSegs(), g_evSavedKeep) || g_evMarksGen != g_evMarksSavedGen || EvGeomDirty()); }
 
 int EvKeptFrames()
 {
@@ -21676,8 +22492,14 @@ void EvPresent()
     RECT vis;
     const int iw = ir.right - ir.left, ih = ir.bottom - ir.top;
     if (iw > 0 && ih > 0 && IntersectRect(&vis, &ir, &cr)) {
-        MFVideoNormalizedRect src = { (float)(vis.left - ir.left) / iw, (float)(vis.top - ir.top) / ih,
-                                      (float)(vis.right - ir.left) / iw, (float)(vis.bottom - ir.top) / ih };
+        // CAPS-90: видима частина — у координатах документа (кадр + масштаб), далі
+        // в частках усього кадру: рушій сам вирізає й масштабує на GPU.
+        const double dw = g_evDocW > 0 ? g_evDocW : g_evW, dh = g_evDocH > 0 ? g_evDocH : g_evH;
+        const double vx = EdViewW(), vy = EdViewH();
+        MFVideoNormalizedRect src = { (float)((EdViewX() + (vis.left - ir.left) * vx / iw) / dw),
+                                      (float)((EdViewY() + (vis.top - ir.top) * vy / ih) / dh),
+                                      (float)((EdViewX() + (vis.right - ir.left) * vx / iw) / dw),
+                                      (float)((EdViewY() + (vis.bottom - ir.top) * vy / ih) / dh) };
         MFARGB border = { GetBValue(t.canvas), GetGValue(t.canvas), GetRValue(t.canvas), 255 };
         g_evMe->TransferVideoFrame(bb, &src, &vis, &border);
     }
@@ -21845,6 +22667,8 @@ void EvSeekNow(double t)
 {
     if (!g_evMe) return;
     g_evSeeking = true;
+    g_evFrameFresh = false;
+    g_evStaleTicks = 0;
     g_evMe->SetCurrentTime(t);
     EvTimerOn();
 }
@@ -21983,7 +22807,8 @@ void EvTick()
     if (!g_evMe || !g_evReady) { KillTimer(g_edWnd, kEvTimer); return; }
     LONGLONG pts = 0;
     bool moved = false;
-    if (g_evMe->OnVideoStreamTick(&pts) == S_OK) { EvPresent(); moved = true; }
+    if (g_evMe->OnVideoStreamTick(&pts) == S_OK) { EvPresent(); moved = true; g_evFrameFresh = true; }
+    else ++g_evStaleTicks;
     if (g_evRev) { EvRevStep(); moved = true; }
     if (g_evPlaying) {
         const double p = g_evMe->GetCurrentTime();
@@ -21993,7 +22818,7 @@ void EvTick()
     if (moved) { EvAutoScroll(); EvInvalidateInfo(); g_evIdle = 0; }
     else if (!g_evPlaying && !g_evRev && !g_evSeeking && ++g_evIdle > 50) KillTimer(g_edWnd, kEvTimer);
     // CAPS-80: стало — кадр у редактор (там редагуються позначки); рухається — шар позначок
-    if (!g_evPlaying && !g_evRev && !g_evSeeking && !g_evScrub) {
+    if (!g_evPlaying && !g_evRev && !g_evSeeking && !g_evScrub && (g_evFrameFresh || g_evStaleTicks > 30)) {
         if (EvFrameIdx(g_evPos) != g_evFrozen || (g_evView && IsWindowVisible(g_evView))) EvFreezeNow();
     } else {
         EvOverSync();
@@ -22176,6 +23001,9 @@ bool EvOpen(HINSTANCE hInst, const wchar_t* path)
     g_evTlOff = 0;
     g_evRate = 1.0;
     g_evFrozen = -1;                      // CAPS-80: на старті — відео, поки не став перший кадр
+    g_evDocW = g_evW; g_evDocH = g_evH;   // CAPS-90: без зменшення й кадру
+    g_evSavedCrop = RECT{ 0, 0, 0, 0 };
+    g_evSavedDocW = g_evW; g_evSavedDocH = g_evH;
     EvEditReset();                        // CAPS-79: правки — з чистого аркуша
     g_evMouseLog = m.mouse;               // CAPS-81: журнал миші запису (з .lhmeta)
     if (LhvIs(path)) LhvApply(path);      // CAPS-81: проєкт — правки й позначки назад
@@ -22194,10 +23022,37 @@ bool EvOpen(HINSTANCE hInst, const wchar_t* path)
     return true;
 }
 
+// CAPS-90: масштаб документа відносно джерела (зменшення; 1 — як є).
+double EvDocK() { return (g_evDocW > 0 && g_evW > 0) ? (double)g_evDocW / g_evW : 1.0; }
+
+bool EvHasGeom()
+{
+    return g_edVideo && (EdHasCrop() || (g_evDocW > 0 && (g_evDocW != g_evW || g_evDocH != g_evH)));
+}
+
+// CAPS-90: кадр джерела → розмір документа (коли відео зменшено). Бере власність.
+Gdiplus::Bitmap* EvScaleToDoc(Gdiplus::Bitmap* b)
+{
+    if (!b || g_evDocW <= 0 || g_evDocH <= 0) return b;
+    if ((int)b->GetWidth() == g_evDocW && (int)b->GetHeight() == g_evDocH) return b;
+    Gdiplus::Bitmap* out = new Gdiplus::Bitmap(g_evDocW, g_evDocH, PixelFormat32bppPARGB);
+    if (!out || out->GetLastStatus() != Gdiplus::Ok) { delete out; return b; }
+    {
+        Gdiplus::Graphics g(out);
+        g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+        g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+        g.DrawImage(b, Gdiplus::Rect(0, 0, g_evDocW, g_evDocH), 0, 0, (int)b->GetWidth(), (int)b->GetHeight(), Gdiplus::UnitPixel);
+    }
+    delete b;
+    return out;
+}
+
 // Поточний кадр у повному розмірі — для «Копіювати» і «Відкрити кадр як знімок».
+HRESULT g_evGrabHr = S_OK;   // останній результат TransferVideoFrame у EvGrabFrame (діагностика)
+
 Gdiplus::Bitmap* EvGrabFrame()
 {
-    if (!g_evMe || !g_evReady || g_evW <= 0 || g_evH <= 0) return nullptr;
+    if (!g_evMe || !g_evReady || g_evW <= 0 || g_evH <= 0) { g_evGrabHr = E_NOT_VALID_STATE; return nullptr; }
     D3D11_TEXTURE2D_DESC d = {};
     d.Width = (UINT)g_evW; d.Height = (UINT)g_evH; d.MipLevels = 1; d.ArraySize = 1;
     d.Format = DXGI_FORMAT_B8G8R8A8_UNORM; d.SampleDesc.Count = 1;
@@ -22211,7 +23066,8 @@ Gdiplus::Bitmap* EvGrabFrame()
             MFVideoNormalizedRect src = { 0, 0, 1, 1 };
             RECT dst = { 0, 0, g_evW, g_evH };
             MFARGB border = { 0, 0, 0, 255 };
-            if (SUCCEEDED(g_evMe->TransferVideoFrame(tex, &src, &dst, &border))) {
+            g_evGrabHr = g_evMe->TransferVideoFrame(tex, &src, &dst, &border);
+            if (SUCCEEDED(g_evGrabHr)) {
                 g_evCtx->CopyResource(stage, tex);
                 D3D11_MAPPED_SUBRESOURCE mp = {};
                 if (SUCCEEDED(g_evCtx->Map(stage, 0, D3D11_MAP_READ, 0, &mp))) {
@@ -22238,8 +23094,14 @@ Gdiplus::Bitmap* EvGrabFrame()
 
 void EvCopyFrame(HWND hwnd)
 {
-    // CAPS-80: на паузі — кадр разом із живими позначками (рівно те, що видно)
-    Gdiplus::Bitmap* b = (g_evFrozen == EvFrameIdx(g_evPos) && g_edImg) ? EdRender() : EvGrabFrame();
+    // CAPS-80: на паузі — кадр разом із живими позначками (рівно те, що видно);
+    // CAPS-90: наживо — теж видима частина (кадр, масштаб), без позначок.
+    Gdiplus::Bitmap* b = (g_evFrozen == EvFrameIdx(g_evPos) && g_edImg) ? EdRender() : EvScaleToDoc(EvGrabFrame());
+    if (b && EdHasCrop() && !(g_evFrozen == EvFrameIdx(g_evPos) && g_edImg)) {
+        Gdiplus::Bitmap* c = b->Clone(EdViewX(), EdViewY(), EdViewW(), EdViewH(), PixelFormat32bppPARGB);
+        delete b;
+        b = c;
+    }
     if (!b) return;
     const bool ok = EdClipPut(b, hwnd);
     delete b;
@@ -22256,12 +23118,23 @@ void EvFrameToShot(HWND hwnd)
     wchar_t t[32], label[200];
     EvFmtTime(g_evPos, t, 32);
     swprintf(label, 200, S(Str::VidFrameLabel), g_evName, t);
-    // CAPS-80: живі позначки переходять у знімок редагованими
+    // CAPS-80: живі позначки переходять у знімок редагованими.
+    // CAPS-90: знімок — повна роздільність джерела; переноситься лише кадр
+    // (рішення власника 25.09), тож позначки й кадр — назад у координати джерела.
     std::vector<EdObj> keep;
     for (const EdObj& o : g_edObjs) if (EdObjLive(o)) { keep.push_back(o); keep.back().vf0 = 0; keep.back().vf1 = INT_MAX; }
+    const double k = EvDocK();
+    RECT crop = { 0, 0, 0, 0 };
+    if (EdHasCrop()) {
+        crop = RECT{ (LONG)(g_edCrop.left / k + 0.5), (LONG)(g_edCrop.top / k + 0.5),
+                     (LONG)(g_edCrop.right / k + 0.5), (LONG)(g_edCrop.bottom / k + 0.5) };
+    }
     EdOpenBitmap((HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), b, label, false, false);   // закриває відео
     g_edObjs = keep;
-    if (g_edWnd) InvalidateRect(g_edWnd, nullptr, FALSE);
+    if (k != 1.0) EdScaleObjs(1.0 / k, 1.0 / k, true);
+    g_edCrop = crop;
+    if (crop.right > 0) EdCropClamp(g_edCrop);
+    if (g_edWnd) { EdFitView(); EdLayout(g_edWnd); InvalidateRect(g_edWnd, nullptr, FALSE); }
 }
 
 // ---- таймлайн ---------------------------------------------------------------
@@ -22453,8 +23326,11 @@ void EvLayout(HWND hwnd)
         const int px = g_edRcPanel.left + EdPx(14), pr = g_edRcPanel.right - EdPx(14);
         int y = g_edRcPanel.top + EdPx(14) + EdPx(18) + EdPx(12);   // заголовок «Відео»
         y += EdPx(22) + EdPx(20) + EdPx(10);                         // назва, «Записано»
-        g_evRcFacts = { px, y, pr, y + EdPx(6 * 24 + 16) };
-        y = g_evRcFacts.bottom + EdPx(20) + EdPx(22);                // «Поточний кадр»
+        g_evRcFacts = { px, y, pr, y + EdPx((EvHasGeom() ? 7 : 6) * 24 + 16) };   // CAPS-90: + «Після правок»
+        y = g_evRcFacts.bottom + EdPx(10);
+        RECT rs = { px, y, pr, y + EdPx(32) };                       // CAPS-90: «Розмір відео…»
+        EdAdd(rs, EdHit::VidResize, 0);
+        y = rs.bottom + EdPx(20) + EdPx(22);                         // «Поточний кадр»
         RECT fb = { px, y, pr, y + EdPx(32) };
         EdAdd(fb, EdHit::VidFrameShot, 0);
         RECT sb = { px, g_edRcPanel.bottom - EdPx(14) - EdPx(32), pr, g_edRcPanel.bottom - EdPx(14) };
@@ -22925,8 +23801,15 @@ void EvPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     if (g_evBytes >= 1024 * 1024) { const int t10 = (int)(g_evBytes * 10 / (1024 * 1024)); swprintf(v, 64, L"%d,%d МБ", t10 / 10, t10 % 10); }
     else swprintf(v, 64, L"%d КБ", (int)((g_evBytes + 1023) / 1024));
     row(Str::EdLibFactFile, v);
+    if (EvHasGeom()) { swprintf(v, 64, L"%d × %d", EdViewW() & ~1, EdViewH() & ~1); row(Str::VidFactOut, v); }   // CAPS-90
+    if (const RECT* r = EdRegionRect(EdHit::VidResize, 0)) {
+        EdPaintButton(g, *r, t, false, g_edHotWhat == EdHit::VidResize, false);
+        EdDrawText(dc, *r, S(Str::VidBtnSize), g_edFont, t.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
     // поточний кадр
-    RECT cap = { x, g_evRcFacts.bottom + EdPx(20), xr, g_evRcFacts.bottom + EdPx(38) };
+    const RECT* rsz = EdRegionRect(EdHit::VidResize, 0);
+    const int capY = (rsz ? rsz->bottom : g_evRcFacts.bottom) + EdPx(20);
+    RECT cap = { x, capY, xr, capY + EdPx(18) };
     EdDrawText(dc, cap, S(Str::VidSecFrame), g_edFontSmall, t.text2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     if (const RECT* r = EdRegionRect(EdHit::VidFrameShot, 0)) {
         EdPaintButton(g, *r, t, false, g_edHotWhat == EdHit::VidFrameShot, false);
@@ -22997,10 +23880,10 @@ bool EvClick(HWND hwnd, const EdRegion* r, POINT pt)
         return true;
     }
     case EdHit::Copy: EvCopyFrame(hwnd); return true;
-    case EdHit::Tool:                             // CAPS-80: усі інструменти, крім кадрування
-        if (r->idx == 10) return true;
+    case EdHit::Tool:                             // CAPS-80/90: усі інструменти, з кадруванням
         EvFreezeForEdit();
         return false;
+    case EdHit::VidResize: EvSizeDialog(hwnd); return true;   // CAPS-90
     case EdHit::InsertImg:
     case EdHit::Canvas:
         EvFreezeForEdit();                        // малюють на поточному кадрі
@@ -23068,10 +23951,11 @@ bool EvKey(HWND hwnd, WPARAM vk, LPARAM lp)
     case 'J': if (!ctrl) { if (!g_evRev) EvToggleReverse(); return true; } break;
     case 'K': if (!ctrl) { EvPause(); return true; } break;
     case 'L': if (!ctrl) { if (!g_evPlaying) EvPlay(); return true; } break;
-    case 'C': if (ctrl) { EvCopyFrame(hwnd); return true; } break;
+    case 'C': if (ctrl) { EvCopyFrame(hwnd); return true; } EvFreezeForEdit(); return false;   // CAPS-90: кадр
     case VK_ESCAPE:                                // по шару за раз; останній — закрити редактор
         // CAPS-80: свій порядок — редакторів Esc із «початковим» інструментом закрив би вікно
-        if (g_edPickOpen >= 0 || g_edEdit) return false;
+        // CAPS-90: кадрування — редакторові: його Esc скасовує кадр
+        if (g_edPickOpen >= 0 || g_edEdit || g_edCropping) return false;
         if (g_edSel >= 0) { EdSelClear(); EdLayout(hwnd); InvalidateRect(hwnd, nullptr, FALSE); return true; }
         if (g_edTool != EdTool::Select) { g_edTool = EdTool::Select; EdLayout(hwnd); InvalidateRect(hwnd, nullptr, FALSE); return true; }
         return EvClearSel();
@@ -23079,8 +23963,8 @@ bool EvKey(HWND hwnd, WPARAM vk, LPARAM lp)
     default: break;
     }
     // CAPS-80: решту (літери інструментів, Ctrl+D, Ctrl+V…) — редакторові, крім
-    // кадрування (C) і Enter (у знімку це «зберегти/скопіювати документ»).
-    return vk == 'C' || vk == VK_RETURN;
+    // Enter (у знімку це «зберегти/скопіювати документ»).
+    return vk == VK_RETURN;
 }
 
 
@@ -23188,7 +24072,7 @@ void EvFreezeNow()
     if (!g_edVideo || !g_evReady || g_edLibOpen) return;
     const int idx = EvFrameIdx(g_evPos);
     if (idx != g_evFrozen) {
-        Gdiplus::Bitmap* b = EvGrabFrame();
+        Gdiplus::Bitmap* b = EvScaleToDoc(EvGrabFrame());   // CAPS-90: у масштабі документа
         if (!b) return;
         // Лише базове зображення: EdOpenBitmap закрив би відео (новий документ).
         for (size_t i = 0; i < g_edSrcBank.size(); ++i) delete g_edSrcBank[i];
@@ -23207,6 +24091,67 @@ void EvFreezeNow()
         EvOverSync();                              // і шар позначок над ним — теж
         InvalidateRect(g_edWnd, nullptr, FALSE);
     }
+}
+
+// CAPS-90: документ у новому масштабі. Рушій готовий — свіжий кадр у розмірі
+// документа; ще ні (відкриття проєкту) — масштабуємо те, що вже лежить (постер).
+void EvApplyDocSize()
+{
+    if (!g_edSrc || g_evDocW <= 0 || g_evDocH <= 0) return;
+    if ((int)g_edSrc->GetWidth() == g_evDocW && (int)g_edSrc->GetHeight() == g_evDocH) return;
+    Gdiplus::Bitmap* src = g_edSrc;
+    g_edSrc = nullptr;
+    for (size_t i = 0; i < g_edSrcBank.size(); ++i) if (g_edSrcBank[i] != src) delete g_edSrcBank[i];
+    g_edSrcBank.clear();
+    Gdiplus::Bitmap* out = EvScaleToDoc(src);          // бере власність над src
+    g_edSrcBank.push_back(out);
+    g_edSrcId = 0;
+    g_edSrc = out;
+    EdRebuildImage();
+    EdBelowClear();
+}
+
+void EvRefreeze()
+{
+    if (!g_edVideo) return;
+    if (g_evReady && !g_edLibOpen) {
+        g_evFrozen = -1;
+        EvFreezeNow();
+    } else {
+        EvApplyDocSize();
+    }
+    if (g_edWnd) { EdFitView(); EdLayout(g_edWnd); EvOverSync(); InvalidateRect(g_edWnd, nullptr, TRUE); }
+}
+
+// CAPS-90: зменшити видиме (кадр чи все відео) до nw×nh — рецепт, як у знімка:
+// позначки й кадр перераховуються, документ перезаморожується в новому масштабі.
+bool EvResizeTo(int nw, int nh, bool scaleText)
+{
+    if (!g_edVideo || g_evW <= 0 || g_evH <= 0) return false;
+    nw &= ~1; nh &= ~1;
+    const int cw = EdViewW(), ch = EdViewH();
+    if (nw < 2 || nh < 2 || nw > cw || nh > ch) return false;     // лише зменшення
+    if (nw == cw && nh == ch) return false;
+    EvFreezeForEdit();
+    EdPushUndo();
+    const double kx = (double)nw / cw, ky = (double)nh / ch;
+    const int dw = (int)((g_evDocW > 0 ? g_evDocW : g_evW) * kx + 0.5);
+    const int dh = (int)((g_evDocH > 0 ? g_evDocH : g_evH) * ky + 0.5);
+    EdScaleObjs(kx, ky, scaleText);                          // і кадр теж
+    g_evDocW = dw < 2 ? 2 : dw; g_evDocH = dh < 2 ? 2 : dh;
+    if (EdHasCrop()) {
+        // Округлення могло зсунути кадр на піксель: він має бути рівно nw×nh і парним.
+        g_edCrop.right = g_edCrop.left + nw;
+        g_edCrop.bottom = g_edCrop.top + nh;
+        if (g_edCrop.right > g_evDocW) { g_edCrop.left -= g_edCrop.right - g_evDocW; g_edCrop.right = g_evDocW; }
+        if (g_edCrop.bottom > g_evDocH) { g_edCrop.top -= g_edCrop.bottom - g_evDocH; g_edCrop.bottom = g_evDocH; }
+        if (g_edCrop.left < 0) g_edCrop.left = 0;
+        if (g_edCrop.top < 0) g_edCrop.top = 0;
+    } else {
+        g_evDocW = nw; g_evDocH = nh;
+    }
+    EvRefreeze();
+    return true;
 }
 
 // Відео зараз рухатиметься — показати вікно кадру (і шар позначок над ним).
@@ -23640,7 +24585,7 @@ void EvFlushLayer(Gdiplus::Bitmap*& layer, std::vector<EvMarkOp>& ops)
     layer = nullptr;
 }
 
-void EvBuildMarkSpans(std::vector<EvMarkSpan>& out, int vw, int vh)
+void EvBuildMarkSpans(std::vector<EvMarkSpan>& out, int vw, int vh, int offX, int offY)
 {
     out.clear();
     EvAdoptMarks();
@@ -23664,7 +24609,7 @@ void EvBuildMarkSpans(std::vector<EvMarkSpan>& out, int vw, int vh)
                 EvFlushLayer(layer, sp.ops);
                 EvMarkOp op;
                 op.type = o.kind == EdKind::Mark ? 1 : (o.mode == 2 ? 2 : (o.mode == 1 ? 3 : 4));
-                op.r = RECT{ o.x, o.y, o.x + o.w, o.y + o.h };
+                op.r = RECT{ o.x + offX, o.y + offY, o.x + o.w + offX, o.y + o.h + offY };   // CAPS-90: у виході
                 op.param = o.kind == EdKind::Hide ? (o.mode == 1 ? EdHideBlock(o) : EdHideRadius(o)) : 0;
                 op.color = o.color;
                 op.alpha = o.alpha;
@@ -23679,7 +24624,7 @@ void EvBuildMarkSpans(std::vector<EvMarkSpan>& out, int vw, int vh)
             Gdiplus::Graphics g(layer);
             g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
             g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-            EdDrawObject(g, o, 1.0, 0.0, 0.0, (int)i);
+            EdDrawObject(g, o, 1.0, (double)offX, (double)offY, (int)i);
         }
         EvFlushLayer(layer, sp.ops);
         g_evLiveFrame = -1;
@@ -23744,6 +24689,11 @@ std::vector<BYTE> LhvBuild()
         w.i32v((int)(g_edShotScale * 1000.0 + 0.5));
         w.close(at);
     }
+    {   const size_t at = w.open("GEOM");        // CAPS-90: розмір документа й кадр (у його координатах)
+        w.i32v(g_evDocW); w.i32v(g_evDocH);
+        w.i32v(g_edCrop.left); w.i32v(g_edCrop.top); w.i32v(g_edCrop.right); w.i32v(g_edCrop.bottom);
+        w.close(at);
+    }
     {   EvAdoptMarks();
         const size_t at = w.open("OBJS");
         w.u32v((DWORD)g_edObjs.size());
@@ -23773,6 +24723,8 @@ bool LhvApply(const wchar_t* path)
     std::vector<BYTE> mouse;
     LhMeta meta;                                 // CAPS-88
     bool haveMeta = false;
+    int docW = 0, docH = 0;                      // CAPS-90
+    RECT crop = { 0, 0, 0, 0 };
     while (!r.bad && r.at + 8 <= r.n) {
         char t[4];
         r.raw(t, 4);
@@ -23812,6 +24764,10 @@ bool LhvApply(const wchar_t* path)
             }
         } else if (!memcmp(t, "MOUS", 4)) mouse.assign(p.data() + r.at, p.data() + next);
         else if (!memcmp(t, "DESC", 4)) { LhMetaGet(p.data() + r.at, len, meta); haveMeta = true; }
+        else if (!memcmp(t, "GEOM", 4)) {        // CAPS-90
+            docW = r.i32v(); docH = r.i32v();
+            crop.left = r.i32v(); crop.top = r.i32v(); crop.right = r.i32v(); crop.bottom = r.i32v();
+        }
         r.at = next;
     }
     // Правки — лише якщо вони про ці кадри: частини суцільно покривають [0, N).
@@ -23836,6 +24792,14 @@ bool LhvApply(const wchar_t* path)
     g_evMouseLog = mouse;
     if (haveMeta) g_edMeta = meta;               // CAPS-88
     g_edMeta.taken = g_evCreated;
+    // CAPS-90: зменшення й кадр — лише в межах джерела; інакше як є
+    if (docW >= 2 && docH >= 2 && docW <= g_evW && docH <= g_evH) { g_evDocW = docW; g_evDocH = docH; }
+    else { g_evDocW = g_evW; g_evDocH = g_evH; }
+    if (crop.right > crop.left && crop.bottom > crop.top && crop.left >= 0 && crop.top >= 0 &&
+        crop.right <= g_evDocW && crop.bottom <= g_evDocH) g_edCrop = crop;
+    else g_edCrop = RECT{ 0, 0, 0, 0 };
+    EvApplyDocSize();
+    g_evSavedCrop = g_edCrop; g_evSavedDocW = g_evDocW; g_evSavedDocH = g_evDocH;
     // щойно відкритий проєкт — нічого не змінено
     g_evSavedKeep = EvKeepSegs();
     g_evMarksSavedGen = g_evMarksGen;
@@ -23867,6 +24831,8 @@ EvSaveJob* g_evJob = nullptr;
 HANDLE     g_evJobThread = nullptr;
 wchar_t    g_evLibOut[MAX_PATH] = {};   // куди «Зберегти» вже клало це відео
 HRESULT    g_evLastSaveHr = S_OK;       // для харнесу
+LONGLONG   g_evLastGifFrames = 0;       // CAPS-89: для харнесу
+ULONGLONG  g_evLastGifBytes = 0;
 constexpr UINT kEvSaveTimer = 42;
 constexpr UINT WMAPP_EVSAVED = WM_APP + 15;
 
@@ -23931,6 +24897,8 @@ void EvPlayedToEnd()
 int EvXToEdge(int x) { return (int)(EvXToTime(x) * g_evFps + 0.5); }   // межа між кадрами
 
 bool EvSaveMenuAt(HWND hwnd, const RECT& btn);
+bool EvGifDialog(HWND owner);                    // CAPS-89
+void EvFmtBytes(ULONGLONG b, wchar_t* out, int n);
 bool EvAskStopSave();
 
 bool EvEditClick(HWND hwnd, const EdRegion* r, POINT pt)
@@ -24116,6 +25084,7 @@ DWORD WINAPI EvSaveThread(LPVOID param)
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     HRESULT hr;
     if (j->copyOnly) hr = CopyFileW(j->x.src, j->x.dst, FALSE) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+    else if (j->x.gif) hr = EvGifRun(&j->x);          // CAPS-89
     else hr = EvExportRun(&j->x);
     if (SUCCEEDED(hr) && InterlockedCompareExchange(&j->x.cancel, 0, 0)) hr = E_ABORT;
     if (SUCCEEDED(hr) && !MoveFileExW(j->x.dst, j->out, MOVEFILE_REPLACE_EXISTING)) hr = HRESULT_FROM_WIN32(GetLastError());
@@ -24169,7 +25138,7 @@ bool EvPickSavePath(HWND hwnd, wchar_t* out)
     dlg->SetDefaultExtension(L"mp4");
     dlg->SetTitle(S(Str::VidSaveTitle));
     std::wstring nm = g_evName;
-    if (EvEdited() && !EndsWithI(nm.c_str(), S(Str::VidCutSuffix))) nm += S(Str::VidCutSuffix);
+    if ((EvEdited() || EvHasGeom()) && !EndsWithI(nm.c_str(), S(Str::VidCutSuffix))) nm += S(Str::VidCutSuffix);
     else if (!EvEdited() && EvHasMarks() && !EndsWithI(nm.c_str(), S(Str::VidMarkedSuffix))) nm += S(Str::VidMarkedSuffix);
     dlg->SetFileName(nm.c_str());
     out[0] = 0;
@@ -24211,6 +25180,25 @@ bool EvClipFile(const wchar_t* path)
     return ok;
 }
 
+// CAPS-90: кадр і розмір документа → кадр у пікселях джерела й розмір виходу
+// (парні). Без зменшення й кадру — нулі: конвеєр лишається апаратним.
+void EvFillGeom(EvExportJob& x)
+{
+    x.crop = RECT{ 0, 0, 0, 0 };
+    x.outW = x.outH = 0;
+    if (!EvHasGeom()) return;
+    const double k = EvDocK();
+    const int ow = EdViewW() & ~1, oh = EdViewH() & ~1;
+    if (ow < 2 || oh < 2) return;
+    const int sl = (int)(EdViewX() / k + 0.5), st = (int)(EdViewY() / k + 0.5);
+    int sw = (int)(ow / k + 0.5), sh = (int)(oh / k + 0.5);
+    if (sl + sw > g_evW) sw = g_evW - sl;
+    if (st + sh > g_evH) sh = g_evH - st;
+    if (sw < 1 || sh < 1) return;
+    x.crop = RECT{ sl, st, sl + sw, st + sh };
+    x.outW = ow; x.outH = oh;
+}
+
 bool EvSaveStart(int mode, bool closeAfter)
 {
     if (g_evJob || !g_edVideo || !g_evPath[0]) return false;
@@ -24221,12 +25209,13 @@ bool EvSaveStart(int mode, bool closeAfter)
     }
     const bool edited = EvEdited();
     const bool marked = EvHasMarks();                    // CAPS-80
+    const bool geom = EvHasGeom();                       // CAPS-90
     // CAPS-81: з правками чи позначками «Зберегти» кладе проєкт, а не перекодований MP4
-    if (mode == 0 && (edited || marked || LhvIs(g_evPath))) return EvSaveProject(closeAfter);
+    if (mode == 0 && (edited || marked || geom || LhvIs(g_evPath))) return EvSaveProject(closeAfter);
     wchar_t out[MAX_PATH] = {}, part[MAX_PATH] = {};
     if (mode == 0) {
         const wchar_t* dir = EdLibDir();
-        if (!edited && !marked && dir && EvInDir(g_evPath, dir)) {   // без правок запис уже там, де треба
+        if (!edited && !marked && !geom && dir && EvInDir(g_evPath, dir)) {   // без правок запис уже там, де треба
             g_evSavedKeep = keep;
             EdTick(EdHit::Store);
             if (closeAfter && g_edWnd) PostMessageW(g_edWnd, WM_CLOSE, 0, 0);
@@ -24261,14 +25250,16 @@ bool EvSaveStart(int mode, bool closeAfter)
     j->x.frames = EvEditFrames();
     j->x.notify = g_edWnd;
     j->mode = mode;
-    j->copyOnly = !edited && !marked;
+    j->copyOnly = !edited && !marked && !geom;
     j->closeAfter = closeAfter;
     j->keep = keep;
     j->marksGen = g_evMarksGen;
-    if (marked) EvBuildMarkSpans(j->x.spans, g_evW, g_evH);   // CAPS-80: шари й ефекти — тут, у потоці вікна
+    EvFillGeom(j->x);                            // CAPS-90: кадр і розмір
+    if (marked) EvBuildMarkSpans(j->x.spans, j->x.outW > 0 ? j->x.outW : g_evW, j->x.outH > 0 ? j->x.outH : g_evH,
+                                 -EdViewX(), -EdViewY());   // CAPS-80: шари й ефекти — тут, у потоці вікна
     j->name = g_evName;
     j->meta = g_edMeta;                          // CAPS-88
-    if (edited && !EndsWithI(j->name.c_str(), S(Str::VidCutSuffix))) j->name += S(Str::VidCutSuffix);
+    if ((edited || geom) && !EndsWithI(j->name.c_str(), S(Str::VidCutSuffix))) j->name += S(Str::VidCutSuffix);
     else if (!edited && marked && !EndsWithI(j->name.c_str(), S(Str::VidMarkedSuffix))) j->name += S(Str::VidMarkedSuffix);
     g_evJob = j;
     g_evJobThread = CreateThread(nullptr, 0, EvSaveThread, j, 0, nullptr);
@@ -24327,6 +25318,7 @@ void EvSaved(LPARAM lp)
         if (SUCCEEDED(j->x.hr)) {
             g_evSavedKeep = j->keep;
             g_evMarksSavedGen = j->marksGen;       // CAPS-80
+            if (j->mode == 0 || j->mode == 3) { g_evSavedCrop = g_edCrop; g_evSavedDocW = g_evDocW; g_evSavedDocH = g_evDocH; }   // CAPS-90
             if (j->mode == 0) lstrcpynW(g_evLibOut, j->out, MAX_PATH);
             if (j->mode == 3) {                        // CAPS-81: тепер відкритий документ — проєкт
                 const wchar_t* dir = EdLibDir();
@@ -24336,12 +25328,21 @@ void EvSaved(LPARAM lp)
                 WIN32_FILE_ATTRIBUTE_DATA fa = {};
                 if (GetFileAttributesExW(g_evPath, GetFileExInfoStandard, &fa)) g_evBytes = ((ULONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
             }
-            if (j->mode < 2 || j->mode == 3) EdTick(EdHit::Store);
+            if (j->mode == 4) {                        // CAPS-89: GIF — тост із розміром
+                g_evLastGifFrames = j->x.framesOut;
+                g_evLastGifBytes = j->x.gifBytes;
+                wchar_t sz[48], msg[160];
+                EvFmtBytes(j->x.gifBytes, sz, 48);
+                swprintf(msg, 160, S(Str::GifSavedFmt), sz);
+                EdToastText(msg);
+                EdTick(EdHit::Store);
+            }
+            else if (j->mode < 2 || j->mode == 3) EdTick(EdHit::Store);
             else if (EvClipFile(j->out)) EdToast(Str::VidCopiedFile);
             else MessageBoxW(g_edWnd, S(Str::EdErrCopy), kAppName, MB_OK | MB_ICONWARNING);
             if (j->closeAfter) PostMessageW(g_edWnd, WM_CLOSE, 0, 0);
         } else if (j->x.hr != E_ABORT) {
-            MessageBoxW(g_edWnd, S(Str::VidErrExport), kAppName, MB_OK | MB_ICONWARNING);
+            MessageBoxW(g_edWnd, S(j->mode == 4 ? Str::GifErr : Str::VidErrExport), kAppName, MB_OK | MB_ICONWARNING);
         }
         InvalidateRect(g_edWnd, nullptr, FALSE);
     }
@@ -24359,6 +25360,7 @@ bool EvSaveProject(bool closeAfter)
         }
         g_evSavedKeep = EvKeepSegs();
         g_evMarksSavedGen = g_evMarksGen;
+        g_evSavedCrop = g_edCrop; g_evSavedDocW = g_evDocW; g_evSavedDocH = g_evDocH;   // CAPS-90
         WIN32_FILE_ATTRIBUTE_DATA fa = {};
         if (GetFileAttributesExW(g_evPath, GetFileExInfoStandard, &fa)) g_evBytes = ((ULONGLONG)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
         EdTick(EdHit::Store);
@@ -24405,13 +25407,356 @@ bool EvSaveMenuAt(HWND hwnd, const RECT& btn)
     const UINT fl = MF_STRING | (g_evJob ? MF_GRAYED : 0);
     AppendMenuW(m, fl, 1, S(Str::VidSaveAsItem));
     AppendMenuW(m, fl, 2, S(Str::VidCopyFileItem));
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, fl, 3, S(Str::VidGifItem));           // CAPS-89
     POINT p = { btn.left, btn.top };
     ClientToScreen(hwnd, &p);
     const int cmd = (int)TrackPopupMenu(m, TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTBUTTON,
                                         p.x, p.y, 0, hwnd, nullptr);
     DestroyMenu(m);
     if (cmd == 1 || cmd == 2) return EvSaveStart(cmd, false);
+    if (cmd == 3) return EvGifDialog(hwnd);
     return false;
+}
+
+
+// ===================== CAPS-89: діалог і запуск експорту в GIF =====================
+
+struct EvGifOpt { int fps = 15; int width = 0; int colors = 256; bool dither = true; int loop = 0; };
+const wchar_t* kRegGifFps = L"GifFps", * kRegGifWidth = L"GifWidth", * kRegGifColors = L"GifColors",
+             * kRegGifDither = L"GifDither", * kRegGifLoop = L"GifLoop";
+
+EvGifOpt EvGifLoadOpt()
+{
+    EvGifOpt o;
+    o.fps = RegLoadInt(kRegGifFps, 15, 1, 60);
+    o.width = RegLoadInt(kRegGifWidth, 0, 0, 8192);
+    o.colors = RegLoadInt(kRegGifColors, 256, 4, 256);
+    o.dither = RegLoadInt(kRegGifDither, 1, 0, 1) != 0;
+    o.loop = RegLoadInt(kRegGifLoop, 0, 0, 1);
+    return o;
+}
+
+void EvGifSaveOpt(const EvGifOpt& o)
+{
+    RegSaveInt(kRegGifFps, o.fps);
+    RegSaveInt(kRegGifWidth, o.width);
+    RegSaveInt(kRegGifColors, o.colors);
+    RegSaveInt(kRegGifDither, o.dither ? 1 : 0);
+    RegSaveInt(kRegGifLoop, o.loop);
+}
+
+void EvFmtBytes(ULONGLONG b, wchar_t* out, int n)
+{
+    if (b >= 1024ull * 1024) { const int t10 = (int)(b * 10 / (1024 * 1024)); swprintf(out, n, L"%d,%d МБ", t10 / 10, t10 % 10); }
+    else swprintf(out, n, L"%d КБ", (int)((b + 1023) / 1024));
+}
+
+// Завдання GIF — те саме, що й MP4 (відрізки, кадр, розмір, позначки), плюс параметри.
+void EvGifFillJob(EvExportJob& x, const EvGifOpt& o)
+{
+    lstrcpynW(x.src, g_evPath, MAX_PATH);
+    x.keep = EvKeepSegs();
+    x.fps = g_evFps;
+    x.frames = EvEditFrames();
+    EvFillGeom(x);
+    x.spans.clear();
+    if (EvHasMarks()) EvBuildMarkSpans(x.spans, x.outW > 0 ? x.outW : g_evW, x.outH > 0 ? x.outH : g_evH, -EdViewX(), -EdViewY());
+    x.gif = true;
+    x.gifFps = o.fps < 1 ? 1 : o.fps;
+    if ((double)x.gifFps > g_evFps) x.gifFps = (int)(g_evFps + 0.5);
+    x.gifW = o.width;
+    x.gifColors = o.colors;
+    x.gifDither = o.dither;
+    x.gifLoop = o.loop;
+}
+
+bool EvGifStart(const wchar_t* out, const EvGifOpt& o)
+{
+    if (g_evJob || !g_edVideo || !g_evPath[0] || !out || !out[0]) return false;
+    if (EvKeepSegs().empty()) { MessageBoxW(g_edWnd, S(Str::VidNothingLeft), kAppName, MB_OK | MB_ICONINFORMATION); return false; }
+    wchar_t part[MAX_PATH] = {};
+    if (wcslen(out) + 5 >= MAX_PATH) return false;
+    swprintf(part, MAX_PATH, L"%s.part", out);
+    EvSaveJob* j = new EvSaveJob;
+    EvGifFillJob(j->x, o);
+    lstrcpynW(j->x.dst, part, MAX_PATH);
+    lstrcpynW(j->out, out, MAX_PATH);
+    j->x.notify = g_edWnd;
+    j->mode = 4;
+    j->copyOnly = false;
+    j->keep = j->x.keep;
+    j->marksGen = g_evMarksGen;
+    j->name = g_evName;
+    j->meta = g_edMeta;
+    g_evJob = j;
+    g_evJobThread = CreateThread(nullptr, 0, EvSaveThread, j, 0, nullptr);
+    if (!g_evJobThread) { g_evJob = nullptr; delete j; return false; }
+    if (g_edWnd) {
+        SetTimer(g_edWnd, kEvSaveTimer, 150, nullptr);
+        InvalidateRect(g_edWnd, &g_edRcStatus, FALSE);
+    }
+    return true;
+}
+
+bool EvPickGifPath(HWND hwnd, wchar_t* out)
+{
+    IFileSaveDialog* dlg = nullptr;
+    if (FAILED(CoCreateInstance(kCLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                kIID_IFileSaveDialog, (void**)&dlg)) || !dlg)
+        return false;
+    COMDLG_FILTERSPEC fs[1];
+    fs[0].pszName = S(Str::GifFmt);
+    fs[0].pszSpec = L"*.gif";
+    dlg->SetFileTypes(1, fs);
+    dlg->SetDefaultExtension(L"gif");
+    dlg->SetTitle(S(Str::GifSaveTitle));
+    dlg->SetFileName(g_evName);
+    out[0] = 0;
+    if (SUCCEEDED(dlg->Show(hwnd))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dlg->GetResult(&item)) && item) {
+            PWSTR p = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &p)) && p) { lstrcpynW(out, p, MAX_PATH); CoTaskMemFree(p); }
+            item->Release();
+        }
+    }
+    dlg->Release();
+    return out[0] != 0;
+}
+
+// Діалог: частота, ширина (висота — пропорційно), кольори, дизеринг, повтор і
+// приблизний розмір, який рахує окремий потік по пробних кадрах — щоразу, коли
+// щось міняють (із паузою 400 мс, щоб не рахувати на кожну цифру).
+constexpr UINT WMAPP_GIFEST = WM_APP + 16;
+struct EvGifEstJob { EvExportJob x; volatile LONG cancel = 0; LONG gen = 0; HWND dlg = nullptr; ULONGLONG bytes = 0; };
+HWND      g_gifWnd = nullptr;
+bool      g_gifOk = false;
+EvGifOpt  g_gifOpt;
+int       g_gifOutW = 0, g_gifOutH = 0;
+double    g_gifSrcFps = 30;
+LONG      g_gifGen = 0;
+EvGifEstJob* g_gifEst = nullptr;
+HANDLE    g_gifEstThread = nullptr;
+LONGLONG  g_gifOutFrames = 0;
+const int kGifFpsList[6] = { 5, 10, 15, 20, 25, 30 };
+const int kGifColorList[4] = { 256, 128, 64, 32 };
+
+DWORD WINAPI EvGifEstThread(LPVOID param)
+{
+    EvGifEstJob* e = (EvGifEstJob*)param;
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    e->bytes = EvGifEstimate(&e->x, &e->cancel);
+    CoUninitialize();
+    if (!e->dlg || !PostMessageW(e->dlg, WMAPP_GIFEST, (WPARAM)e->gen, (LPARAM)e)) delete e;
+    return 0;
+}
+
+void EvGifEstStop()
+{
+    if (g_gifEst) InterlockedExchange(&g_gifEst->cancel, 1);
+    if (g_gifEstThread) { WaitForSingleObject(g_gifEstThread, 8000); CloseHandle(g_gifEstThread); g_gifEstThread = nullptr; }
+    g_gifEst = nullptr;
+}
+
+EvGifOpt EvGifReadDlg(HWND hwnd)
+{
+    EvGifOpt o = g_gifOpt;
+    const int fi = (int)SendMessageW(GetDlgItem(hwnd, 20), CB_GETCURSEL, 0, 0);
+    o.fps = (int)SendMessageW(GetDlgItem(hwnd, 20), CB_GETITEMDATA, (WPARAM)(fi < 0 ? 0 : fi), 0);
+    o.width = EdSzRead(GetDlgItem(hwnd, 21));
+    const int ci = (int)SendMessageW(GetDlgItem(hwnd, 23), CB_GETCURSEL, 0, 0);
+    o.colors = kGifColorList[ci < 0 || ci > 3 ? 0 : ci];
+    o.dither = SendMessageW(GetDlgItem(hwnd, 24), BM_GETCHECK, 0, 0) == BST_CHECKED;
+    o.loop = (int)SendMessageW(GetDlgItem(hwnd, 25), CB_GETCURSEL, 0, 0) == 1 ? 1 : 0;
+    if (o.width < 16) o.width = 16;
+    if (o.width > g_gifOutW) o.width = g_gifOutW;
+    if (o.fps < 1) o.fps = 1;
+    return o;
+}
+
+void EvGifEstStart(HWND hwnd)
+{
+    if (g_gifEst) InterlockedExchange(&g_gifEst->cancel, 1);   // старий домалює й піде в кошик
+    if (g_gifEstThread) { CloseHandle(g_gifEstThread); g_gifEstThread = nullptr; }
+    g_gifEst = nullptr;
+    const EvGifOpt o = EvGifReadDlg(hwnd);
+    EvGifEstJob* e = new EvGifEstJob;
+    EvGifFillJob(e->x, o);
+    e->dlg = hwnd;
+    e->gen = ++g_gifGen;
+    LONGLONG totalOut = 0;
+    for (const EvSeg& s : e->x.keep) totalOut += s.b - s.a;
+    g_gifOutFrames = (LONGLONG)(totalOut * (double)e->x.gifFps / (g_gifSrcFps > 0 ? g_gifSrcFps : 30.0) + 0.5);
+    g_gifEst = e;
+    g_gifEstThread = CreateThread(nullptr, 0, EvGifEstThread, e, 0, nullptr);
+    if (!g_gifEstThread) { g_gifEst = nullptr; delete e; return; }
+    SetWindowTextW(GetDlgItem(hwnd, 26), S(Str::GifEstWait));
+    ShowWindow(GetDlgItem(hwnd, 27), SW_HIDE);
+}
+
+void EvGifSyncHeight(HWND hwnd)
+{
+    int w = EdSzRead(GetDlgItem(hwnd, 21));
+    if (w < 1) w = 1;
+    if (w > g_gifOutW) w = g_gifOutW;
+    wchar_t t[48];
+    swprintf(t, 48, L"× %d", g_gifOutW > 0 ? (int)((double)g_gifOutH * w / g_gifOutW + 0.5) : 0);
+    SetWindowTextW(GetDlgItem(hwnd, 22), t);
+}
+
+LRESULT CALLBACK EvGifProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_ERASEBKGND: case WM_CTLCOLORSTATIC: case WM_CTLCOLORBTN: case WM_CTLCOLOREDIT:
+        return EdSzProc(hwnd, msg, wp, lp);                 // те саме тло й кольори, що в діалозі розміру
+    case WM_CTLCOLORLISTBOX:
+        return EdSzProc(hwnd, WM_CTLCOLOREDIT, wp, lp);
+    case WM_COMMAND: {
+        const int id = LOWORD(wp), code = HIWORD(wp);
+        if (id == 21 && code == EN_CHANGE) { EvGifSyncHeight(hwnd); SetTimer(hwnd, 1, 400, nullptr); return 0; }
+        if ((id == 20 || id == 23 || id == 25) && code == CBN_SELCHANGE) { SetTimer(hwnd, 1, 400, nullptr); return 0; }
+        if (id == 24 && code == BN_CLICKED) { SetTimer(hwnd, 1, 400, nullptr); return 0; }
+        if (id == 1) {
+            g_gifOpt = EvGifReadDlg(hwnd);
+            g_gifOk = true;
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        if (id == 2) { DestroyWindow(hwnd); return 0; }
+        return 0;
+    }
+    case WM_TIMER:
+        if (wp == 1) { KillTimer(hwnd, 1); EvGifEstStart(hwnd); }
+        return 0;
+    case WMAPP_GIFEST: {
+        EvGifEstJob* e = (EvGifEstJob*)lp;
+        if (!e) return 0;
+        if (e == g_gifEst && (LONG)wp == g_gifGen) {
+            wchar_t sz[48], t[160];
+            EvFmtBytes(e->bytes, sz, 48);
+            swprintf(t, 160, S(Str::GifEstFmt), sz, (int)g_gifOutFrames);
+            SetWindowTextW(GetDlgItem(hwnd, 26), t);
+            ShowWindow(GetDlgItem(hwnd, 27), e->bytes > 25ull * 1024 * 1024 ? SW_SHOW : SW_HIDE);
+            g_gifEst = nullptr;
+            if (g_gifEstThread) { CloseHandle(g_gifEstThread); g_gifEstThread = nullptr; }
+        }
+        delete e;
+        return 0;
+    }
+    case WM_CLOSE: DestroyWindow(hwnd); return 0;
+    case WM_DESTROY:
+        KillTimer(hwnd, 1);
+        EvGifEstStop();
+        g_gifWnd = nullptr;
+        PostThreadMessageW(GetCurrentThreadId(), WM_NULL, 0, 0);
+        return 0;
+    default: break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+bool EvGifDialog(HWND owner)
+{
+    if (!g_edVideo || g_gifWnd || g_evJob) return false;
+    if (EvKeepSegs().empty()) { MessageBoxW(owner, S(Str::VidNothingLeft), kAppName, MB_OK | MB_ICONINFORMATION); return false; }
+    EvFreezeForEdit();
+    g_gifOpt = EvGifLoadOpt();
+    g_gifOutW = EdViewW() & ~1; g_gifOutH = EdViewH() & ~1;
+    if (g_gifOutW < 2) g_gifOutW = 2;
+    if (g_gifOutH < 2) g_gifOutH = 2;
+    g_gifSrcFps = g_evFps;
+    if (g_gifOpt.width <= 0 || g_gifOpt.width > g_gifOutW) g_gifOpt.width = g_gifOutW > 1280 ? 1280 : g_gifOutW;
+    g_gifOk = false;
+
+    static bool reg = false;
+    HINSTANCE inst = (HINSTANCE)GetWindowLongPtrW(owner, GWLP_HINSTANCE);
+    if (!reg) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = EvGifProc;
+        wc.hInstance = inst;
+        wc.lpszClassName = L"lilhelpers_gif";
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        RegisterClassW(&wc);
+        reg = true;
+    }
+    const int pad = EdPx(14), lh = EdPx(24), gap = EdPx(10), lab = EdPx(150);
+    const int w = EdPx(420), h = EdPx(372);
+    RECT orc;
+    GetWindowRect(owner, &orc);
+    const int px = orc.left + ((orc.right - orc.left) - w) / 2;
+    const int py = orc.top + ((orc.bottom - orc.top) - h) / 3;
+    g_gifWnd = CreateWindowExW(WS_EX_DLGMODALFRAME, L"lilhelpers_gif", S(Str::GifTitle),
+                               WS_POPUPWINDOW | WS_CAPTION, px, py, w, h, owner, nullptr, inst, nullptr);
+    if (!g_gifWnd) return false;
+    const BOOL darkBar = g_edDark ? TRUE : FALSE;
+    DwmSetWindowAttribute(g_gifWnd, 20, &darkBar, sizeof(darkBar));
+
+    int y = pad;
+    EdSzMake(g_gifWnd, L"STATIC", S(Str::GifFpsL), 0, pad, y + EdPx(3), lab, lh, 0);
+    HWND cfps = EdSzMake(g_gifWnd, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, pad + lab, y, EdPx(110), EdPx(200), 20);
+    int sel = 0;
+    const int maxFps = (int)(g_gifSrcFps + 0.5);
+    for (int i = 0; i < 6; ++i) {
+        if (kGifFpsList[i] > maxFps && i > 0) break;
+        wchar_t t[16];
+        swprintf(t, 16, L"%d", kGifFpsList[i]);
+        const int at = (int)SendMessageW(cfps, CB_ADDSTRING, 0, (LPARAM)t);
+        SendMessageW(cfps, CB_SETITEMDATA, (WPARAM)at, (LPARAM)kGifFpsList[i]);
+        if (kGifFpsList[i] <= g_gifOpt.fps) sel = at;
+    }
+    SendMessageW(cfps, CB_SETCURSEL, (WPARAM)sel, 0);
+    y += lh + gap;
+    EdSzMake(g_gifWnd, L"STATIC", S(Str::GifWidthL), 0, pad, y + EdPx(3), lab, lh, 0);
+    HWND ew = EdSzMake(g_gifWnd, L"EDIT", L"", WS_BORDER | ES_NUMBER, pad + lab, y, EdPx(80), lh, 21);
+    EdSzMake(g_gifWnd, L"STATIC", L"", 0, pad + lab + EdPx(88), y + EdPx(3), EdPx(120), lh, 22);
+    y += lh + gap;
+    EdSzMake(g_gifWnd, L"STATIC", S(Str::GifColorsL), 0, pad, y + EdPx(3), lab, lh, 0);
+    HWND ccol = EdSzMake(g_gifWnd, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, pad + lab, y, EdPx(110), EdPx(200), 23);
+    for (int i = 0; i < 4; ++i) { wchar_t t[16]; swprintf(t, 16, L"%d", kGifColorList[i]); SendMessageW(ccol, CB_ADDSTRING, 0, (LPARAM)t); }
+    SendMessageW(ccol, CB_SETCURSEL, (WPARAM)(g_gifOpt.colors >= 256 ? 0 : g_gifOpt.colors >= 128 ? 1 : g_gifOpt.colors >= 64 ? 2 : 3), 0);
+    y += lh + gap;
+    HWND cd = EdSzMake(g_gifWnd, L"BUTTON", S(Str::GifDither), BS_AUTOCHECKBOX, pad, y + EdPx(2), w - pad * 2, lh, 24);
+    SendMessageW(cd, BM_SETCHECK, g_gifOpt.dither ? BST_CHECKED : BST_UNCHECKED, 0);
+    y += lh + gap;
+    EdSzMake(g_gifWnd, L"STATIC", S(Str::GifLoopL), 0, pad, y + EdPx(3), lab, lh, 0);
+    HWND cl = EdSzMake(g_gifWnd, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, pad + lab, y, EdPx(150), EdPx(200), 25);
+    SendMessageW(cl, CB_ADDSTRING, 0, (LPARAM)S(Str::GifLoopInf));
+    SendMessageW(cl, CB_ADDSTRING, 0, (LPARAM)S(Str::GifLoopOnce));
+    SendMessageW(cl, CB_SETCURSEL, (WPARAM)(g_gifOpt.loop ? 1 : 0), 0);
+    y += lh + gap + EdPx(4);
+    EdSzMake(g_gifWnd, L"STATIC", S(Str::GifEstWait), 0, pad, y, w - pad * 2, lh, 26);
+    y += lh;
+    HWND note = EdSzMake(g_gifWnd, L"STATIC", S(Str::GifBigNote), 0, pad, y, w - pad * 2, lh * 2, 27);
+    ShowWindow(note, SW_HIDE);
+
+    RECT crc = {};
+    GetClientRect(g_gifWnd, &crc);
+    const int bw = EdPx(120), bh = EdPx(30);
+    const int by = crc.bottom - bh - EdPx(12);
+    EdSzMake(g_gifWnd, L"BUTTON", S(Str::GifExportBtn), BS_DEFPUSHBUTTON, crc.right - pad - bw * 2 - EdPx(8), by, bw, bh, 1);
+    EdSzMake(g_gifWnd, L"BUTTON", S(Str::EdSizeCancel), 0, crc.right - pad - bw, by, bw, bh, 2);
+
+    EdSzWrite(ew, g_gifOpt.width);
+    EvGifSyncHeight(g_gifWnd);
+    EnableWindow(owner, FALSE);
+    ShowWindow(g_gifWnd, SW_SHOW);
+    SetFocus(ew);
+    EvGifEstStart(g_gifWnd);
+
+    MSG m;
+    while (g_gifWnd && GetMessageW(&m, nullptr, 0, 0)) {
+        if (g_gifWnd && IsDialogMessageW(g_gifWnd, &m)) continue;
+        TranslateMessage(&m);
+        DispatchMessageW(&m);
+    }
+    EnableWindow(owner, TRUE);
+    SetForegroundWindow(owner);
+    if (!g_gifOk) return false;
+    EvGifSaveOpt(g_gifOpt);
+    wchar_t out[MAX_PATH] = {};
+    if (!EvPickGifPath(owner, out)) return false;
+    return EvGifStart(out, g_gifOpt);
 }
 
 // Закриття: зберігається — спитати, чи зупинити; є незбережені правки — три відповіді,
@@ -24435,7 +25780,7 @@ bool EvConfirmReplace()
 
 void EvStatusText(wchar_t* buf, int n)
 {
-    if (g_evJob) { swprintf(buf, n, S(Str::VidExportingFmt), (int)(InterlockedCompareExchange(&g_evJob->x.progress, 0, 0) / 10)); return; }
+    if (g_evJob) { swprintf(buf, n, S(g_evJob->x.gif ? Str::GifSavingFmt : Str::VidExportingFmt), (int)(InterlockedCompareExchange(&g_evJob->x.progress, 0, 0) / 10)); return; }
     if (EvEdited()) {                              // CAPS-79: скільки лишиться після правок
         wchar_t d[32];
         EvFmtTime(EvKeptFrames() / g_evFps, d, 32);
