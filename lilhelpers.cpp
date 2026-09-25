@@ -209,6 +209,8 @@ constexpr int  IDC_VID_AUDSYSDEV = 232;   //          його пристрій 
 constexpr int  IDC_VID_AUDMIC    = 233;   //          мікрофон
 constexpr int  IDC_VID_AUDMICDEV = 234;
 constexpr int  IDC_VID_MICMETER  = 235;   //          рівень мікрофона
+constexpr int  IDC_VID_FOLLOW    = 236;   // CAPS-75: вікно — слідувати за ним
+constexpr int  IDC_VID_FIXED     = 237;   //          чи фіксована ділянка
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -229,6 +231,7 @@ constexpr UINT TIMER_TRAY       = 5;   // CAPS-17: повтор додаванн
 constexpr UINT TIMER_UPDREMIND  = 6;   // CAPS-63: щохвилини — чи можна вже нагадати про оновлення
 constexpr UINT TIMER_VIDTIP     = 7;   // CAPS-73: тривалість запису в підказці трею
 constexpr UINT TIMER_VIDMETER   = 8;   // CAPS-77: рівень мікрофона на вкладці «Відео»
+constexpr UINT TIMER_VIDFOLLOW  = 9;   // CAPS-75: рамка-індикатор їде за вікном
 
 const wchar_t* kAppName  = L"Little Helpers";   // заголовки вікна/повідомлень, трей
 const wchar_t* kWndClass = L"lilhelpers";
@@ -550,7 +553,7 @@ X(VidQNormal,         L"Звичайна",                      L"Normal")      
 X(VidQHigh,           L"Висока",                        L"High")                                       \
 X(VidQualHint,        L"60 кадрів — плавніше, але файл майже вдвічі більший.",                         \
                       L"60 fps is smoother, but the file is almost twice as big.")                     \
-X(VidSecCursor,       L"Курсор і кліки",                L"Cursor and clicks")                          \
+X(VidWinL,            L"Клік по вікну:",                L"Clicked window:")                            X(VidWinFollow,       L"слідувати за ним",              L"follow it")                                  X(VidWinFixed,        L"ділянкою",                      L"as an area")                                 X(VidSecCursor,       L"Курсор і кліки",                L"Cursor and clicks")                          \
 X(VidCursorShow,      L"Показувати курсор",             L"Show the cursor")                            \
 X(VidClicksShow,      L"Підсвічувати кліки: лівий — коло, правий — подвійне", L"Highlight clicks: left is a ring, right a double one") \
 X(VidClickClrL,       L"Колір кліку",                   L"Click colour")                               \
@@ -1039,7 +1042,7 @@ HWND  g_layoutCheckbox = nullptr;
 HWND  g_pageSettings[32] = {};  int g_pageSettingsN = 0;
 HWND  g_pagePeek[24]     = {};  int g_pagePeekN = 0;   // CAPS-16
 HWND  g_pageShots[64]    = {};  int g_pageShotsN = 0;  // CAPS-21; CAPS-57: матриця жестів — ще двадцять
-HWND  g_pageVideo[48]    = {};  int g_pageVideoN = 0;  // CAPS-73; 48 — звук і курсор (CAPS-76/77)
+HWND  g_pageVideo[56]    = {};  int g_pageVideoN = 0;  // CAPS-73; 56 — звук, курсор, режим вікна (CAPS-75..77)
 
 // ---------- CAPS-8: тема самого вікна ----------
 //
@@ -7827,6 +7830,8 @@ HFONT g_rgnFontSm = nullptr;
 // CAPS-57: верхні вікна під знімком, згори вниз за Z, у координатах накладки.
 // Беруться ДО показу накладки — інакше першим у списку була б вона сама.
 std::vector<RECT> g_rgnWins;
+std::vector<HWND> g_rgnWinH;   // CAPS-75: ті самі вікна — дескриптори, паралельно g_rgnWins
+HWND  g_rgnPickedWnd = nullptr; // вибір завершено кліком по вікну — яке саме (для «слідувати»)
 int   g_rgnHover = -1;         // вікно під курсором; -1 — робочий стіл, тобто весь монітор
 WPARAM g_rgnMk = 0;            // модифікатори з останнього руху миші — для підказки
 int   g_rgnGesture = 0;        // жест, яким вибір завершено
@@ -8110,6 +8115,7 @@ void RgnFinishClick(HWND hwnd, POINT at, int gesture, bool delayed)
 {
     g_rgnCur = at;
     RgnUpdateHover();
+    g_rgnPickedWnd = (g_rgnHover >= 0 && g_rgnHover < (int)g_rgnWinH.size()) ? g_rgnWinH[g_rgnHover] : nullptr;   // CAPS-75
     RECT rc;
     GetClientRect(hwnd, &rc);
     const RECT s = RgnHoverRect(rc.right, rc.bottom);
@@ -8163,6 +8169,7 @@ BOOL CALLBACK RgnEnumWin(HWND h, LPARAM lp)
     if (c.right - c.left < 8 || c.bottom - c.top < 8) return TRUE;
     OffsetRect(&c, -mon.left, -mon.top);
     g_rgnWins.push_back(c);
+    g_rgnWinH.push_back(h);
     return TRUE;
 }
 
@@ -8472,6 +8479,7 @@ bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out, int* g
     g_rgnDragging = g_rgnDone = g_rgnOk = g_rgnHadFocus = false;
     g_rgnFrom = g_rgnTo = POINT{ 0, 0 };
     g_rgnGesture = 0;
+    g_rgnPickedWnd = nullptr;                      // CAPS-75: вікно — лише коли вибір закінчено кліком по ньому
     g_rgnMk = 0;
     g_rgnPrevValid = false;
     g_rgnLens = 0;                                 // CAPS-86: відкривається без лінзи
@@ -8484,6 +8492,7 @@ bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out, int* g
     // Вікна — ДО показу накладки: EnumWindows іде згори вниз за Z, і першим
     // знайденим під курсором буде саме те вікно, яке видно на знімку.
     g_rgnWins.clear();
+    g_rgnWinH.clear();
     {
         RECT mon = monRc;
         EnumWindows(RgnEnumWin, (LPARAM)&mon);
@@ -8522,6 +8531,7 @@ bool CapRegionPick(Gdiplus::Bitmap* frozen, const RECT& monRc, RECT* out, int* g
     g_rgnWnd = nullptr;
     g_rgnImg = nullptr;
     g_rgnWins.clear();
+    g_rgnWinH.clear();
     // 4K-шари — це ~100 МБ; між виборами їх не тримаємо.
     FastLayerFree(g_rgnBright);
     FastLayerFree(g_rgnDim);
@@ -24702,6 +24712,9 @@ const wchar_t* kRegVidCursor   = L"VideoCursor";
 const wchar_t* kRegVidClicks   = L"VideoClicks";
 const wchar_t* kRegVidClickClr = L"VideoClickColor";
 bool g_vidCursor = true, g_vidClicks = true;
+// CAPS-75: вікно, вибране кліком, — «слідувати за ним» (типово, рішення власника 24.09) чи ділянкою.
+const wchar_t* kRegVidFollow = L"VideoFollowWindow";
+bool g_vidFollow = true;
 int  g_vidClickClr = 0;
 const COLORREF kVidClickColors[3] = { RGB(255, 193, 7), RGB(229, 57, 53), RGB(30, 136, 229) };
 
@@ -24712,6 +24725,7 @@ void VidLoadSettings()
     g_vidCursor = RegLoadInt(kRegVidCursor, 1, 0, 1) != 0;
     g_vidClicks = RegLoadInt(kRegVidClicks, 1, 0, 1) != 0;
     g_vidClickClr = RegLoadInt(kRegVidClickClr, 0, 0, 2);
+    g_vidFollow = RegLoadInt(kRegVidFollow, 1, 0, 1) != 0;   // CAPS-75
     VidAudLoadSettings();                            // CAPS-77
 }
 
@@ -24747,8 +24761,9 @@ int VidSynthMode() { return 0; }
 const char kVidHlsl[] =
     "Texture2D<float4> src : register(t0);\n"
     "Texture2D<float4> cur : register(t1);\n"
+    "SamplerState smp : register(s0);\n"
     "cbuffer P : register(b0) { int2 off; int mode; float white; int2 curPos; int2 curSize;\n"
-    "    float4 clk[8]; float4 clkCol[8]; int nClk; float scale; int2 pad; };\n"
+    "    float4 clk[8]; float4 clkCol[8]; int nClk; float scale; int2 pad; float4 fit; int4 fitInfo; };\n"
     "float4 VS(uint id : SV_VertexID) : SV_Position {\n"
     "    float2 p = float2((id << 1) & 2, id & 2);\n"
     "    return float4(p * float2(2, -2) + float2(-1, 1), 0, 1);\n"
@@ -24773,8 +24788,15 @@ const char kVidHlsl[] =
     "    }\n"
     "    return c.rgb;\n"
     "}\n"
+    "float4 Src(float2 p) {\n"
+    "    if (fitInfo.x == 0) return src.Load(int3(int2(p) + off, 0));\n"
+    "    float2 q = p - fit.xy;\n"
+    "    if (q.x < 0 || q.y < 0 || q.x >= fit.z || q.y >= fit.w) return float4(0, 0, 0, 1);\n"
+    "    if (fit.z == fitInfo.y && fit.w == fitInfo.z) return src.Load(int3(int2(q), 0));\n"
+    "    return src.SampleLevel(smp, q / fit.zw, 0);\n"
+    "}\n"
     "float4 PS(float4 pos : SV_Position) : SV_Target {\n"
-    "    float3 o = Tone(src.Load(int3(int2(pos.xy) + off, 0)));\n"
+    "    float3 o = Tone(Src(pos.xy));\n"
     "    float lw = 2.5 * scale;\n"
     "    for (int i = 0; i < nClk; ++i) {\n"
     "        float4 c = clk[i];\n"
@@ -24825,6 +24847,97 @@ bool VidShaders()
 
 // ---- джерело кадрів ----
 
+// ---- CAPS-75: Windows.Graphics.Capture — запис самого вікна ----
+// Заголовків WGC немає ні в MinGW, ні на машині збірки, тож ABI оголошено вручну,
+// як Windows.Data.Pdf (CAPS-16). IID і порядок методів перевірено пробою
+// (scratchpad caps75\wgcprobe.cpp): IInspectable::GetIids фабрики, пулу й сесії
+// та живий кадр власного вікна з чистими R/G/B у scRGB.
+struct LhSizeI { INT32 W, H; };
+struct LhEvToken { INT64 v; };
+struct LhGcItem : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_DisplayName(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Size(LhSizeI*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Closed(void*, LhEvToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_Closed(LhEvToken) = 0;
+};
+struct LhGcItemInterop : public IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE CreateForWindow(HWND, REFIID, void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE CreateForMonitor(HMONITOR, REFIID, void**) = 0;
+};
+struct LhGcFrame : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Surface(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_SystemRelativeTime(INT64*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ContentSize(LhSizeI*) = 0;
+};
+struct LhGcSession : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE StartCapture() = 0;
+};
+struct LhGcSession2 : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_IsCursorCaptureEnabled(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsCursorCaptureEnabled(boolean) = 0;
+};
+struct LhGcSession3 : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_IsBorderRequired(boolean*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsBorderRequired(boolean) = 0;
+};
+struct LhGcPool : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE Recreate(IInspectable*, INT32, INT32, LhSizeI) = 0;
+    virtual HRESULT STDMETHODCALLTYPE TryGetNextFrame(LhGcFrame**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_FrameArrived(void*, LhEvToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_FrameArrived(LhEvToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE CreateCaptureSession(LhGcItem*, LhGcSession**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_DispatcherQueue(IInspectable**) = 0;
+};
+struct LhGcPoolStatics2 : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE CreateFreeThreaded(IInspectable*, INT32, INT32, LhSizeI, LhGcPool**) = 0;
+};
+struct LhClosable : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE Close() = 0;
+};
+struct LhDxgiAccess : public IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE GetInterface(REFIID, void**) = 0;
+};
+const GUID kIID_LhGcItem         = { 0x79C3F95B, 0x31F7, 0x4EC2, { 0xA4, 0x64, 0x63, 0x2E, 0xF5, 0xD3, 0x07, 0x60 } };
+const GUID kIID_LhGcItemInterop  = { 0x3628E81B, 0x3CAC, 0x4C60, { 0xB7, 0xF4, 0x23, 0xCE, 0x0E, 0x0C, 0x33, 0x56 } };
+const GUID kIID_LhGcPoolStatics2 = { 0x589B103F, 0x6BBC, 0x5DF5, { 0xA9, 0x91, 0x02, 0xE2, 0x8B, 0x3B, 0x66, 0xD5 } };
+const GUID kIID_LhGcSession2     = { 0x2C39AE40, 0x7D2E, 0x5044, { 0x80, 0x4E, 0x8B, 0x67, 0x99, 0xD4, 0xCF, 0x9E } };
+const GUID kIID_LhGcSession3     = { 0xF2CDD966, 0x22AE, 0x5EA1, { 0x95, 0x96, 0x3A, 0x28, 0x93, 0x44, 0xC3, 0xBE } };
+const GUID kIID_LhClosable       = { 0x30D5A829, 0x7FA4, 0x4026, { 0x83, 0xBB, 0xD7, 0x5B, 0xAE, 0x4E, 0xA9, 0x9E } };
+const GUID kIID_LhDxgiAccess     = { 0xA9B3D012, 0x3DF2, 0x4EE3, { 0xB8, 0xD1, 0x86, 0x95, 0xF4, 0x57, 0xD3, 0xC1 } };
+constexpr INT32 kLhPixR16G16B16A16Float = 10;   // DirectXPixelFormat: кадр у scRGB — і HDR, і SDR
+
+HRESULT LhRoFactory(const wchar_t* cls, REFIID iid, void** out)
+{
+    HSTRING h = nullptr;
+    HRESULT hr = WindowsCreateString(cls, (UINT32)wcslen(cls), &h);
+    if (SUCCEEDED(hr)) hr = RoGetActivationFactory(h, iid, out);
+    if (h) WindowsDeleteString(h);
+    return hr;
+}
+
+// Чи є WGC узагалі (Windows 10 1903+). Лише наявність фабрик — дешево й без вікна.
+bool VidWgcSupported()
+{
+    static int known = -1;
+    if (known >= 0) return known == 1;
+    IUnknown* a = nullptr;
+    IUnknown* b = nullptr;
+    const bool ok = SUCCEEDED(LhRoFactory(L"Windows.Graphics.Capture.GraphicsCaptureItem", kIID_LhGcItemInterop, (void**)&a)) && a
+                 && SUCCEEDED(LhRoFactory(L"Windows.Graphics.Capture.Direct3D11CaptureFramePool", kIID_LhGcPoolStatics2, (void**)&b)) && b;
+    if (a) a->Release();
+    if (b) b->Release();
+    known = ok ? 1 : 0;
+    return ok;
+}
+
+// Межі вікна, які бачить WGC і малює DWM (без невидимого поля тіні Windows 11).
+RECT VidWinBounds(HWND w)
+{
+    RECT r = {};
+    if (FAILED(DwmGetWindowAttribute(w, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r)))) GetWindowRect(w, &r);
+    return r;
+}
+
 struct VidJob {
     HMONITOR mon;
     RECT monRc, sel;               // фізичні пікселі робочого стола
@@ -24839,6 +24952,8 @@ struct VidJob {
     float scale;                   // DPI монітора: товщина кілець
     wchar_t part[MAX_PATH], path[MAX_PATH];
     HANDLE stop;
+    HWND win;                      // CAPS-75: вікно, вибране кліком
+    bool follow;                   //          писати саме його (WGC), а не ділянку
 };
 
 struct VidResult {
@@ -24873,6 +24988,16 @@ struct VidSrc {
     int synth = 0;
     std::vector<BYTE> synthBuf;
     DWORD lostAt = 0;
+    // CAPS-75: «слідувати за вікном» — Windows.Graphics.Capture
+    bool wgc = false, closed = false;
+    HWND win = nullptr;
+    IInspectable* wdev = nullptr;
+    LhGcItem* item = nullptr;
+    LhGcPool* pool = nullptr;
+    LhGcSession* ses = nullptr;
+    LhSizeI poolSize = {};
+    HMONITOR winMon = nullptr;
+    DWORD monAt = 0;
 };
 
 // Біле SDR, від якого рахується тон. Та сама логіка, що в CapConvert: якщо
@@ -24933,8 +25058,10 @@ HRESULT VidDupOpen(VidSrc& s)
 // Новий кадр екрана, якщо він прийде до таймауту. Втрату доступу (UAC, зміна
 // режиму, блокування) переживаємо: між спробами відкрити дублювання знову
 // повторюється останній кадр.
+void VidWgcPull(VidSrc& s, UINT timeoutMs);
 void VidPull(VidSrc& s, UINT timeoutMs)
 {
+    if (s.wgc) { VidWgcPull(s, timeoutMs); return; }       // CAPS-75
     if (s.gdi || s.synth) { Sleep(timeoutMs); return; }   // ці знімаються в мить слота
     if (!s.dup) {
         if (GetTickCount() - s.lostAt >= 250 && FAILED(VidDupOpen(s))) s.lostAt = GetTickCount();
@@ -25042,8 +25169,10 @@ void VidSynthFill(VidSrc& s, const RECT& sel, LONGLONG k)
     s.have = true;
 }
 
+void VidWgcClose(VidSrc& s);
 void VidSrcClose(VidSrc& s)
 {
+    VidWgcClose(s);                               // CAPS-75
     if (s.dup) s.dup->Release();
     if (s.srv) s.srv->Release();
     if (s.last) s.last->Release();
@@ -25055,6 +25184,143 @@ void VidSrcClose(VidSrc& s)
     if (s.bmp) DeleteObject(s.bmp);
     if (s.scr) ReleaseDC(nullptr, s.scr);
     s = VidSrc{};
+}
+
+// ---- CAPS-75: джерело «вікно» ----
+void VidWgcClose(VidSrc& s)
+{
+    LhClosable* c = nullptr;
+    if (s.ses) {
+        if (SUCCEEDED(s.ses->QueryInterface(kIID_LhClosable, (void**)&c)) && c) { c->Close(); c->Release(); }
+        s.ses->Release();
+    }
+    if (s.pool) {
+        c = nullptr;
+        if (SUCCEEDED(s.pool->QueryInterface(kIID_LhClosable, (void**)&c)) && c) { c->Close(); c->Release(); }
+        s.pool->Release();
+    }
+    if (s.item) s.item->Release();
+    if (s.wdev) s.wdev->Release();
+    s.ses = nullptr; s.pool = nullptr; s.item = nullptr; s.wdev = nullptr;
+    s.wgc = false;
+}
+
+// Колірний простір і біле SDR — з монітора, де вікно ЗАРАЗ: пересунуте з HDR- на
+// SDR-монітор, воно має лишитися правильно експонованим. Раз на ~500 мс.
+void VidWgcMonitor(VidSrc& s, bool force)
+{
+    const HMONITOR m = MonitorFromWindow(s.win, MONITOR_DEFAULTTONEAREST);
+    if (m != s.winMon || force) {
+        CapOutput co = {};
+        if (CapFindOutput(m, &co)) {
+            s.cs = co.cs;
+            lstrcpynW(s.device, co.device, 32);
+            if (co.output) co.output->Release();
+            if (co.adapter) co.adapter->Release();
+        }
+        s.winMon = m;
+    }
+    VidRefreshWhite(s);                          // повзунок білого SDR теж могли посунути
+}
+
+HRESULT VidWgcOpen(VidSrc& s, HWND win)
+{
+    if (!win || !IsWindow(win) || !VidWgcSupported()) return E_INVALIDARG;
+    typedef HRESULT (WINAPI* CreateDevFn)(IDXGIDevice*, IInspectable**);
+    static CreateDevFn createDev = (CreateDevFn)(void*)GetProcAddress(GetModuleHandleW(L"d3d11.dll"), "CreateDirect3D11DeviceFromDXGIDevice");
+    IDXGIDevice* dx = nullptr;
+    HRESULT hr = s.dev->QueryInterface(__uuidof(IDXGIDevice), (void**)&dx);
+    if (SUCCEEDED(hr)) hr = createDev ? createDev(dx, &s.wdev) : E_NOINTERFACE;
+    if (dx) dx->Release();
+    LhGcItemInterop* interop = nullptr;
+    if (SUCCEEDED(hr)) hr = LhRoFactory(L"Windows.Graphics.Capture.GraphicsCaptureItem", kIID_LhGcItemInterop, (void**)&interop);
+    if (SUCCEEDED(hr)) hr = interop->CreateForWindow(win, kIID_LhGcItem, (void**)&s.item);
+    if (interop) interop->Release();
+    if (SUCCEEDED(hr)) hr = s.item->get_Size(&s.poolSize);
+    if (SUCCEEDED(hr) && (s.poolSize.W < 2 || s.poolSize.H < 2)) hr = E_FAIL;
+    LhGcPoolStatics2* st = nullptr;
+    if (SUCCEEDED(hr)) hr = LhRoFactory(L"Windows.Graphics.Capture.Direct3D11CaptureFramePool", kIID_LhGcPoolStatics2, (void**)&st);
+    // Вільнопотоковий пул: кадри забираємо самі (TryGetNextFrame) у циклі запису —
+    // без обробника подій і без DispatcherQueue.
+    if (SUCCEEDED(hr)) hr = st->CreateFreeThreaded(s.wdev, kLhPixR16G16B16A16Float, 2, s.poolSize, &s.pool);
+    if (st) st->Release();
+    if (SUCCEEDED(hr)) hr = s.pool->CreateCaptureSession(s.item, &s.ses);
+    if (SUCCEEDED(hr)) {
+        // Курсор малюємо самі (CAPS-76) — однаково для обох способів захоплення.
+        LhGcSession2* s2 = nullptr;
+        if (SUCCEEDED(s.ses->QueryInterface(kIID_LhGcSession2, (void**)&s2)) && s2) { s2->put_IsCursorCaptureEnabled(false); s2->Release(); }
+        // Жовта рамка WGC (Win11; непакованій програмі дозвіл без запиту). Не вийшло — лишається, запис іде.
+        LhGcSession3* s3 = nullptr;
+        if (SUCCEEDED(s.ses->QueryInterface(kIID_LhGcSession3, (void**)&s3)) && s3) { s3->put_IsBorderRequired(false); s3->Release(); }
+        hr = s.ses->StartCapture();
+    }
+    if (FAILED(hr)) return hr;
+    s.wgc = true;
+    s.win = win;
+    if (!VidEnsureLast(s, DXGI_FORMAT_R16G16B16A16_FLOAT, (UINT)s.poolSize.W, (UINT)s.poolSize.H)) return E_OUTOFMEMORY;
+    VidWgcMonitor(s, true);
+    s.monAt = GetTickCount();
+    return S_OK;
+}
+
+// Кадр WGC → копія кадру. Розмір вікна змінився — пул перестворюємо під новий,
+// а копію кадру — під вміст (вписування робить шейдер). Прапорець have лишається:
+// інакше цикл запису вирішив би, що кадрів ще не було, і почав би час спочатку.
+void VidWgcTake(VidSrc& s, LhGcFrame* fr)
+{
+    LhSizeI cs = {};
+    fr->get_ContentSize(&cs);
+    IInspectable* surf = nullptr;
+    LhDxgiAccess* acc = nullptr;
+    ID3D11Texture2D* tx = nullptr;
+    if (SUCCEEDED(fr->get_Surface(&surf)) && surf && SUCCEEDED(surf->QueryInterface(kIID_LhDxgiAccess, (void**)&acc)) && acc)
+        acc->GetInterface(__uuidof(ID3D11Texture2D), (void**)&tx);
+    if (tx) {
+        D3D11_TEXTURE2D_DESC td = {};
+        tx->GetDesc(&td);
+        const UINT w = (UINT)cs.W < td.Width ? (UINT)cs.W : td.Width, h = (UINT)cs.H < td.Height ? (UINT)cs.H : td.Height;
+        if (w >= 2 && h >= 2 && td.Format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+            const bool had = s.have;
+            if (VidEnsureLast(s, DXGI_FORMAT_R16G16B16A16_FLOAT, w, h)) {
+                D3D11_BOX box = { 0, 0, 0, w, h, 1 };
+                s.ctx->CopySubresourceRegion(s.last, 0, 0, 0, 0, tx, 0, &box);
+                s.have = true;
+            } else {
+                s.have = had;
+            }
+        }
+        tx->Release();
+    }
+    if (acc) acc->Release();
+    if (surf) surf->Release();
+    if (cs.W >= 2 && cs.H >= 2 && (cs.W != s.poolSize.W || cs.H != s.poolSize.H)) {
+        s.poolSize = cs;
+        s.pool->Recreate(s.wdev, kLhPixR16G16B16A16Float, 2, cs);
+    }
+}
+
+// Як VidPull, але для WGC: найсвіжіший кадр, якщо прийде до таймауту. Згорнуте
+// вікно кадрів не шле — тоді повторюється останній. Закрите — запис зупиняється.
+void VidWgcPull(VidSrc& s, UINT timeoutMs)
+{
+    const DWORD t0 = GetTickCount();
+    for (;;) {
+        if (GetTickCount() - s.monAt >= 500) {
+            s.monAt = GetTickCount();
+            if (!IsWindow(s.win)) { s.closed = true; return; }
+            VidWgcMonitor(s, false);
+        }
+        LhGcFrame* fr = nullptr;
+        LhGcFrame* next = nullptr;
+        if (SUCCEEDED(s.pool->TryGetNextFrame(&fr)) && fr) {
+            while (SUCCEEDED(s.pool->TryGetNextFrame(&next)) && next) { fr->Release(); fr = next; next = nullptr; }
+            VidWgcTake(s, fr);
+            fr->Release();
+            return;
+        }
+        if (GetTickCount() - t0 >= timeoutMs) return;
+        Sleep(2);
+    }
 }
 
 HRESULT VidSrcOpen(VidSrc& s, const VidJob* j)
@@ -25085,6 +25351,12 @@ HRESULT VidSrcOpen(VidSrc& s, const VidJob* j)
     if (SUCCEEDED(s.dev->QueryInterface(__uuidof(ID3D10Multithread), (void**)&mt)) && mt) {
         mt->SetMultithreadProtected(TRUE);
         mt->Release();
+    }
+    // CAPS-75: вікно — саме вікно. Не вийшло (старий Windows, вікно вже закрили) —
+    // як раніше, ділянкою, де воно було.
+    if (j->follow) {
+        if (SUCCEEDED(VidWgcOpen(s, j->win))) return S_OK;
+        VidWgcClose(s);
     }
     const int w = j->sel.right - j->sel.left, h = j->sel.bottom - j->sel.top;
     s.synth = j->synth;
@@ -25157,6 +25429,7 @@ struct VidEnc {
     ID3D11VertexShader* vs = nullptr;
     ID3D11PixelShader* ps = nullptr;
     ID3D11Buffer* cb = nullptr;
+    ID3D11SamplerState* smp = nullptr;         // CAPS-75: вписування кадру вікна
     UINT w = 0, h = 0;
     int fps = 30;
     LONGLONG written = 0;
@@ -25176,6 +25449,8 @@ struct VidCb {
     float clk[8][4];                  // x, y, радіус, непрозорість
     float clkCol[8][4];               // колір + вид: 0 клік, 1 правий (подвійне коло), 2 утримання
     int nClk; float scale; int pad[2];
+    float fit[4];                     // CAPS-75: де кадр вікна лежить у виході (x, y, w, h)
+    int fitOn, fitW, fitH, fitPad;    //          і розмір самого кадру; fitOn = 0 — ділянка 1:1
 };
 static_assert(sizeof(VidCb) % 16 == 0, "cbuffer — кратний 16 байтам");
 
@@ -25329,6 +25604,24 @@ struct VidOverlay {
     LONGLONG heldAt[3] = { 0, 0, 0 };
     size_t proc = 0;                  // скільки з evs уже враховано в стані кнопок
     std::vector<BYTE> log;            // блок MOUS: записи по 13 байт — мс, x, y, кнопка | натиснуто << 4
+    // CAPS-75: «слідувати за вікном» — точка робочого стола → кадр через межі вікна
+    // зараз і вписування; поза вікном курсора й кліків у кадрі нема.
+    bool follow = false;
+    RECT win = {};
+    float fx = 0, fy = 0, fk = 1;
+
+    void MapWindow(const RECT& wr, const VidCb& cb)
+    {
+        follow = true;
+        win = wr;
+        const int ww = wr.right - wr.left;
+        fk = ww > 0 ? cb.fit[2] / (float)ww : 1.0f;
+        fx = cb.fit[0];
+        fy = cb.fit[1];
+    }
+    bool Inside(LONG x, LONG y) const { return !follow || (x >= win.left && y >= win.top && x < win.right && y < win.bottom); }
+    float MX(LONG x) const { return follow ? fx + (float)(x - win.left) * fk : (float)(x - sel.left); }
+    float MY(LONG y) const { return follow ? fy + (float)(y - win.top) * fk : (float)(y - sel.top); }
 
     void Begin(const VidJob* j, ID3D11Device* d)
     {
@@ -25360,7 +25653,7 @@ struct VidOverlay {
                 if (e.qpc < t0) continue;                       // до першого кадру (сама гаряча клавіша)
                 evs.push_back(e);
                 BYTE rec[13];
-                const INT32 ms = (INT32)((e.qpc - t0) * 1000 / f), x = e.x - sel.left, y = e.y - sel.top;
+                const INT32 ms = (INT32)((e.qpc - t0) * 1000 / f), x = (INT32)floorf(MX(e.x)), y = (INT32)floorf(MY(e.y));
                 memcpy(rec, &ms, 4); memcpy(rec + 4, &x, 4); memcpy(rec + 8, &y, 4);
                 rec[12] = (BYTE)(e.btn | (e.down << 4));
                 log.insert(log.end(), rec, rec + 13);
@@ -25377,10 +25670,10 @@ struct VidOverlay {
             int n = 0;
             for (size_t i = 0; i < proc && n < 8; ++i) {
                 const VidMouseEv& e = evs[i];
-                if (!e.down || T - e.qpc >= life) continue;
+                if (!e.down || T - e.qpc >= life || !Inside(e.x, e.y)) continue;
                 const float p = (float)(T - e.qpc) / (float)life;
-                cb.clk[n][0] = (float)(e.x - sel.left) + 0.5f;
-                cb.clk[n][1] = (float)(e.y - sel.top) + 0.5f;
+                cb.clk[n][0] = MX(e.x) + 0.5f;
+                cb.clk[n][1] = MY(e.y) + 0.5f;
                 cb.clk[n][2] = (6.0f + 20.0f * p) * scale;
                 cb.clk[n][3] = 1.0f - p;
                 cb.clkCol[n][0] = col[0]; cb.clkCol[n][1] = col[1]; cb.clkCol[n][2] = col[2];
@@ -25391,9 +25684,9 @@ struct VidOverlay {
             if (held[0] && T - heldAt[0] >= life && n < 8) {
                 POINT pt;
                 HCURSOR hc;
-                if (VidCursorNow(&pt, &hc)) {
-                    cb.clk[n][0] = (float)(pt.x - sel.left) + 0.5f;
-                    cb.clk[n][1] = (float)(pt.y - sel.top) + 0.5f;
+                if (VidCursorNow(&pt, &hc) && Inside(pt.x, pt.y)) {
+                    cb.clk[n][0] = MX(pt.x) + 0.5f;
+                    cb.clk[n][1] = MY(pt.y) + 0.5f;
                     cb.clk[n][2] = 14.0f * scale;
                     cb.clk[n][3] = 0.85f;
                     cb.clkCol[n][0] = col[0]; cb.clkCol[n][1] = col[1]; cb.clkCol[n][2] = col[2];
@@ -25413,15 +25706,15 @@ struct VidOverlay {
         if (cursor) {
             POINT pt;
             HCURSOR hc;
-            if (VidCursorNow(&pt, &hc)) {
+            if (VidCursorNow(&pt, &hc) && Inside(pt.x, pt.y)) {
                 if (hc != shape) {
                     if (g_vidCurSrv) { g_vidCurSrv->Release(); g_vidCurSrv = nullptr; }
                     g_vidCurSrv = VidCursorBuild(dev, hc, cw, ch, hot);
                     shape = hc;
                 }
                 if (g_vidCurSrv) {
-                    cb.curX = pt.x - hot.x - sel.left;
-                    cb.curY = pt.y - hot.y - sel.top;
+                    cb.curX = (int)floorf(MX(pt.x)) - hot.x;
+                    cb.curY = (int)floorf(MY(pt.y)) - hot.y;
                     cb.curW = cw;
                     cb.curH = ch;
                 }
@@ -25721,6 +26014,7 @@ void VidEncClose(VidEnc& e)
     if (e.vs) e.vs->Release();
     if (e.ps) e.ps->Release();
     if (e.cb) e.cb->Release();
+    if (e.smp) e.smp->Release();
     e = VidEnc{};
 }
 
@@ -25735,6 +26029,13 @@ HRESULT VidEncOpen(VidEnc& e, VidSrc& s, const wchar_t* path, UINT w, UINT h, in
     if (SUCCEEDED(hr)) {
         D3D11_BUFFER_DESC bd = { (UINT)sizeof(VidCb), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0 };
         hr = s.dev->CreateBuffer(&bd, nullptr, &e.cb);
+    }
+    if (SUCCEEDED(hr)) {                       // CAPS-75: лінійна вибірка — для зміненого розміру вікна
+        D3D11_SAMPLER_DESC sd = {};
+        sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sd.MaxLOD = D3D11_FLOAT32_MAX;
+        hr = s.dev->CreateSamplerState(&sd, &e.smp);
     }
     if (FAILED(hr)) return hr;
 
@@ -25876,6 +26177,7 @@ void VidDraw(VidEnc& e, VidSrc& s, ID3D11Texture2D* target, const VidCb* over)
     ID3D11ShaderResourceView* srvs[2] = { s.srv, (over && over->curW > 0) ? g_vidCurSrv : nullptr };
     s.ctx->PSSetShaderResources(0, 2, srvs);
     s.ctx->PSSetConstantBuffers(0, 1, &e.cb);
+    s.ctx->PSSetSamplers(0, 1, &e.smp);
     s.ctx->Draw(3, 0);
     // Відв'язуємо: у копію кадру наступним ділом пише CopyResource.
     ID3D11RenderTargetView* noRtv = nullptr;
@@ -25973,6 +26275,27 @@ HRESULT VidEmit(VidEnc& e, VidSrc& s, LONGLONG k, LONGLONG n, const VidCb* over)
 
 volatile LONG g_vidExiting = 0;   // програма виходить: результат не шлемо, прибираємо самі
 
+// Де кадр вікна лежить у виході: вписаний по центру без спотворень; менше вікно
+// не розтягується (1:1 по центру). Той самий розмір, що на старті (±1 піксель
+// парності), — 1:1 без вибірки, щоб текст лишався різким.
+void VidWgcFit(const VidSrc& s, UINT ow, UINT oh, VidCb& cb)
+{
+    float k = 1.0f;
+    if (!(s.tw <= ow + 1 && s.th <= oh + 1)) {
+        const float kx = (float)ow / (float)s.tw, ky = (float)oh / (float)s.th;
+        k = kx < ky ? kx : ky;
+        if (k > 1.0f) k = 1.0f;
+    }
+    const float w = floorf(s.tw * k + 0.5f), h = floorf(s.th * k + 0.5f);
+    cb.fit[0] = floorf(((float)ow - w) / 2.0f); if (cb.fit[0] < 0) cb.fit[0] = 0;
+    cb.fit[1] = floorf(((float)oh - h) / 2.0f); if (cb.fit[1] < 0) cb.fit[1] = 0;
+    cb.fit[2] = w;
+    cb.fit[3] = h;
+    cb.fitOn = 1;
+    cb.fitW = (int)s.tw;
+    cb.fitH = (int)s.th;
+}
+
 HRESULT VidRecord(VidJob* j, VidResult* r)
 {
     VidSrc s;
@@ -25981,7 +26304,8 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
     r->gdi = s.gdi;
     if (FAILED(hr)) { r->err = Str::VidErrScreen; VidSrcClose(s); return hr; }
     if (!VidShaders()) { r->err = Str::VidErrEncoder; VidSrcClose(s); return E_NOINTERFACE; }
-    const UINT w = (UINT)(j->sel.right - j->sel.left), h = (UINT)(j->sel.bottom - j->sel.top);
+    UINT w = (UINT)(j->sel.right - j->sel.left), h = (UINT)(j->sel.bottom - j->sel.top);
+    if (s.wgc) { w = s.tw & ~1u; h = s.th & ~1u; }   // CAPS-75: розмір відео — вікно на старті
     // CAPS-77: звук — джерела відкриваємо ДО енкодера: доріжку додаємо, лише якщо є що писати.
     VidAudJob* aj = nullptr;
     if (j->audSys || j->audMic || j->audSynth) {
@@ -26065,6 +26389,7 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
     ov.Begin(j, s.dev);
     for (;;) {
         if (WaitForSingleObject(j->stop, 0) == WAIT_OBJECT_0) break;
+        if (s.closed) break;                 // CAPS-75: вікно закрили — запис зупиняється й зберігається
         if (!s.have) {                       // до першого справжнього кадру часу ще немає
             if (s.synth) VidSynthFill(s, j->sel, 0);
             else if (s.gdi) VidGdiGrab(s, j->sel);
@@ -26095,6 +26420,10 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
         if (s.synth) VidSynthFill(s, j->sel, k);
         else if (s.gdi) VidGdiGrab(s, j->sel);
         VidCb cb = {};
+        if (s.wgc) {                         // CAPS-75: вписати кадр вікна й перерахувати мишу під нього
+            VidWgcFit(s, e.w, e.h, cb);
+            ov.MapWindow(VidWinBounds(s.win), cb);
+        }
         ov.Frame(t0 + k * f / fps, t0, f, k, cb);
         hr = VidEmit(e, s, k, n, &cb);
         if (FAILED(hr)) { r->err = Str::VidErrWrite; break; }
@@ -26260,6 +26589,31 @@ void VidFrameHide()
 {
     if (g_vidFrame) DestroyWindow(g_vidFrame);
     g_vidFrame = nullptr;
+}
+
+// CAPS-75: рамка-індикатор за вікном, що його пишуть: пересунули — їде, змінили
+// розмір — перебудовується, згорнули — ховається.
+RECT g_vidFrameRc = {};
+void VidFollowTick()
+{
+    if (!g_vidJob || !g_vidJob->follow || !IsWindow(g_vidJob->win)) { KillTimer(g_mainWnd, TIMER_VIDFOLLOW); return; }
+    const HWND w = g_vidJob->win;
+    if (IsIconic(w)) { if (g_vidFrame) ShowWindow(g_vidFrame, SW_HIDE); return; }
+    const RECT r = VidWinBounds(w);
+    if (!g_vidFrame || r.right - r.left != g_vidFrameRc.right - g_vidFrameRc.left || r.bottom - r.top != g_vidFrameRc.bottom - g_vidFrameRc.top) {
+        VidFrameHide();
+        g_vidFrameRc = r;
+        VidFrameShow(r, r);
+        return;
+    }
+    if (r.left != g_vidFrameRc.left || r.top != g_vidFrameRc.top) {
+        const int dx = r.left - g_vidFrameRc.left, dy = r.top - g_vidFrameRc.top;
+        RECT fr = {};
+        GetWindowRect(g_vidFrame, &fr);
+        SetWindowPos(g_vidFrame, HWND_TOPMOST, fr.left + dx, fr.top + dy, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+        g_vidFrameRc = r;
+    }
+    if (!IsWindowVisible(g_vidFrame)) ShowWindow(g_vidFrame, SW_SHOWNOACTIVATE);
 }
 
 // Значок трею з червоною крапкою: з самого значка програми, щоб крапка лягла
@@ -26480,6 +26834,8 @@ void VidStart()
     j->audSynth = VidAudSynthMode();
     lstrcpynW(j->audSysDev, g_vidAudSysDev, 256);
     lstrcpynW(j->audMicDev, g_vidAudMicDev, 256);
+    j->win = g_rgnPickedWnd;                       // CAPS-75
+    j->follow = g_vidFollow && j->win && IsWindow(j->win) && VidWgcSupported();
     if (!VidLibPath(j->part, j->path)) {
         delete j;
         MessageBoxW(nullptr, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
@@ -26496,7 +26852,11 @@ void VidStart()
     g_vidJob = j;
     g_vidStartMs = GetTickCount64();
     VidMouseHookOn(j->clicks);                     // CAPS-76: кліки — з хука головного потоку
-    if (!fullMon) VidFrameShow(sel, mon);
+    if (j->follow) {                               // CAPS-75: рамка — навколо вікна, і їде за ним
+        g_vidFrameRc = VidWinBounds(j->win);
+        VidFrameShow(g_vidFrameRc, g_vidFrameRc);
+        SetTimer(g_mainWnd, TIMER_VIDFOLLOW, 100, nullptr);
+    } else if (!fullMon) VidFrameShow(sel, mon);
     VidTraySet(true);
 }
 
@@ -26620,6 +26980,8 @@ void VidSettingsRefresh(HWND hwnd)
     for (int i = 0; i < 3; ++i) set(IDC_VID_QLOW + i, g_vidQuality == i);
     set(IDC_VID_CURSOR, g_vidCursor);              // CAPS-76
     set(IDC_VID_CLICKS, g_vidClicks);
+    set(IDC_VID_FOLLOW, g_vidFollow);              // CAPS-75
+    set(IDC_VID_FIXED, !g_vidFollow);
     for (int i = 0; i < 3; ++i) set(IDC_VID_CLR0 + i, g_vidClickClr == i);
     if (HWND b = GetDlgItem(hwnd, IDC_VID_CLR0)) for (int i = 0; i < 3; ++i) EnableWindow(GetDlgItem(hwnd, IDC_VID_CLR0 + i), g_vidClicks);
     VidAudRefresh(hwnd);                           // CAPS-77
@@ -26643,6 +27005,7 @@ void VidReleaseJob()
     if (g_vidJob) { if (g_vidJob->stop) CloseHandle(g_vidJob->stop); delete g_vidJob; }
     g_vidJob = nullptr;
     VidMouseHookOn(false);                         // CAPS-76
+    KillTimer(g_mainWnd, TIMER_VIDFOLLOW);         // CAPS-75
     VidFrameHide();
     VidTraySet(false);
 }
@@ -26820,6 +27183,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         else if (wp == TIMER_VIDMETER) {    // CAPS-77
             VidMeterTick(hwnd);
+        }
+        else if (wp == TIMER_VIDFOLLOW) {   // CAPS-75
+            VidFollowTick();
         }
         return 0;
 
@@ -27235,6 +27601,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             break;
         case IDM_VIDSTOP:
             VidStop();
+            break;
+        case IDC_VID_FOLLOW:         // CAPS-75: з наступного запису
+        case IDC_VID_FIXED:
+            g_vidFollow = LOWORD(wp) == IDC_VID_FOLLOW;
+            RegSaveInt(kRegVidFollow, g_vidFollow ? 1 : 0);
             break;
         case IDC_VID_FPS30:
         case IDC_VID_FPS60:
@@ -27850,6 +28221,19 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     y += 28;
     hint(addV, Str::VidQualHint, 1);
     y += 2;
+    {   // CAPS-75: вікно, вибране кліком, — слідувати за ним (WGC) чи ділянкою. Один рядок без
+        // підказки: сторінки не прокручуються, а висота вікна — межа вмісту. Без WGC
+        // (Windows 10 < 1903) рядок вимкнено — вікно пишеться ділянкою.
+        addV(mkS(L"STATIC", Str::VidWinL, 0, PX, y + 3, 150, 20, 0));
+        radio(addV, Str::VidWinFollow, PX + 160, 150, IDC_VID_FOLLOW, true);
+        radio(addV, Str::VidWinFixed,  PX + 316, 100, IDC_VID_FIXED, false);
+        CheckRadioButton(hwnd, IDC_VID_FOLLOW, IDC_VID_FIXED, g_vidFollow ? IDC_VID_FOLLOW : IDC_VID_FIXED);
+        if (!VidWgcSupported()) {
+            EnableWindow(GetDlgItem(hwnd, IDC_VID_FOLLOW), FALSE);
+            EnableWindow(GetDlgItem(hwnd, IDC_VID_FIXED), FALSE);
+        }
+        y += 34;
+    }
     sec(addV, Str::VidSecCursor);                 // CAPS-76
     check(addV, Str::VidCursorShow, IDC_VID_CURSOR, g_vidCursor);
     check(addV, Str::VidClicksShow, IDC_VID_CLICKS, g_vidClicks);
