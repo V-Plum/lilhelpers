@@ -227,6 +227,7 @@ constexpr UINT IDM_CAPCLIP     = 7;   // CAPS-21: з буфера обміну
 constexpr UINT IDM_UPDATE_NOW  = 8;   // CAPS-63: «Оновити до X» у меню трею
 constexpr UINT IDM_VIDREC      = 9;   // CAPS-73: почати запис відео
 constexpr UINT IDM_VIDSTOP     = 10;  // CAPS-73: зупинити запис
+constexpr UINT IDM_VIDPAUSE    = 11;  // CAPS-101: пауза / продовжити запис
 constexpr UINT TIMER_MAG_HOLD   = 1;
 constexpr UINT TIMER_MAG_FRAME  = 2;   // кадр оверлейної анімації
 constexpr UINT TIMER_THEME      = 3;   // CAPS-7: перевірка теми раз на хвилину
@@ -289,10 +290,10 @@ X(LayHintHook,        L"CapsLock лише перемикає мову й не в
 X(LayHintHotkey,      L"Оберіть, якщо основний режим не працює або конфліктує з іншою програмою.",     \
                       L"Use it if the primary method fails or conflicts with another app.")            \
 X(LaySecRemote,       L"Віддалені та віртуальні машини", L"Remote and virtual machines")                \
-X(LayPassthrough,     L"Не перехоплювати Caps Lock у вікнах віддалених і віртуальних машин",           \
-                      L"Do not intercept Caps Lock in remote and virtual machine windows")             \
-X(LayRemoteList,      L"Remote Desktop, Windows App, VMware, Hyper-V.",                                \
-                      L"Remote Desktop, Windows App, VMware, Hyper-V.")                                \
+X(LayPassthrough,     L"Не втручатися у вікнах віддалених і віртуальних машин: Caps Lock і збільшення курсора", \
+                      L"Stay out of remote and virtual machine windows: Caps Lock and cursor magnification") \
+X(LayRemoteList,      L"Remote Desktop, Windows App, VMware, Hyper-V — там працює копія програми на гості.", \
+                      L"Remote Desktop, Windows App, VMware, Hyper-V — the copy on the guest handles it.") \
 X(LayFwdCaps,         L"Пересилати Caps Lock у вікно клієнта, не перемикаючи Caps на цій машині",       \
                       L"Forward Caps Lock to the client window without toggling Caps on this machine") \
 X(LayFwdCapsHint,     L"Вимкніть, якщо в якомусь клієнті Caps Lock перестав доходити до віддаленої машини — тоді клавіша йде як є.", \
@@ -469,6 +470,15 @@ X(PeekFmtThree,       L"%s · %s · %s",           L"%s · %s · %s")           
 X(PeekReformatted,    L"відформатовано",              L"reformatted")                                \
 X(PeekSvgAsCode,      L"SVG з ефектами, яких ми не малюємо — показано розмітку",  L"SVG uses effects we do not draw — markup shown") \
 X(PeekFmtStl,         L"%.0f × %.0f × %.0f · трикутників: %u · %s",   L"%.0f × %.0f × %.0f · triangles: %u · %s") \
+X(PeekFmtStlPage,     L"%.0f × %.0f × %.0f · трикутників: %u · %s · ракурс %u з %u: %s", \
+                      L"%.0f × %.0f × %.0f · triangles: %u · %s · view %u of %u: %s")   \
+X(PeekStlView0,       L"ізометрія",                     L"isometric")                                  \
+X(PeekStlView1,       L"спереду",                       L"front")                                      \
+X(PeekStlView2,       L"ззаду",                         L"back")                                       \
+X(PeekStlView3,       L"зліва",                         L"left")                                       \
+X(PeekStlView4,       L"справа",                        L"right")                                      \
+X(PeekStlView5,       L"зверху",                        L"top")                                        \
+X(PeekStlView6,       L"знизу",                         L"bottom")                                     \
 X(PeekFmtVideo,       L"%d × %d · %s · %s",                      L"%d × %d · %s · %s")               \
 X(PeekFmtAudio,       L"%s · %s · %d кбіт/с · %s",              L"%s · %s · %d kbps · %s")           \
 X(PeekLblTitle,       L"Назва",                         L"Title")                                       \
@@ -590,6 +600,9 @@ X(VidWhereText,       L"Записи лежать у бібліотеці зні
                       L"Recordings are kept in the shot library next to your shots. An HDR screen is recorded with the same compensation as shots.") \
 X(VidMenuStart,       L"Записати відео",                L"Record video")                               \
 X(VidMenuStop,        L"Зупинити запис",                L"Stop recording")                             \
+X(VidMenuPause,       L"Пауза запису",                  L"Pause recording")                            \
+X(VidMenuResume,      L"Продовжити запис",              L"Resume recording")                           \
+X(VidTipPausedFmt,    L"Little Helpers · запис %s · пауза", L"Little Helpers · recording %s · paused") \
 X(VidTipFmt,          L"Little Helpers · запис %s",     L"Little Helpers · recording %s")              \
 X(VidSaved,           L"Відео збережено — клацніть, щоб відкрити",                                    \
                       L"Video saved — click to open")                                                  \
@@ -1464,6 +1477,16 @@ bool IsRemoteWindow(HWND w)
 
 bool RemotePassthroughActive() { return g_passthrough && g_inRemote; }
 
+// CAPS-5: вікно під курсором — клієнт remote/VM. Жест трусіння буває й над
+// неактивним вікном клієнта, тож активного вікна (g_inRemote) тут замало.
+bool RemoteUnderCursor()
+{
+    POINT pt;
+    if (!GetCursorPos(&pt)) return false;
+    HWND w = WindowFromPoint(pt);
+    return w && IsRemoteWindow(GetAncestor(w, GA_ROOT));
+}
+
 // ---------- CAPS-16: пробіл у списку файлів (частина хука) ----------
 //
 // Виконується в колбеку хука — лише GetClassName / GetParent / GetGUIThreadInfo,
@@ -2057,6 +2080,10 @@ void MagnifyStart()
 {
     if (!g_cur.enabled || !g_mainWnd) return;
     if (IsFullscreenForeground()) return;
+    // CAPS-5: у вікні remote/VM-клієнта той самий жест бачить і копія програми на гостьовій
+    // машині — збільшували б обидві, і видно було б два зменшення підряд. Той самий
+    // прапорець, що й для Caps Lock (рішення власника 26.09: один вимикач на обидві фічі).
+    if (g_passthrough && (g_inRemote || RemoteUnderCursor())) return;
 
     if (g_magState == MagState::Idle) {
         g_magOrigPx = CursorSizePx();
@@ -3779,8 +3806,11 @@ void PageScrollRefresh()
             SCROLLINFO si = { sizeof(si), SIF_ALL };
             si.nMin = 0; si.nMax = content - 1; si.nPage = (UINT)viewH; si.nPos = g_pageScroll[tab];
             SetScrollInfo(g_pageSb, SB_CTL, &si, TRUE);
-            SetWindowPos(g_pageSb, HWND_TOP, view.right - GetSystemMetrics(SM_CXVSCROLL), view.top,
-                         GetSystemMetrics(SM_CXVSCROLL), viewH, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+            // CAPS-103: впритул до рамки сторінки (view = сторінка − 2, рамка — ще на 1 px далі):
+            // зазор кольору сторінки між темною доріжкою і рамкою читався як світла лінія.
+            const int sbw = GetSystemMetrics(SM_CXVSCROLL);
+            SetWindowPos(g_pageSb, HWND_TOP, view.right + 3 - sbw, view.top - 3, sbw, viewH + 6,
+                         SWP_SHOWWINDOW | SWP_NOACTIVATE);
         } else {
             ShowWindow(g_pageSb, SW_HIDE);
         }
@@ -4133,6 +4163,8 @@ HICON    g_peekIconBig = nullptr, g_peekIconSmall = nullptr;
 HFONT    g_peekFont = nullptr, g_peekFontBold = nullptr, g_peekFontMono = nullptr;
 bool     g_peekCloseHot = false;
 int      g_peekPagerHot = 0;   // 0 нічого, 1 «назад», 2 «вперед»
+UINT32   g_peekPage = 0;       // сторінка (0-based) і скільки їх: PDF або STL-ракурси (CAPS-55)
+UINT32   g_peekPages = 0;
 bool     g_peekTracking = false;
 bool     g_peekDark     = false;
 // Масштаб — МНОЖНИК до «вписаного» розміру, тож 1.0 завжди означає «вміщено у вікно»
@@ -5618,7 +5650,7 @@ bool StlParse(const std::vector<BYTE>& raw, std::vector<StlTri>& tris)
 
 // Ортографічна проєкція у фіксованому ізометричному ракурсі (STL — Z вгору),
 // растеризація крайовими функціями з z-буфером.
-Gdiplus::Bitmap* StlRender(const std::vector<StlTri>& tris, int side, float dims[3])
+Gdiplus::Bitmap* StlRender(const std::vector<StlTri>& tris, int side, float dims[3], float azDeg, float elDeg)
 {
     float mn[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, mx[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
     for (const StlTri& t : tris)
@@ -5632,7 +5664,7 @@ Gdiplus::Bitmap* StlRender(const std::vector<StlTri>& tris, int side, float dims
     const float ctr[3] = { (mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, (mn[2] + mx[2]) / 2 };
 
     // Rz(-35°) -> Rx(-65°): звичний «погляд згори збоку», як у слайсерах
-    const float az = -35.0f * 3.14159265f / 180.0f, el = -65.0f * 3.14159265f / 180.0f;
+    const float az = azDeg * 3.14159265f / 180.0f, el = elDeg * 3.14159265f / 180.0f;
     const float ca = cosf(az), sa = sinf(az), ce = cosf(el), se = sinf(el);
     auto view = [&](const float* s, float* d) {
         const float x = s[0] - ctr[0], y = s[1] - ctr[1], z = s[2] - ctr[2];
@@ -5724,19 +5756,74 @@ Gdiplus::Bitmap* StlRender(const std::vector<StlTri>& tris, int side, float dims
     return bmp;
 }
 
+// CAPS-55: сім ракурсів сторінками — ізометрія першою (хто не гортає, бачить те, що й
+// раніше), далі шість ортогональних. Малюються на вимогу при переході (як сторінки PDF)
+// і кешуються; трикутники живуть, поки картка відкрита (рішення власника 21.09: рендер
+// на вимогу, фонове досипання — окремим тікетом, якщо гортання виявиться повільним).
+// Кути: Rz(az) → Rx(el); el 0 = згори (STL — Z вгору), el −90 = збоку, az обертає.
+constexpr int   kStlViews = 7;
+constexpr float kStlViewAng[kStlViews][2] = { { -35, -65 }, { 0, -90 }, { 180, -90 }, { 90, -90 }, { -90, -90 }, { 0, 0 }, { 0, 180 } };
+std::vector<StlTri> g_peekStlTris;
+Gdiplus::Bitmap*    g_peekStlCache[kStlViews] = {};
+float               g_peekStlDims[3] = {};
+unsigned            g_peekStlTriN = 0;
+
+Str StlViewName(int i)
+{
+    static const Str names[kStlViews] = { Str::PeekStlView0, Str::PeekStlView1, Str::PeekStlView2, Str::PeekStlView3,
+                                          Str::PeekStlView4, Str::PeekStlView5, Str::PeekStlView6 };
+    return names[i < 0 ? 0 : (i >= kStlViews ? kStlViews - 1 : i)];
+}
+
+void PeekStlFree()
+{
+    g_peekStlTris.clear();
+    g_peekStlTris.shrink_to_fit();
+    for (Gdiplus::Bitmap*& b : g_peekStlCache) { delete b; b = nullptr; }
+    g_peekStlTriN = 0;
+}
+
+void PeekStlSubtitle(UINT32 page)
+{
+    swprintf(g_peekInfo.subtitle, 320, S(Str::PeekFmtStlPage), g_peekStlDims[0], g_peekStlDims[1], g_peekStlDims[2],
+             g_peekStlTriN, g_peekInfo.size, page + 1, (unsigned)kStlViews, S(StlViewName((int)page)));
+}
+
+// Ракурс page — у g_peekImg (копія: g_peekImg звільняє PeekReset, кеш — свій).
+bool PeekStlShow(int page)
+{
+    if (page < 0 || page >= kStlViews || g_peekStlTris.empty()) return false;
+    if (!g_peekStlCache[page]) {
+        float dims[3];
+        g_peekStlCache[page] = StlRender(g_peekStlTris, 720, dims, kStlViewAng[page][0], kStlViewAng[page][1]);
+        if (!g_peekStlCache[page]) return false;
+    }
+    Gdiplus::Bitmap* src = g_peekStlCache[page];
+    Gdiplus::Bitmap* bmp = src->Clone(0, 0, (int)src->GetWidth(), (int)src->GetHeight(), PixelFormat32bppPARGB);
+    if (!bmp || bmp->GetLastStatus() != Gdiplus::Ok) { delete bmp; return false; }
+    delete g_peekScaled; g_peekScaled = nullptr;
+    delete g_peekImg;
+    g_peekImg = bmp;
+    g_peekInfo.imgW = (int)bmp->GetWidth();
+    g_peekInfo.imgH = (int)bmp->GetHeight();
+    g_peekPage = (UINT32)page;
+    return true;
+}
+
 bool PeekLoadStl(const wchar_t* path, float dims[3], unsigned& triCount)
 {
     std::vector<BYTE> raw;
     bool trunc = false;
     if (!ReadFileHead(path, 64u * 1024 * 1024, raw, trunc) || trunc || raw.size() < 84) return false;
-    std::vector<StlTri> tris;
-    if (!StlParse(raw, tris) || tris.empty()) return false;
-    triCount = (unsigned)tris.size();
-    Gdiplus::Bitmap* bmp = StlRender(tris, 720, dims);
-    if (!bmp) return false;
-    g_peekImg = bmp;
-    g_peekInfo.imgW = (int)bmp->GetWidth();
-    g_peekInfo.imgH = (int)bmp->GetHeight();
+    PeekStlFree();
+    if (!StlParse(raw, g_peekStlTris) || g_peekStlTris.empty()) { PeekStlFree(); return false; }
+    raw.clear();
+    raw.shrink_to_fit();
+    triCount = g_peekStlTriN = (unsigned)g_peekStlTris.size();
+    g_peekStlCache[0] = StlRender(g_peekStlTris, 720, g_peekStlDims, kStlViewAng[0][0], kStlViewAng[0][1]);
+    if (!g_peekStlCache[0] || !PeekStlShow(0)) { PeekStlFree(); return false; }
+    memcpy(dims, g_peekStlDims, sizeof(g_peekStlDims));
+    g_peekPages = kStlViews;
     return true;
 }
 
@@ -6290,8 +6377,6 @@ struct PdfSession {
 };
 
 PdfSession* g_pdf = nullptr;
-UINT32 g_peekPdfPage = 0;       // 0-based, показана зараз
-UINT32 g_peekPdfPages = 0;
 
 void PdfSessionRelease(PdfSession* s)
 {
@@ -6413,8 +6498,8 @@ void PdfSessionClose()
     SetEvent(g_pdf->evRequest);      // розбудити потік, щоб він побачив прапорець
     PdfSessionRelease(g_pdf);
     g_pdf = nullptr;
-    g_peekPdfPage = 0;
-    g_peekPdfPages = 0;
+    g_peekPage = 0;
+    g_peekPages = 0;
 }
 
 bool PeekLoadPdf(const wchar_t* path)
@@ -6442,26 +6527,34 @@ bool PeekLoadPdf(const wchar_t* path)
         return false;
     }
     g_pdf = s;
-    g_peekPdfPage = 0;
-    g_peekPdfPages = s->pages;
+    g_peekPage = 0;
+    g_peekPages = s->pages;
     return true;
 }
 
 // Гортання. Повертає true, якщо сторінка справді змінилась і треба перемалювати.
-bool PeekPdfGoto(int page)
+// CAPS-55: PDF і STL — два постачальники сторінок за одним пейджером.
+bool PeekPageGoto(int page)
 {
-    if (!g_pdf || g_peekPdfPages < 2) return false;
-    if (page < 0 || (UINT32)page >= g_peekPdfPages || (UINT32)page == g_peekPdfPage) return false;
+    if (g_peekPages < 2) return false;
+    if (page < 0 || (UINT32)page >= g_peekPages || (UINT32)page == g_peekPage) return false;
+    if (!g_pdf) {
+        if (!PeekStlShow(page)) return false;
+        g_peekZoom = 1.0f;
+        g_peekPanX = g_peekPanY = 0;
+        PeekStlSubtitle((UINT32)page);
+        return true;
+    }
     InterlockedExchange(&g_pdf->wantPage, page);
     ResetEvent(g_pdf->evDone);
     SetEvent(g_pdf->evRequest);
     if (WaitForSingleObject(g_pdf->evDone, 20000) != WAIT_OBJECT_0) return false;
     if (!PdfTakeBitmap(g_pdf)) return false;
-    g_peekPdfPage = (UINT32)page;
+    g_peekPage = (UINT32)page;
     g_peekZoom = 1.0f;                 // нова сторінка — знову «вписано»
     g_peekPanX = g_peekPanY = 0;
     swprintf(g_peekInfo.subtitle, 320, S(Str::PeekFmtPdfPage), g_peekInfo.imgW, g_peekInfo.imgH,
-             g_peekPdfPage + 1, g_peekPdfPages, g_peekInfo.size);
+             g_peekPage + 1, g_peekPages, g_peekInfo.size);
     return true;
 }
 
@@ -6857,6 +6950,9 @@ void PeekReset()
 {
     PkClose();                                        // CAPS-18
     PdfSessionClose();
+    PeekStlFree();                                    // CAPS-55
+    g_peekPage = 0;
+    g_peekPages = 0;
     if (g_peekWnd) KillTimer(g_peekWnd, TIMER_PEEK_ANIM);
     delete g_peekScaled; g_peekScaled = nullptr;
     delete g_peekImg;    g_peekImg = nullptr;
@@ -6944,10 +7040,10 @@ void PeekLoad(const wchar_t* path)
         return;
     }
     if (lstrcmpiW(ext, L".pdf") == 0 && PeekLoadPdf(path)) {
-        if (g_peekPdfPages > 1)
-            swprintf(I.subtitle, 320, S(Str::PeekFmtPdfPage), I.imgW, I.imgH, 1u, g_peekPdfPages, I.size);
+        if (g_peekPages > 1)
+            swprintf(I.subtitle, 320, S(Str::PeekFmtPdfPage), I.imgW, I.imgH, 1u, g_peekPages, I.size);
         else
-            swprintf(I.subtitle, 320, S(Str::PeekFmtPdf), I.imgW, I.imgH, g_peekPdfPages, I.size);
+            swprintf(I.subtitle, 320, S(Str::PeekFmtPdf), I.imgW, I.imgH, g_peekPages, I.size);
         g_peekKind = PeekKind::Image;
         return;
     }
@@ -6984,7 +7080,7 @@ void PeekLoad(const wchar_t* path)
         float dims[3] = {};
         unsigned tri = 0;
         if (PeekLoadStl(path, dims, tri)) {
-            swprintf(I.subtitle, 320, S(Str::PeekFmtStl), dims[0], dims[1], dims[2], tri, I.size);
+            PeekStlSubtitle(0);                          // CAPS-55: «ракурс 1 з 7: ізометрія»
             g_peekKind = PeekKind::Image;
             return;
         }
@@ -7049,7 +7145,7 @@ RECT PeekCloseRect(const RECT& rc)
 }
 
 // Стрілки гортання сторінок — ліворуч від хрестика й лише коли сторінок більше однієї.
-bool PeekHasPager() { return g_peekPdfPages > 1; }
+bool PeekHasPager() { return g_peekPages > 1; }
 
 RECT PeekPrevRect(const RECT& rc)
 {
@@ -7372,8 +7468,8 @@ void PeekPaint(HDC dc, const RECT& rc)
     DrawTextW(dc, g_peekInfo.subtitle, -1, &subR, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
     if (PeekHasPager()) {
         const RECT pr = PeekPrevRect(rc), nr = PeekNextRect(rc);
-        PeekPaintArrow(dc, pr, text, gray, true,  g_peekPagerHot == 1, g_peekPdfPage > 0);
-        PeekPaintArrow(dc, nr, text, gray, false, g_peekPagerHot == 2, g_peekPdfPage + 1 < g_peekPdfPages);
+        PeekPaintArrow(dc, pr, text, gray, true,  g_peekPagerHot == 1, g_peekPage > 0);
+        PeekPaintArrow(dc, nr, text, gray, false, g_peekPagerHot == 2, g_peekPage + 1 < g_peekPages);
     }
     PeekPaintClose(dc, closeR, text);
     {
@@ -7650,8 +7746,8 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (g_peekKind == PeekKind::Media) {              // CAPS-18: коліщатко — перемотка на 5 с
             if (g_pkDur > 0) PkSeekFrac((g_pkPos + (delta > 0 ? -5.0 : 5.0)) / g_pkDur);
         } else if (PeekHasPager() && !ctrl) {
-            const int to = (int)g_peekPdfPage + (delta < 0 ? 1 : -1);
-            if (PeekPdfGoto(to)) InvalidateRect(hwnd, nullptr, FALSE);
+            const int to = (int)g_peekPage + (delta < 0 ? 1 : -1);
+            if (PeekPageGoto(to)) InvalidateRect(hwnd, nullptr, FALSE);
         } else {
             PeekZoomAt(hwnd, cur, delta > 0);
         }
@@ -7705,9 +7801,9 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (PeekHasPager()) {
             const RECT pr = PeekPrevRect(rc), nr = PeekNextRect(rc);
             int to = -1;
-            if (PtInRect(&pr, pt)) to = (int)g_peekPdfPage - 1;
-            else if (PtInRect(&nr, pt)) to = (int)g_peekPdfPage + 1;
-            if (to >= 0 && PeekPdfGoto(to)) InvalidateRect(hwnd, nullptr, FALSE);
+            if (PtInRect(&pr, pt)) to = (int)g_peekPage - 1;
+            else if (PtInRect(&nr, pt)) to = (int)g_peekPage + 1;
+            if (to >= 0 && PeekPageGoto(to)) InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 0;
     }
@@ -7854,7 +7950,7 @@ void SetLayoutControlsEnabled(HWND hwnd)
 {
     EnableWindow(GetDlgItem(hwnd, IDC_MODE_HOOK),   g_layoutOn);
     EnableWindow(GetDlgItem(hwnd, IDC_MODE_HOTKEY), g_layoutOn);
-    EnableWindow(g_passthroughCheckbox,             g_layoutOn);
+    EnableWindow(g_passthroughCheckbox,             g_layoutOn || g_cur.enabled);   // CAPS-5: стосується й курсора
     EnableWindow(g_fwdCapsCheckbox,                 g_layoutOn && g_passthrough);   // CAPS-13
 }
 
@@ -28945,6 +29041,7 @@ struct VidJob {
     HANDLE stop;
     HWND win;                      // CAPS-75: вікно, вибране кліком
     bool follow;                   //          писати саме його (WGC), а не ділянку
+    volatile LONG pause;           // CAPS-101: 1 — пауза (ставить головний потік, читає потік запису)
 };
 
 struct VidResult {
@@ -29451,6 +29548,7 @@ struct VidMouseEv { LONGLONG qpc; LONG x, y; BYTE btn, down; };
 SRWLOCK g_vidMouseLock = SRWLOCK_INIT;
 std::vector<VidMouseEv> g_vidMouseEvs;              // від старту запису
 HHOOK g_vidMouseHook = nullptr;
+HWND  g_vidPill = nullptr;                          // CAPS-101: плашка «пауза/стоп»; кліки по ній — не в запис
 volatile LONG g_vidClickFrame = -1;                 // кадр, де з'явився останній клік (харнес)
 volatile LONG g_vidFrameNow = -1;                   // кадр, який зараз пишеться (харнес)
 
@@ -29480,7 +29578,8 @@ LRESULT CALLBACK VidMouseProc(int code, WPARAM wp, LPARAM lp)
         case WM_MBUTTONUP:   btn = 2; break;
         default: break;
         }
-        if (btn >= 0) VidMousePush(m->pt.x, m->pt.y, btn, down);   // точки хука — фізичні пікселі
+        if (btn >= 0 && !(g_vidPill && WindowFromPoint(m->pt) == g_vidPill))   // CAPS-101: плашка — не в запис
+            VidMousePush(m->pt.x, m->pt.y, btn, down);              // точки хука — фізичні пікселі
     }
     return CallNextHookEx(nullptr, code, wp, lp);
 }
@@ -29910,6 +30009,7 @@ struct VidAudJob {
     LONGLONG qf = 1;
     HANDLE stop = nullptr;
     volatile LONG t0Idx = -1;         // індекс першого кадру відео на шкалі (для синтетики)
+    volatile LONG synthShift = 0;     // CAPS-101 (синтетика): аудіокадри, викинуті паузами
     int fps = 30;
 };
 
@@ -29931,7 +30031,7 @@ void VidAudSynthPoll(VidAudJob& j, VidAudSrc& s, LONGLONG nowIdx)
             const LONGLONG a = s.next + i;
             float v;
             if (s.synth == 1) {
-                const LONGLONG fr = (a - t0) * j.fps / kVidAudRate;
+                const LONGLONG fr = (a - t0 - InterlockedCompareExchange(&j.synthShift, 0, 0)) * j.fps / kVidAudRate;
                 const float amp = fr >= 0 ? 3000.0f * (float)((fr % 8) + 1) / 32768.0f : 0.0f;
                 v = amp * sinf(2.0f * 3.14159265f * 1000.0f * (float)(a % kVidAudRate) / kVidAudRate);
             } else {
@@ -30376,6 +30476,8 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
     QueryPerformanceFrequency(&qf);
     const LONGLONG f = qf.QuadPart, fps = j->fps;
     LONGLONG t0 = 0, k = 0;
+    bool paused = false;                             // CAPS-101
+    LONGLONG pauseQpc = 0, aPauseIdx = 0, aShift = 0;   //   коли стали; звук: індекс паузи, викинуто всього
     VidOverlay ov;                                   // CAPS-76: курсор, кліки, журнал миші
     ov.Begin(j, s.dev);
     for (;;) {
@@ -30397,6 +30499,41 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
             }
             else if (s.gdi) Sleep(20);
             continue;
+        }
+        // CAPS-101: пауза. Кадри не пишемо, а після продовження t0 зсувається на тривалість
+        // паузи — шкала неперервна: ні дірки, ні замороженого кадру. Звук: що дозріло до
+        // моменту паузи — у файл, записане під час паузи — геть, далі індекси зсунуто так само.
+        {
+            const bool wantPause = InterlockedCompareExchange(&j->pause, 0, 0) != 0;
+            if (wantPause != paused) {
+                QueryPerformanceCounter(&q);
+                if (wantPause) {
+                    pauseQpc = q.QuadPart;
+                    if (aj) aPauseIdx = (VidQpcTo100(pauseQpc, f) - aj->anchor100) * kVidAudRate / 10000000LL;
+                } else {
+                    t0 += q.QuadPart - pauseQpc;
+                    if (aj) {
+                        if (aPauseIdx > aw) { aj->mix.Take(aPauseIdx, pcm); VidEmitAudio(e, pcm, aw - aIdx0 - aShift); aw = aPauseIdx; }
+                        const LONGLONG rIdx = (VidQpcTo100(q.QuadPart, f) - aj->anchor100) * kVidAudRate / 10000000LL;
+                        aj->mix.Take(rIdx, pcm);                       // звук паузи — геть
+                        if (rIdx > aw) { aShift += rIdx - aw; InterlockedExchangeAdd(&aj->synthShift, (LONG)(rIdx - aw)); aw = rIdx; }
+                    }
+                    AcquireSRWLockExclusive(&g_vidMouseLock);       // кліки під час паузи — не в запис
+                    ov.seen = g_vidMouseEvs.size();
+                    ReleaseSRWLockExclusive(&g_vidMouseLock);
+                }
+                paused = wantPause;
+            }
+            if (paused) {
+                if (s.synth || s.gdi) Sleep(20); else VidPull(s, 50);   // джерело живе, кадр не пишемо
+                if (aj) {                                          // звук до паузи ще дозріває — дописати
+                    QueryPerformanceCounter(&q);
+                    LONGLONG upto = (VidQpcTo100(q.QuadPart, f) - aj->anchor100) * kVidAudRate / 10000000LL - kVidAudLag;
+                    if (upto > aPauseIdx) upto = aPauseIdx;
+                    if (upto > aw + 480) { aj->mix.Take(upto, pcm); VidEmitAudio(e, pcm, aw - aIdx0 - aShift); aw = upto; }
+                }
+                continue;
+            }
         }
         QueryPerformanceCounter(&q);
         const LONGLONG due = t0 + k * f / fps;
@@ -30424,18 +30561,18 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
             const LONGLONG upto = (VidQpcTo100(q.QuadPart, f) - aj->anchor100) * kVidAudRate / 10000000LL - kVidAudLag;
             if (upto > aw + 480) {
                 aj->mix.Take(upto, pcm);
-                VidEmitAudio(e, pcm, aw - aIdx0);
+                VidEmitAudio(e, pcm, aw - aIdx0 - aShift);   // CAPS-101: без пауз
                 aw = upto;
             }
         }
     }
     if (aj) {                                // хвіст звуку — рівно до кінця відео
-        const LONGLONG end = aIdx0 + k * kVidAudRate / fps;
+        const LONGLONG end = aIdx0 + aShift + k * kVidAudRate / fps;   // CAPS-101: шкала з викинутими паузами
         SetEvent(aj->stop);
         if (ath) { WaitForSingleObject(ath, 5000); CloseHandle(ath); ath = nullptr; }
         if (t0 && end > aw && e.written > 0) {
             aj->mix.Take(end, pcm);
-            VidEmitAudio(e, pcm, aw - aIdx0);
+            VidEmitAudio(e, pcm, aw - aIdx0 - aShift);
         }
         audEnd();
     }
@@ -30494,6 +30631,9 @@ VidJob*   g_vidJob = nullptr;
 bool      g_vidPicking = false;
 ULONGLONG g_vidStartMs = 0;
 HWND      g_vidFrame = nullptr;
+bool      g_vidPaused = false;                 // CAPS-101
+ULONGLONG g_vidPauseAt = 0, g_vidPausedMs = 0; //          коли стали і скільки всього простояли
+int       g_vidPillHot = 0;                    //          1 пауза, 2 стоп
 HICON     g_vidRecIcon = nullptr, g_vidBaseIcon = nullptr;
 wchar_t   g_vidToastPath[MAX_PATH] = {};
 HWND      g_vidToast = nullptr;
@@ -30543,6 +30683,14 @@ void VidFitRect(RECT& r, const RECT& mon)
 LRESULT CALLBACK VidFrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == WM_NCHITTEST) return HTTRANSPARENT;
+    if (msg == WM_ERASEBKGND) {                    // CAPS-101: на паузі рамка жовта — видно, що запис стоїть
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH b = CreateSolidBrush(g_vidPaused ? RGB(255, 179, 0) : RGB(229, 57, 53));
+        FillRect((HDC)wp, &rc, b);
+        DeleteObject(b);
+        return 1;
+    }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
@@ -30554,7 +30702,7 @@ void VidFrameShow(const RECT& sel, const RECT& mon)
         wc.lpfnWndProc   = VidFrameProc;
         wc.hInstance     = GetModuleHandleW(nullptr);
         wc.lpszClassName = L"lilhelpers_vidframe";
-        wc.hbrBackground = CreateSolidBrush(RGB(229, 57, 53));
+        wc.hbrBackground = nullptr;                // колір — у VidFrameProc (CAPS-101)
         RegisterClassW(&wc);
         reg = true;
     }
@@ -30582,6 +30730,7 @@ void VidFrameHide()
     g_vidFrame = nullptr;
 }
 
+void VidPillPlace();   // CAPS-101, нижче
 // CAPS-75: рамка-індикатор за вікном, що його пишуть: пересунули — їде, змінили
 // розмір — перебудовується, згорнули — ховається.
 RECT g_vidFrameRc = {};
@@ -30589,12 +30738,13 @@ void VidFollowTick()
 {
     if (!g_vidJob || !g_vidJob->follow || !IsWindow(g_vidJob->win)) { KillTimer(g_mainWnd, TIMER_VIDFOLLOW); return; }
     const HWND w = g_vidJob->win;
-    if (IsIconic(w)) { if (g_vidFrame) ShowWindow(g_vidFrame, SW_HIDE); return; }
+    if (IsIconic(w)) { if (g_vidFrame) ShowWindow(g_vidFrame, SW_HIDE); if (g_vidPill) ShowWindow(g_vidPill, SW_HIDE); return; }   // CAPS-101
     const RECT r = VidWinBounds(w);
     if (!g_vidFrame || r.right - r.left != g_vidFrameRc.right - g_vidFrameRc.left || r.bottom - r.top != g_vidFrameRc.bottom - g_vidFrameRc.top) {
         VidFrameHide();
         g_vidFrameRc = r;
         VidFrameShow(r, r);
+        VidPillPlace();                                // CAPS-101
         return;
     }
     if (r.left != g_vidFrameRc.left || r.top != g_vidFrameRc.top) {
@@ -30603,8 +30753,197 @@ void VidFollowTick()
         GetWindowRect(g_vidFrame, &fr);
         SetWindowPos(g_vidFrame, HWND_TOPMOST, fr.left + dx, fr.top + dy, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
         g_vidFrameRc = r;
+        VidPillPlace();                                // CAPS-101
     }
-    if (!IsWindowVisible(g_vidFrame)) ShowWindow(g_vidFrame, SW_SHOWNOACTIVATE);
+    if (!IsWindowVisible(g_vidFrame)) { ShowWindow(g_vidFrame, SW_SHOWNOACTIVATE); VidPillPlace(); }
+}
+
+
+// ---- CAPS-101: плашка «пауза / стоп» біля кутка рамки ----
+// Окреме клікабельне вікно (рамка пропускає мишу наскрізь): без фокуса, завжди
+// поверх, завжди виключене з захоплення — у кадр не потрапляє, де б не стояла.
+// Стоїть зовні ділянки біля правого нижнього кута; нема місця знизу — зверху;
+// нема ніде (весь екран) — всередині. Клавіші для паузи немає (рішення власника
+// 26.09: лише кнопка й трей). На паузі — жовтий колір і миготливий лічильник.
+void VidStop();
+int  VidPillH(double sc) { return (int)(32 * sc + 0.5); }
+int  VidPillW(double sc) { return (int)(32 * sc * 2 + 66 * sc + 0.5); }   // дві кнопки + час
+
+ULONGLONG VidElapsedMs()
+{
+    const ULONGLONG now = GetTickCount64();
+    ULONGLONG e = now - g_vidStartMs - g_vidPausedMs;
+    if (g_vidPaused && now > g_vidPauseAt) e -= now - g_vidPauseAt;
+    return e;
+}
+
+// hot: 1 пауза, 2 стоп; dim — фаза мигання лічильника на паузі.
+void VidPillPaint(Gdiplus::Graphics& g, const RECT& rc, double sc, bool paused, int hot, const wchar_t* time, bool dim)
+{
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+    const float x = (float)rc.left, y = (float)rc.top, w = (float)(rc.right - rc.left), h = (float)(rc.bottom - rc.top);
+    Gdiplus::GraphicsPath path;
+    EdRoundRectPathF(path, x, y, w, h, h / 2);
+    Gdiplus::SolidBrush bg(paused ? Gdiplus::Color(255, 46, 38, 20) : Gdiplus::Color(255, 28, 28, 32));
+    g.FillPath(&bg, &path);
+    const Gdiplus::Color accent = paused ? Gdiplus::Color(255, 255, 179, 0) : Gdiplus::Color(255, 229, 57, 53);
+    Gdiplus::SolidBrush white(Gdiplus::Color(255, 240, 240, 240)), acc(accent), hotBr(Gdiplus::Color(40, 255, 255, 255));
+    const float u = (float)(sc);
+    for (int i = 0; i < 2; ++i) {
+        const float bx = x + i * h, cx = bx + h / 2, cy = y + h / 2;
+        if (hot == i + 1) g.FillEllipse(&hotBr, bx + 2 * u, y + 2 * u, h - 4 * u, h - 4 * u);
+        if (i == 0 && !paused) {                             // пауза: дві риски
+            g.FillRectangle(&white, cx - 5.0f * u, cy - 5.5f * u, 3.6f * u, 11.0f * u);
+            g.FillRectangle(&white, cx + 1.4f * u, cy - 5.5f * u, 3.6f * u, 11.0f * u);
+        } else if (i == 0) {                                 // продовжити: трикутник кольору стану
+            Gdiplus::PointF t[3] = { { cx - 4.5f * u, cy - 6.0f * u }, { cx - 4.5f * u, cy + 6.0f * u }, { cx + 6.5f * u, cy } };
+            g.FillPolygon(&acc, t, 3);
+        } else {                                             // стоп: квадрат
+            g.FillRectangle(&white, cx - 5.0f * u, cy - 5.0f * u, 10.0f * u, 10.0f * u);
+        }
+    }
+    // крапка запису + час
+    const float dx = x + 2 * h + 4 * u, cy = y + h / 2;
+    Gdiplus::SolidBrush dot(paused ? Gdiplus::Color(255, 255, 179, 0) : Gdiplus::Color(255, 229, 57, 53));
+    g.FillEllipse(&dot, dx, cy - 3.5f * u, 7.0f * u, 7.0f * u);
+    Gdiplus::Font font(L"Segoe UI", 12.0f * u, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    Gdiplus::StringFormat fmt;
+    fmt.SetAlignment(Gdiplus::StringAlignmentNear);
+    fmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+    fmt.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+    Gdiplus::SolidBrush tb(paused ? Gdiplus::Color(dim ? 110 : 255, 255, 179, 0) : Gdiplus::Color(255, 240, 240, 240));
+    g.DrawString(time, -1, &font, Gdiplus::RectF(dx + 11.0f * u, y, w - (dx - x) - 12.0f * u, h), &fmt, &tb);
+}
+
+int VidPillHit(HWND hwnd, POINT pt)
+{
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    if (!PtInRect(&rc, pt)) return 0;
+    const int h = rc.bottom - rc.top;
+    return pt.x < h ? 1 : (pt.x < 2 * h ? 2 : 0);
+}
+
+void VidPauseToggle()
+{
+    if (!g_vidJob || !VidRecording()) return;
+    g_vidPaused = !g_vidPaused;
+    InterlockedExchange(&g_vidJob->pause, g_vidPaused ? 1 : 0);
+    if (g_vidPaused) g_vidPauseAt = GetTickCount64();
+    else             g_vidPausedMs += GetTickCount64() - g_vidPauseAt;
+    if (g_vidFrame) InvalidateRect(g_vidFrame, nullptr, TRUE);
+    if (g_vidPill)  InvalidateRect(g_vidPill, nullptr, FALSE);
+}
+
+LRESULT CALLBACK VidPillProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+    case WM_ERASEBKGND:    return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HDC mem = CreateCompatibleDC(dc);
+        HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+        HGDIOBJ old = SelectObject(mem, bmp);
+        {
+            Gdiplus::Graphics g(mem);
+            g.Clear(Gdiplus::Color(255, 0, 0, 0));      // поза пігулкою — регіон вікна відрізає
+            wchar_t t[16];
+            FormatDuration((LONGLONG)VidElapsedMs() * 10000LL, t, 16);
+            const double sc = CapMonitorScale(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST));
+            VidPillPaint(g, rc, sc, g_vidPaused, g_vidPillHot, t, ((GetTickCount64() / 500) & 1) != 0);
+        }
+        BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+        SelectObject(mem, old);
+        DeleteObject(bmp);
+        DeleteDC(mem);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_SETCURSOR:
+        SetCursor(LoadCursorW(nullptr, IDC_HAND));
+        return TRUE;
+    case WM_MOUSEMOVE: {
+        const POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        const int hot = VidPillHit(hwnd, pt);
+        if (hot != g_vidPillHot) { g_vidPillHot = hot; InvalidateRect(hwnd, nullptr, FALSE); }
+        TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
+        TrackMouseEvent(&tme);
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        if (g_vidPillHot) { g_vidPillHot = 0; InvalidateRect(hwnd, nullptr, FALSE); }
+        return 0;
+    case WM_LBUTTONDOWN:
+        return 0;
+    case WM_LBUTTONUP: {
+        const POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        const int hit = VidPillHit(hwnd, pt);
+        if (hit == 1) VidPauseToggle();
+        else if (hit == 2) VidStop();
+        return 0;
+    }
+    case WM_DESTROY:
+        if (g_vidPill == hwnd) g_vidPill = nullptr;
+        return 0;
+    default: break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// Поставити плашку біля ділянки (фізичні пікселі, як і рамка).
+void VidPillPlace()
+{
+    if (!g_vidPill || !g_vidJob) return;
+    const RECT sel = g_vidJob->follow ? g_vidFrameRc : g_vidJob->sel;
+    HMONITOR hm = MonitorFromRect(&sel, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(mi) };
+    RECT mon = g_vidJob->monRc;
+    if (GetMonitorInfoW(hm, &mi)) mon = mi.rcMonitor;
+    const double sc = CapMonitorScale(hm);
+    const int w = VidPillW(sc), h = VidPillH(sc);
+    const int t = (int)(2.0 * sc + 0.5) + 1, gap = (int)(6 * sc + 0.5);
+    int x = sel.right - w, y = sel.bottom + t + gap;                 // зовні, під правим нижнім кутом
+    if (y + h > mon.bottom) y = sel.top - t - gap - h;               // зовні зверху
+    if (y < mon.top) { y = sel.bottom - gap - h; x = sel.right - gap - w; }   // всередині (з захоплення виключена)
+    if (x + w > mon.right) x = mon.right - w;
+    if (x < mon.left) x = mon.left;
+    SetWindowPos(g_vidPill, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    HRGN rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, h, h);
+    SetWindowRgn(g_vidPill, rgn, TRUE);                              // регіон тепер належить вікну
+}
+
+void VidPillShow()
+{
+    static bool reg = false;
+    if (!reg) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc   = VidPillProc;
+        wc.hInstance     = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"lilhelpers_vidpill";
+        wc.hCursor       = LoadCursorW(nullptr, IDC_HAND);
+        RegisterClassW(&wc);
+        reg = true;
+    }
+    if (g_vidPill) DestroyWindow(g_vidPill);
+    g_vidPillHot = 0;
+    g_vidPill = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+                                L"lilhelpers_vidpill", L"", WS_POPUP, 0, 0, 10, 10,
+                                nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!g_vidPill) return;
+    SetLayeredWindowAttributes(g_vidPill, 0, 235, LWA_ALPHA);
+    SetWindowDisplayAffinity(g_vidPill, WDA_EXCLUDEFROMCAPTURE);
+    VidPillPlace();
+}
+
+void VidPillHide()
+{
+    if (g_vidPill) DestroyWindow(g_vidPill);
+    g_vidPill = nullptr;
 }
 
 // Значок трею з червоною крапкою: з самого значка програми, щоб крапка лягла
@@ -30657,10 +30996,12 @@ HICON VidMakeRecIcon(HICON base)
 void VidTipTick()
 {
     if (!g_nid.hWnd || !VidRecording()) return;
+    if (g_vidPill) InvalidateRect(g_vidPill, nullptr, FALSE);   // CAPS-101: лічильник і мигання на паузі
     wchar_t t[16];
-    FormatDuration((LONGLONG)(GetTickCount64() - g_vidStartMs) * 10000LL, t, 16);
+    FormatDuration((LONGLONG)VidElapsedMs() * 10000LL, t, 16);   // CAPS-101: без пауз
     wchar_t tip[128];
-    swprintf(tip, 128, S(Str::VidTipFmt), t);
+    swprintf(tip, 128, S(g_vidPaused ? Str::VidTipPausedFmt : Str::VidTipFmt), t);
+    if (lstrcmpW(tip, g_nid.szTip) == 0) return;                // трей — лише коли текст змінився
     lstrcpynW(g_nid.szTip, tip, ARRAYSIZE(g_nid.szTip));
     NOTIFYICONDATAW n = g_nid;
     n.uFlags = NIF_TIP;
@@ -30676,7 +31017,7 @@ void VidTraySet(bool rec)
         g_vidBaseIcon = g_nid.hIcon;
         if (!g_vidRecIcon) g_vidRecIcon = VidMakeRecIcon(g_vidBaseIcon);
         if (g_vidRecIcon) g_nid.hIcon = g_vidRecIcon;
-        SetTimer(g_mainWnd, TIMER_VIDTIP, 1000, nullptr);
+        SetTimer(g_mainWnd, TIMER_VIDTIP, 500, nullptr);       // CAPS-101: 500 мс — мигання лічильника
     } else {
         KillTimer(g_mainWnd, TIMER_VIDTIP);
         if (g_vidBaseIcon) g_nid.hIcon = g_vidBaseIcon;
@@ -30848,6 +31189,9 @@ void VidStart()
         VidFrameShow(g_vidFrameRc, g_vidFrameRc);
         SetTimer(g_mainWnd, TIMER_VIDFOLLOW, 100, nullptr);
     } else if (!fullMon) VidFrameShow(sel, mon);
+    g_vidPaused = false;                           // CAPS-101
+    g_vidPausedMs = g_vidPauseAt = 0;
+    VidPillShow();
     VidTraySet(true);
 }
 
@@ -30998,6 +31342,8 @@ void VidReleaseJob()
     VidMouseHookOn(false);                         // CAPS-76
     KillTimer(g_mainWnd, TIMER_VIDFOLLOW);         // CAPS-75
     VidFrameHide();
+    VidPillHide();                                 // CAPS-101
+    g_vidPaused = false;
     VidTraySet(false);
 }
 
@@ -31069,6 +31415,7 @@ void ShowTrayMenu(HWND hwnd)
     // CAPS-73: іде запис — зупинка першим пунктом, щоб її не шукати.
     if (VidRecording()) {
         AppendMenuW(menu, MF_STRING, IDM_VIDSTOP, S(Str::VidMenuStop));
+        AppendMenuW(menu, MF_STRING, IDM_VIDPAUSE, S(g_vidPaused ? Str::VidMenuResume : Str::VidMenuPause));   // CAPS-101
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     }
     AppendMenuW(menu, MF_STRING, IDM_SETTINGS, S(Str::MenuSettings));
@@ -31477,6 +31824,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 g_cur.enabled = SendMessageW(g_curEnable, BM_GETCHECK, 0, 0) == BST_CHECKED;
                 RegSaveInt(kRegCursorEnable, g_cur.enabled ? 1 : 0);
                 ApplyCursorFeature();
+                SetLayoutControlsEnabled(hwnd);   // CAPS-5: чекбокс remote/VM живе і від курсора
             }
             return 0;
         case IDC_CUR_OVERLAY:
@@ -31633,6 +31981,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             break;
         case IDM_VIDSTOP:
             VidStop();
+            break;
+        case IDM_VIDPAUSE:           // CAPS-101
+            VidPauseToggle();
             break;
         case IDC_VID_FOLLOW:         // CAPS-75: з наступного запису
         case IDC_VID_FIXED:
@@ -32296,7 +32647,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     }
     hint(addV, Str::VidAudHint, 1);
     y += 2;
-    sec(addV, Str::VidSecWhere);
+    {   // CAPS-103: кнопка в рядку заголовка — сторінка вміщається на 100 % без прокрутки
+        HWND c = addV(mkS(L"STATIC", Str::VidSecWhere, 0, PX, y, 240, 20, 0));
+        SendMessageW(c, WM_SETFONT, (WPARAM)fontSemi, TRUE);
+        addV(mkS(L"BUTTON", Str::CapLibShow, BS_PUSHBUTTON | WS_TABSTOP, PX + 266, y - 6, 150, 30, IDC_VID_SHOWLIB));
+        y += 24;
+    }
     {   // CAPS-74: своя межа для відео — знімки вона не витісняє
         addV(mkS(L"STATIC", Str::VidLibLimitL, 0, PX, y + 3, 250, 20, 0));
         HWND em = addV(mk(L"EDIT", L"", ES_NUMBER | ES_CENTER | WS_BORDER | WS_TABSTOP, PX + 256, y - 1, 80, 24, IDC_VID_LIBMB));
@@ -32307,8 +32663,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         y += 30;
     }
     hint(addV, Str::VidLibLimitHint, 1);
-    button(addV, Str::CapLibShow, PX, 150, IDC_VID_SHOWLIB);
-    y += 38;
 
     // ---- вкладка «Налаштування» (CAPS-9) ----
     y = PY;
