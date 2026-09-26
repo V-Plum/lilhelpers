@@ -34,6 +34,26 @@
 #define _WIN32_WINNT 0x0A00
 #include <windows.h>
 #include <winsock2.h>      // CAPS-83: WebSocket для розширення браузера (лише loopback)
+
+// Сторінки вкладок налаштувань живуть у власних контейнерах (див. «Сторінки вкладок»),
+// тож контрол сторінки — вже не пряма дитина головного вікна. Щоб GetDlgItem(hwnd, id)
+// і CheckRadioButton по всьому коду працювали як раніше, вони шукають і в контейнерах.
+static HWND g_lhPageCanvas[16] = {};
+static HWND LhDlgItem(HWND parent, int id)
+{
+    if (HWND c = ::GetDlgItem(parent, id)) return c;
+    for (HWND pc : g_lhPageCanvas)
+        if (pc && GetParent(GetParent(pc)) == parent) if (HWND c = ::GetDlgItem(pc, id)) return c;
+    return nullptr;
+}
+static BOOL LhCheckRadio(HWND parent, int first, int last, int check)
+{
+    for (int id = first; id <= last; ++id)
+        if (HWND c = LhDlgItem(parent, id)) SendMessageW(c, BM_SETCHECK, id == check ? BST_CHECKED : BST_UNCHECKED, 0);
+    return TRUE;
+}
+#define GetDlgItem(h, id) LhDlgItem((h), (id))
+#define CheckRadioButton(h, a, b, c) LhCheckRadio((h), (a), (b), (c))
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <commctrl.h>
@@ -3849,28 +3869,29 @@ void ToggleAdvanced()
 
 // ---------- CAPS-7: UI вкладки «День/ніч» ----------
 
-// ---- CAPS-99: прокрутка сторінок вкладок ------------------------------------
-// Сторінки не прокручувались, і висота вікна (790) була межею вмісту — «Відео»
-// в неї вже не влізло. Контроли лишаються дітьми головного вікна (жодного
-// перепідпорядкування: GetDlgItem у коді й харнесах працює як працював); при
-// прокрутці вони зсуваються, а те, що виходить за сторінку, обрізається
-// регіоном вікна (SetWindowRgn) — над заголовками вкладок і підвалом нічого не
-// проступає. Смуга прокрутки — лише коли вміст довший за сторінку.
+// ---- Сторінки вкладок: контейнер + полотно (з 4.13.1; раніше — CAPS-99 регіонами) ----
+// Кожна вкладка — дочірнє вікно-контейнер (рівно видима область сторінки,
+// WS_CLIPCHILDREN) з полотном усередині на всю висоту вмісту; контроли — діти
+// полотна. Прокрутка зсуває ОДНЕ полотно, а обрізає система: ні контролів над
+// заголовками вкладок чи в підвалі, ні «привидів» після прокрутки. (У CAPS-99
+// контроли лишались дітьми головного вікна й обрізались SetWindowRgn — це
+// лишало недомальовані смуги й залишки, зауваження власника 26.09.) Повідомлення
+// контролів (WM_COMMAND, WM_NOTIFY, кольори, owner-draw, повзунки) полотно
+// передає головному вікну, а GetDlgItem/CheckRadioButton шукають і в полотнах —
+// тож решта коду не знає про контейнери.
 int  g_pageScroll[kTabCount] = {};   // зсув кожної вкладки, px (0 — початок)
-int  g_pageBottom[kTabCount] = {};   // низ вмісту вкладки при зсуві 0 (клієнтські px), 0 — не рахований
 HWND g_pageSb = nullptr;
-bool g_pageScrollBusy = false;
+HWND g_pageHost[kTabCount] = {}, g_pageCanvas[kTabCount] = {};
+int  g_lhPageInset = 0;              // тестова збірка: штучно звузити сторінку знизу
 
-// Скільки груп контролів має вкладка (з «Детально», якщо розкрито).
-int PageGroups(int tab, HWND** arrs, int* ns)
+// Усі групи контролів вкладки (з «Детально» — навіть схованими).
+int PageGroupsAll(int tab, HWND** arrs, int* ns)
 {
     int n = 0;
     switch (tab) {
     case 0: arrs[n] = g_pageLayout;   ns[n++] = g_pageLayoutN; break;
-    case 1: arrs[n] = g_pageCursor;   ns[n++] = g_pageCursorN;
-            if (g_advVisible) { arrs[n] = g_advCtrls; ns[n++] = g_advN; } break;
-    case 2: arrs[n] = g_pageTheme;    ns[n++] = g_pageThemeN;
-            if (g_thAdvVisible) { arrs[n] = g_thAdv; ns[n++] = g_thAdvN; } break;
+    case 1: arrs[n] = g_pageCursor;   ns[n++] = g_pageCursorN; arrs[n] = g_advCtrls; ns[n++] = g_advN; break;
+    case 2: arrs[n] = g_pageTheme;    ns[n++] = g_pageThemeN;  arrs[n] = g_thAdv;    ns[n++] = g_thAdvN; break;
     case 3: arrs[n] = g_pagePeek;     ns[n++] = g_pagePeekN; break;
     case 4: arrs[n] = g_pageShots;    ns[n++] = g_pageShotsN; break;
     case 5: arrs[n] = g_pageVideo;    ns[n++] = g_pageVideoN; break;
@@ -3888,89 +3909,117 @@ RECT PageViewRect()
     SendMessageW(g_tabs, TCM_ADJUSTRECT, FALSE, (LPARAM)&r);
     MapWindowPoints(g_tabs, GetParent(g_tabs), (POINT*)&r, 2);
     InflateRect(&r, -2, -2);
+    r.bottom -= g_lhPageInset;
     return r;
 }
 
 int PageTab() { return g_tabs ? (int)SendMessageW(g_tabs, TCM_GETCURSEL, 0, 0) : 0; }
 
-// Низ вмісту при зсуві 0 і висота вікна перегляду.
-void PageMeasure(int tab, int* bottom0, int* viewH)
+// Контейнер і полотно: фон сторінки, а все, що шлють контроли, — головному вікну.
+LRESULT CALLBACK PageProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
-    HWND* arrs[2]; int ns[2];
-    const int g = PageGroups(tab, arrs, ns);
-    HWND parent = g_tabs ? GetParent(g_tabs) : nullptr;
-    int bottom = 0;
-    for (int k = 0; k < g; ++k)
-        for (int i = 0; i < ns[k]; ++i) {
-            RECT r;
-            GetWindowRect(arrs[k][i], &r);
-            MapWindowPoints(nullptr, parent, (POINT*)&r, 2);
-            if (r.bottom + g_pageScroll[tab] > bottom) bottom = r.bottom + g_pageScroll[tab];
-        }
+    switch (msg) {
+    case WM_ERASEBKGND: {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        FillRect((HDC)wp, &rc, g_dark ? g_brDkPage : GetSysColorBrush(COLOR_WINDOW));
+        return 1;
+    }
+    case WM_COMMAND: case WM_NOTIFY: case WM_CTLCOLORSTATIC: case WM_CTLCOLORBTN: case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX: case WM_DRAWITEM: case WM_MEASUREITEM: case WM_HSCROLL: case WM_MOUSEWHEEL:
+        if (g_mainWnd) return SendMessageW(g_mainWnd, msg, wp, lp);
+        break;
+    default: break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// Після побудови сторінок: кожну — у свій контейнер (координати ті самі, лише
+// відносно сторінки). Виклик один раз, до першого SelectTab.
+void PageBuildHosts(HWND main)
+{
+    static bool reg = false;
+    HINSTANCE hi = GetModuleHandleW(nullptr);
+    if (!reg) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = PageProc;
+        wc.hInstance = hi;
+        wc.lpszClassName = L"lilhelpers_page";
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        RegisterClassW(&wc);
+        reg = true;
+    }
     const RECT v = PageViewRect();
-    *bottom0 = bottom;
-    *viewH = v.bottom - v.top;
-}
-
-// Обрізати контрол до видимої області сторінки (регіоном у його координатах).
-void PageClip(HWND c, const RECT& view)
-{
-    RECT r;
-    GetWindowRect(c, &r);
-    MapWindowPoints(nullptr, GetParent(c), (POINT*)&r, 2);
-    RECT vis;
-    if (!IntersectRect(&vis, &r, &view)) { SetWindowRgn(c, CreateRectRgn(0, 0, 0, 0), TRUE); return; }
-    if (EqualRect(&vis, &r)) { SetWindowRgn(c, nullptr, TRUE); return; }
-    SetWindowRgn(c, CreateRectRgn(vis.left - r.left, vis.top - r.top, vis.right - r.left, vis.bottom - r.top), TRUE);
-}
-
-void PageClipAll(int tab)
-{
-    const RECT view = PageViewRect();
-    HWND* arrs[2]; int ns[2];
-    const int g = PageGroups(tab, arrs, ns);
-    for (int k = 0; k < g; ++k)
-        for (int i = 0; i < ns[k]; ++i) PageClip(arrs[k][i], view);
-}
-
-// Перерахувати смугу й обрізання для поточної вкладки (після перемикання,
-// «Детально», зміни мови).
-void PageScrollRefresh()
-{
-    if (!g_tabs || g_pageScrollBusy) return;
-    const int tab = PageTab();
-    int bottom0 = 0, viewH = 0;
-    PageMeasure(tab, &bottom0, &viewH);
-    const RECT view = PageViewRect();
-    const int content = bottom0 - view.top + 12;           // трохи повітря під останнім контролом
-    const int maxScroll = content > viewH ? content - viewH : 0;
-    if (g_pageScroll[tab] > maxScroll) {                   // «Детально» згорнули — підтягнути
-        const int d = g_pageScroll[tab] - maxScroll;
+    for (int t = 0; t < kTabCount; ++t) {
+        g_pageHost[t] = CreateWindowExW(WS_EX_CONTROLPARENT, L"lilhelpers_page", L"", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                                        v.left, v.top, v.right - v.left, v.bottom - v.top, main, nullptr, hi, nullptr);
+        g_pageCanvas[t] = CreateWindowExW(WS_EX_CONTROLPARENT, L"lilhelpers_page", L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+                                          0, 0, v.right - v.left, v.bottom - v.top, g_pageHost[t], nullptr, hi, nullptr);
+        if (t < 16) g_lhPageCanvas[t] = g_pageCanvas[t];
         HWND* arrs[2]; int ns[2];
-        const int g = PageGroups(tab, arrs, ns);
+        const int g = PageGroupsAll(t, arrs, ns);
         for (int k = 0; k < g; ++k)
             for (int i = 0; i < ns[k]; ++i) {
-                RECT r; GetWindowRect(arrs[k][i], &r);
-                MapWindowPoints(nullptr, GetParent(arrs[k][i]), (POINT*)&r, 2);
-                SetWindowPos(arrs[k][i], nullptr, r.left, r.top + d, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                HWND c = arrs[k][i];
+                RECT r;
+                GetWindowRect(c, &r);
+                MapWindowPoints(nullptr, main, (POINT*)&r, 2);
+                SetParent(c, g_pageCanvas[t]);
+                SetWindowPos(c, nullptr, r.left - v.left, r.top - v.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
-        g_pageScroll[tab] = maxScroll;
     }
-    PageClipAll(tab);
+    if (g_pageSb) SetWindowPos(g_pageSb, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+// Висота вмісту вкладки: низ найнижчого видимого контрола полотна + повітря.
+int PageContentH(int tab)
+{
+    HWND cv = g_pageCanvas[tab];
+    if (!cv) return 0;
+    int bottom = 0;
+    for (HWND c = GetWindow(cv, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+        if (!(GetWindowLongW(c, GWL_STYLE) & WS_VISIBLE)) continue;
+        RECT r;
+        GetWindowRect(c, &r);
+        MapWindowPoints(nullptr, cv, (POINT*)&r, 2);
+        if (r.bottom > bottom) bottom = r.bottom;   // на полотні контроли нерухомі — зсув не додаємо
+    }
+    return bottom + 12;
+}
+
+void PageApply(int tab)
+{
+    const RECT v = PageViewRect();
+    const int viewH = v.bottom - v.top, viewW = v.right - v.left;
+    const int content = PageContentH(tab);
+    const int maxScroll = content > viewH ? content - viewH : 0;
+    if (g_pageScroll[tab] > maxScroll) g_pageScroll[tab] = maxScroll;
+    if (g_pageScroll[tab] < 0) g_pageScroll[tab] = 0;
+    if (g_pageHost[tab]) SetWindowPos(g_pageHost[tab], nullptr, v.left, v.top, viewW, viewH, SWP_NOZORDER | SWP_NOACTIVATE);
+    if (g_pageCanvas[tab])
+        SetWindowPos(g_pageCanvas[tab], nullptr, 0, -g_pageScroll[tab], viewW, content > viewH ? content : viewH, SWP_NOZORDER | SWP_NOACTIVATE);
     if (g_pageSb) {
         if (maxScroll > 0) {
             SCROLLINFO si = { sizeof(si), SIF_ALL };
             si.nMin = 0; si.nMax = content - 1; si.nPage = (UINT)viewH; si.nPos = g_pageScroll[tab];
             SetScrollInfo(g_pageSb, SB_CTL, &si, TRUE);
-            // CAPS-103: впритул до рамки сторінки (view = сторінка − 2, рамка — ще на 1 px далі):
-            // зазор кольору сторінки між темною доріжкою і рамкою читався як світла лінія.
+            // впритул до рамки сторінки (CAPS-103): зазор кольору сторінки читався як світла лінія
             const int sbw = GetSystemMetrics(SM_CXVSCROLL);
-            SetWindowPos(g_pageSb, HWND_TOP, view.right + 3 - sbw, view.top - 3, sbw, viewH + 6,
-                         SWP_SHOWWINDOW | SWP_NOACTIVATE);
+            SetWindowPos(g_pageSb, HWND_TOP, v.right + 3 - sbw, v.top - 3, sbw, viewH + 6, SWP_SHOWWINDOW | SWP_NOACTIVATE);
         } else {
             ShowWindow(g_pageSb, SW_HIDE);
         }
     }
+}
+
+// Перерахувати поточну вкладку (після перемикання, «Детально», зміни мови).
+void PageScrollRefresh()
+{
+    if (!g_tabs) return;
+    const int tab = PageTab();
+    for (int t = 0; t < kTabCount; ++t)
+        if (g_pageHost[t]) ShowWindow(g_pageHost[t], t == tab ? SW_SHOWNA : SW_HIDE);
+    PageApply(tab);
 }
 
 // Прокрутити поточну вкладку до зсуву pos (притискається до меж).
@@ -3978,32 +4027,8 @@ void PageScrollTo(int pos)
 {
     if (!g_tabs) return;
     const int tab = PageTab();
-    int bottom0 = 0, viewH = 0;
-    PageMeasure(tab, &bottom0, &viewH);
-    const RECT view = PageViewRect();
-    const int content = bottom0 - view.top + 12;
-    const int maxScroll = content > viewH ? content - viewH : 0;
-    if (pos > maxScroll) pos = maxScroll;
-    if (pos < 0) pos = 0;
-    const int d = pos - g_pageScroll[tab];
-    if (d == 0) { PageClipAll(tab); return; }
-    g_pageScrollBusy = true;
-    HWND* arrs[2]; int ns[2];
-    const int g = PageGroups(tab, arrs, ns);
-    HDWP dwp = BeginDeferWindowPos(64);
-    for (int k = 0; k < g; ++k)
-        for (int i = 0; i < ns[k]; ++i) {
-            RECT r; GetWindowRect(arrs[k][i], &r);
-            MapWindowPoints(nullptr, GetParent(arrs[k][i]), (POINT*)&r, 2);
-            if (dwp) dwp = DeferWindowPos(dwp, arrs[k][i], nullptr, r.left, r.top - d, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-            else SetWindowPos(arrs[k][i], nullptr, r.left, r.top - d, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-    if (dwp) EndDeferWindowPos(dwp);
     g_pageScroll[tab] = pos;
-    g_pageScrollBusy = false;
-    PageClipAll(tab);
-    if (g_pageSb) { SCROLLINFO si = { sizeof(si), SIF_POS }; si.nPos = pos; SetScrollInfo(g_pageSb, SB_CTL, &si, TRUE); }
-    InvalidateRect(g_tabs, nullptr, TRUE);
+    PageApply(tab);
 }
 
 // Контрол дістав фокус (Tab) — має бути на видноті.
@@ -4013,7 +4038,7 @@ void PageEnsureVisible(HWND c)
     const RECT view = PageViewRect();
     RECT r;
     GetWindowRect(c, &r);
-    MapWindowPoints(nullptr, GetParent(c), (POINT*)&r, 2);
+    MapWindowPoints(nullptr, g_mainWnd, (POINT*)&r, 2);
     const int tab = PageTab();
     if (r.top < view.top) PageScrollTo(g_pageScroll[tab] - (view.top - r.top) - 8);
     else if (r.bottom > view.bottom) PageScrollTo(g_pageScroll[tab] + (r.bottom - view.bottom) + 8);
@@ -33892,7 +33917,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     const int w = sc(W), h = sc(H);
     RECT rc = { 0, 0, w, h };
     AdjustWindowRect(&rc, WS_CAPTION | WS_SYSMENU, FALSE);
-    HWND hwnd = CreateWindowW(kWndClass, kAppName, WS_CAPTION | WS_SYSMENU,
+    // WS_CLIPCHILDREN: фон вікна не затирає таб і контейнери сторінок, коли ті рухаються
+    HWND hwnd = CreateWindowW(kWndClass, kAppName, WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
         (GetSystemMetrics(SM_CXSCREEN) - w) / 2,
         (GetSystemMetrics(SM_CYSCREEN) - h) / 2,
         rc.right - rc.left, rc.bottom - rc.top,
@@ -34347,7 +34373,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // полотном, а WS_CLIPSIBLINGS не рятував: він вирізає лише сусідів ВИЩЕ.
     // Тепер сторінки завжди вище таба, і разом із WS_CLIPSIBLINGS полотно
     // ніколи не лягає поверх них.
-    SetWindowPos(g_tabs, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    PageBuildHosts(hwnd);   // сторінки — у свої контейнери (обрізає система, не регіони)
+    SetWindowPos(g_tabs, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);   // і таб — ПІСЛЯ них: нові вікна стають під нього
 
     SelectTab(0);
 

@@ -1238,9 +1238,13 @@ normally (one UAC prompt) with that file already.
   the right, which appears only when the content is longer than the page;
   `Tab` onto a control outside the visible part scrolls to it. The window
   doesn't grow because of this, and a new option on any tab no longer runs
-  into the footer. The controls remain children of the main window, and what
-  goes beyond the page is clipped by the window region — nothing shows through
-  above the tab headers. Since 4.11.0 (CAPS-103) the **Video** tab fits at
+  into the footer. Since 4.13.1 (CAPS-106) each tab is its own container
+  window, and the controls live on a "canvas" inside it; scrolling just moves
+  the canvas, and the system itself clips everything outside the page.
+  Previously the controls were children of the main window clipped by window
+  regions: while scrolling they overlapped the header and footer and left
+  "ghosts". Scrolling now stops at the last control instead of running into
+  empty space. Since 4.11.0 (CAPS-103) the **Video** tab fits at
   100 % without scrolling (**Show folder** is in the "Where recordings go"
   header row), and the bar sits right against the page border: a gap of page
   colour between the dark track and the border read as a light line in the
