@@ -12,13 +12,19 @@
 106 RCDATA "browser-extension/icon32.png"
 107 RCDATA "browser-extension/icon48.png"
 108 RCDATA "browser-extension/icon128.png"
+// CAPS-84: переглядач звіту (той самий у звіті HTML і в розширенні)
+109 RCDATA "browser-extension/viewer.html"
+110 RCDATA "browser-extension/viewer.js"
+111 RCDATA "browser-extension/report.css"
+112 RCDATA "browser-extension/report.js"
+113 RCDATA "browser-extension/report.html"
 
 // Version metadata. Without it the exe looks anonymous, which is one of the
 // signals antivirus ML heuristics weigh when flagging unsigned binaries.
 // Keep this file ASCII-only: rc.exe reads it as ANSI unless told otherwise.
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     4,12,0,0
-PRODUCTVERSION  4,12,0,0
+FILEVERSION     4,13,0,0
+PRODUCTVERSION  4,13,0,0
 FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -31,12 +37,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "Plum"
             VALUE "FileDescription",  "Little Helpers - small Windows conveniences"
-            VALUE "FileVersion",      "4.12.0.0"
+            VALUE "FileVersion",      "4.13.0.0"
             VALUE "InternalName",     "lilhelpers"
             VALUE "LegalCopyright",   "(c) 2026 Vadym Slyva (Plum)"
             VALUE "OriginalFilename", "lilhelpers.exe"
             VALUE "ProductName",      "Little Helpers"
-            VALUE "ProductVersion",   "4.12.0.0"
+            VALUE "ProductVersion",   "4.13.0.0"
         END
     END
     BLOCK "VarFileInfo"

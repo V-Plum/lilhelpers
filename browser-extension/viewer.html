@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Little Helpers — звіт</title>
+<link rel="stylesheet" href="report.css">
+</head>
+<body>
+<div id="pick" class="drop">
+  <div class="box">
+    <img src="icon48.png" width="48" height="48" alt="">
+    <h1 data-i="h">Відкрити звіт Little Helpers</h1>
+    <p data-i="p">Перетягніть сюди файл .lhreport — відео й лог браузера відкриються поруч, синхронно.</p>
+    <label class="pick"><span data-i="b">Вибрати файл…</span><input id="file" type="file" accept=".lhreport" hidden></label>
+    <div class="err" id="err" role="alert"></div>
+  </div>
+</div>
+<div id="lh-root" hidden></div>
+<script src="report.js"></script>
+<script src="viewer.js"></script>
+</body>
+</html>

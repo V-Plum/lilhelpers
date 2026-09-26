@@ -25,7 +25,9 @@ Small Windows 11 conveniences in one tray app. No dependencies, a single exe:
   it) or the whole screen to MP4 with the same HDR compensation as screenshots;
   cursor, clicks, system sound and microphone are optional. The same editor
   trims and cuts, draws marks over the video, crops and scales it down, exports
-  to MP4 or GIF and keeps everything as a `.lhvideo` project. Since 4.0.0.
+  to MP4 or GIF and keeps everything as a `.lhvideo` project. Since 4.13.0 — also a
+  DevTools log from Chrome/Edge in sync with the video, and a report for developers
+  (video + log) as one file. Since 4.0.0.
 - **Dark theme for the app window itself**, auto-updates from GitHub Releases
   with signature verification.
 - **Ukrainian and English** UI — from the Windows language or chosen by hand.
@@ -1153,7 +1155,82 @@ and that's exactly how the whole file is computed. A test harness parses the
 resulting GIF: frames are LZW-decoded, and the number baked into the synthetic
 video must follow frame by frame.
 
-Next in the plan: a DevTools log from Chrome, synchronised with the video.
+### Browser log while recording (since 4.13.0)
+
+While recording, Little Helpers can write the **DevTools log** of a page in Chrome
+or Edge — console, errors, network requests, navigations — tied to the video time
+(CAPS-83). It needs the browser extension: **Extension…** on the **Video** tab lays it
+out from the app itself into `%LOCALAPPDATA%\Little Helpers\BrowserExtension` and
+opens the folder; then `chrome://extensions` (in Edge — `edge://extensions`) →
+**Developer mode** → **Load unpacked** → that folder. The **Write the DevTools log…**
+checkbox next to it turns the feature on and off, and shows whether the extension
+is connected. The log follows the **active tab** and switches with it.
+
+How it works:
+
+- **The channel is a WebSocket on 127.0.0.1 only** (port 47650). Native Messaging,
+  where the plan started, does not work here: the browser starts the host as a
+  normal process, and the app needs administrator rights. The server accepts only
+  our extension's Origin — its ID is fixed by the key in `manifest.json`, and a web
+  page cannot fake an Origin. The port cannot be reached from the machine's network
+  address.
+- **Sync goes by the system clock**, with no pings at all: console, exceptions and
+  Log in the DevTools protocol carry milliseconds since the epoch, network — the
+  request's `wallTime`. The recording thread notes the same clock on the first
+  frame, and pauses (CAPS-101) are subtracted just as for frames and sound. Measured:
+  an event lands in video time within ~1 ms.
+- **The screen lags, the log does not.** The log shows when the page's code ran;
+  the effect appears in the video on average ~90 ms later (the page frame,
+  composition, capture). Measured by an end-to-end test with real Chrome: the page
+  colour changes in the video 1–3 frames after a `console.log` made at the same
+  moment.
+- **Never written:** request and response headers and bodies (including
+  `Authorization` and `Cookie`). URLs are written in full; the report export hides
+  secrets in them.
+- The log sits next to the recording in `.lhmeta` (the `DEVT` block) and in the
+  `.lhvideo` project. In the video editor it shows as ticks on the marks track:
+  errors red, warnings amber, navigations blue, network grey; **Details** shows the
+  number of events.
+- While the extension is attached to a tab, the browser shows the "extension is
+  debugging this browser" bar — a platform limitation, and it ends up in the
+  recording.
+
+### Report for developers (since 4.13.0)
+
+**Save ▾ → Report for developers…** in the video editor (CAPS-84) builds one thing for a
+bug report: the edited video (with cuts and marks) and the log remapped into its time.
+The dialog shows what goes into the report (duration, approximate size, how many
+events, errors and clicks, which domains) and offers three formats:
+
+- **A `.lhreport` file** — an uncompressed ZIP: `meta.json`, `log.jsonl`,
+  `clicks.json`, `report.html`, `video.mp4`. A double click opens it in Little
+  Helpers (the video becomes a new recording in the library, with its log and
+  clicks); the viewer in the extension itself (**Open a report…** in its menu) plays
+  the video straight from the archive, with no unpacking and no size limit; and
+  without either, renaming the file to `.zip` and opening `report.html` is enough.
+- **A single HTML file** — the video inside (base64), up to ~100 MB: browsers handle
+  bigger ones poorly, so for large recordings this option is off.
+- **A folder** — the same as in the archive, as separate files.
+
+The report is one page with no dependencies: the video on the left, a strip with
+ticks under it (errors, warnings, network, navigations, clicks), the log on the right
+with filters and search. The current event is highlighted, later ones are dimmed, and
+the log scrolls with the video by itself; clicking a row seeks the video to the event
+and expands its details. Keys: Space — play/pause, `N`/`P` — next/previous event,
+`E` — next error. The language follows the app, the theme follows the system.
+
+**Privacy.** **Hide secrets in URLs** (on by default) replaces with `•••` the values
+of parameters whose names contain token, key, secret, password, auth, sig, session,
+code and the like — in any field, console text included. Other page data (console
+text, URLs) stays, and the dialog says so.
+
+**Double click without UAC.** The app runs with administrator rights, so a direct
+file association would ask UAC on every double click. Instead Little Helpers
+registers `.lhreport`, `.lhvideo` and `.lhshot` for the current user through a silent
+forwarder: `conhost --headless` starts the same exe without elevation
+(`__COMPAT_LAYER=RunAsInvoker`), which only hands the path to the running app
+(`WM_COPYDATA`) and exits — no windows at all. If the app is not running, it starts
+normally (one UAC prompt) with that file already.
 
 ## Settings
 
@@ -1328,6 +1405,7 @@ no external DLLs).
 |---|---|
 | `README.md`, `README.en.md` | this description in Ukrainian and English |
 | `lilhelpers.cpp` | all the code (layout, cursor, day/night, preview, shots and editor, video recording and editor, window theme, localisation, updates) |
+| `browser-extension/` | the Chrome/Edge extension (DevTools log, CAPS-83) and the report viewer (`report.*`, `viewer.*`, CAPS-84); built into the exe as resources |
 | `lilhelpers.manifest` | requireAdministrator + dpiAware + visual styles |
 | `lilhelpers.rc` | icon, manifest, PNG logo and VERSIONINFO into the exe's resources |
 | `build.ps1` | build: MSVC, falling back to mingw-w64 |

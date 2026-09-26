@@ -210,7 +210,7 @@ chrome.debugger.onEvent.addListener((src, method, p) => {
     if (p.redirectResponse && reqs.has(key)) {   // переадресація — попередній крок як окрема подія
       const r = reqs.get(key);
       emit({ t: r.t, k: "net", s: 0, method: r.method, url: r.url, status: p.redirectResponse.status, type: r.type,
-             ms: Math.round((p.timestamp - r.ts) * 1000), size: 0, redirect: shortUrl(p.request.url) });
+             dur: Math.round((p.timestamp - r.ts) * 1000), size: 0, redirect: shortUrl(p.request.url) });
     }
     reqs.set(key, { t: wall, ts: p.timestamp, url: shortUrl(p.request.url), method: p.request.method, type: p.type || "" });
     break;
@@ -229,7 +229,7 @@ chrome.debugger.onEvent.addListener((src, method, p) => {
     const failed = method === "Network.loadingFailed";
     const bad = failed || (r.status || 0) >= 400;
     const ev = { t: r.t, k: "net", s: bad ? 2 : 0, method: r.method, url: r.url, status: r.status || 0, type: r.type,
-                 mime: r.mime || "", ms: Math.round((p.timestamp - r.ts) * 1000), size: failed ? 0 : (p.encodedDataLength || 0) };
+                 mime: r.mime || "", dur: Math.round((p.timestamp - r.ts) * 1000), size: failed ? 0 : (p.encodedDataLength || 0) };
     if (r.cache) ev.cache = true;
     if (failed) { ev.err = p.errorText || "failed"; if (p.canceled) ev.canceled = true; }
     emit(ev);

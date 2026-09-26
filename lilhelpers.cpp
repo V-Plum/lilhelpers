@@ -119,6 +119,8 @@ constexpr UINT WMAPP_THEMELOC     = WM_APP + 6;   // потік геолокац
 constexpr UINT WMAPP_UPDATE       = WM_APP + 7;   // потік оновлення: lp = UpdResult* (heap)
 constexpr UINT WMAPP_PEEK         = WM_APP + 8;   // CAPS-16: від хука — пробіл/Esc у списку файлів; lp = SHELLDLL_DefView
 constexpr UINT WMAPP_OPENEDITOR   = WM_APP + 10;  // CAPS-59: --editor від другого екземпляра
+constexpr UINT WMAPP_OPENPATH     = WM_APP + 19;  // CAPS-84: відкрити файл (lp — wchar_t* з new[])
+constexpr ULONG_PTR kLhCopyOpen   = 0x4C484F50;   // CAPS-84: WM_COPYDATA «LHOP» — шлях від передавача
 constexpr UINT WMAPP_QUICKSAVE    = WM_APP + 11;  // CAPS-57: lp = CapQuickJob* — запис у бібліотеку після буфера
 constexpr UINT WMAPP_EDTEXT       = WM_APP + 9;   // CAPS-24: поле вводу напису; wp = 1 зафіксувати, 0 скасувати
 constexpr UINT HKW_INSTALL        = WM_APP + 20;  // до вікна потоку хука
@@ -720,6 +722,34 @@ X(VidSizeNote,        L"Лише зменшення. Ширина й висот�
                       L"Marks move along with the frame.")                                             \
 X(VidFactOut,         L"Після правок",                  L"After edits")                                \
 X(VidGifItem,         L"Експорт у GIF…",                L"Export as GIF…")                             \
+X(VidReportItem,      L"Звіт для розробника…",          L"Report for developers…")                     \
+X(RepTitle,           L"Звіт: відео й лог браузера",    L"Report: video and browser log")              \
+X(RepFmtLhr,          L"Файл .lhreport — відкривається в Little Helpers і в розширенні браузера",      \
+                      L"A .lhreport file — opens in Little Helpers and in the browser extension")      \
+X(RepFmtHtml,         L"Один файл HTML — відео всередині (до 100 МБ)",                                 \
+                      L"A single HTML file — the video inside (up to 100 MB)")                         \
+X(RepFmtDir,          L"Тека: report.html, video.mp4 і лог поруч",                                     \
+                      L"A folder: report.html, video.mp4 and the log side by side")                    \
+X(RepMask,            L"Приховати секрети в адресах (token, key, password…)",                          \
+                      L"Hide secrets in URLs (token, key, password…)")                                 \
+X(RepSumFmt,          L"Відео %s, приблизно %s. Подій лога: %d (помилок %d), кліків: %d.",              \
+                      L"Video %s, about %s. Log events: %d (errors %d), clicks: %d.")                   \
+X(RepSumDomains,      L"Домени: %s",                    L"Domains: %s")                                \
+X(RepSumNoLog,        L"Лога браузера в цьому записі немає — у звіті будуть відео й кліки.",           \
+                      L"This recording has no browser log — the report will have the video and clicks.") \
+X(RepPrivacy,         L"Звіт може містити дані сторінки: тексти з консолі й адреси. Перегляньте його, перш ніж надсилати.", \
+                      L"The report may contain page data: console text and URLs. Look through it before sending.") \
+X(RepBigNote,         L"Відео завелике для одного HTML: браузери погано відкривають такі файли.",      \
+                      L"The video is too big for a single HTML: browsers handle such files poorly.")   \
+X(RepExportBtn,       L"Зберегти…",                     L"Save…")                                      \
+X(RepSaveTitle,       L"Зберегти звіт",                 L"Save the report")                            \
+X(RepFilterLhr,       L"Звіт Little Helpers",           L"Little Helpers report")                      \
+X(RepFilterHtml,      L"Сторінка HTML",                 L"HTML page")                                  \
+X(RepPickFolder,      L"Куди покласти теку звіту",      L"Where to put the report folder")             \
+X(RepSaved,           L"Звіт збережено",                L"Report saved")                               \
+X(RepErr,             L"Не вдалося зберегти звіт.",     L"Could not save the report.")                 \
+X(RepImportErr,       L"Це не звіт Little Helpers (.lhreport) або файл пошкоджено.",                  \
+                      L"This is not a Little Helpers report (.lhreport) or the file is damaged.")      \
 X(GifTitle,           L"Експорт у GIF",                 L"Export as GIF")                              \
 X(GifFpsL,            L"Кадрів за секунду",             L"Frames per second")                          \
 X(GifWidthL,          L"Ширина",                        L"Width")                                      \
@@ -10320,6 +10350,8 @@ bool EdStoreNow();                    // зберегти в бібліотек�
 bool EdStoreCopy();                   // CAPS-97: копія в бібліотеку, далі працюємо з нею
 std::wstring EdLibCopyName(const std::wstring& name);
 bool EvSaveCopy();                    // CAPS-97: те саме для відео (новий проєкт)
+bool EvReportStart(int fmt, bool mask, const std::wstring& repOut);   // CAPS-84, нижче
+bool RepDialog(HWND owner);
 void EdOpenLibrary(HWND hwnd);
 void EdSaveDocAs(HWND hwnd);
 void EdSaveMenu(HWND hwnd, const RECT& btn);
@@ -17219,7 +17251,7 @@ bool EdPickFile(HWND owner, wchar_t* out, size_t cch, bool imagesOnly)
     // бути видні одразу, а не губитися серед чужих картинок. Для вставки
     // (CAPS-69) документ не годиться — лише картинки.
     fs[0].pszSpec = imagesOnly ? L"*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp"
-                               : L"*.lhshot;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp;*.mp4;*.m4v;*.mov;*.wmv;*.avi;*.mkv;*.lhvideo";
+                               : L"*.lhshot;*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.webp;*.mp4;*.m4v;*.mov;*.wmv;*.avi;*.mkv;*.lhvideo;*.lhreport";
     dlg->SetFileTypes(1, fs);
     dlg->SetTitle(S(imagesOnly ? Str::EdInsertTitle : Str::EdOpenTitle));
     if (SUCCEEDED(dlg->Show(owner))) {
@@ -18073,11 +18105,20 @@ void EdInsertImage(HWND hwnd)
         MessageBoxW(hwnd, S(Str::EdErrOpen), kAppName, MB_OK | MB_ICONWARNING);
 }
 
+bool IsReportExt(const wchar_t* ext);            // CAPS-84, нижче
+bool RepImport(const wchar_t* path, wchar_t* outMp4);
+
 void EdOpenFileHere(HWND hwnd)
 {
     if (!EdConfirmReplace()) return;
     wchar_t path[MAX_PATH] = {};
     if (!EdPickFile(hwnd, path, MAX_PATH)) return;
+    if (IsReportExt(PathFindExtensionW(path))) {            // CAPS-84: звіт — записом у бібліотеку
+        wchar_t mp4[MAX_PATH] = {};
+        if (!RepImport(path, mp4)) { MessageBoxW(hwnd, S(Str::RepImportErr), kAppName, MB_OK | MB_ICONWARNING); return; }
+        EvOpen((HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), mp4);
+        return;
+    }
     if (IsVideoExt(PathFindExtensionW(path))) {             // CAPS-78
         EvOpen((HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), path);
         return;
@@ -19080,7 +19121,16 @@ LRESULT CALLBACK EdWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         DragQueryPoint(drop, &pt);
         const UINT n = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
         // CAPS-78: відео не лягає позначкою — воно відкривається, як через «Відкрити».
-        if (n >= 1 && DragQueryFileW(drop, 0, path, MAX_PATH) && IsVideoExt(PathFindExtensionW(path))) {
+        if (n >= 1 && DragQueryFileW(drop, 0, path, MAX_PATH) && IsReportExt(PathFindExtensionW(path))) {   // CAPS-84
+            DragFinish(drop);
+            SetForegroundWindow(hwnd);
+            if (!EdConfirmReplace()) return 0;
+            wchar_t mp4[MAX_PATH] = {};
+            if (RepImport(path, mp4)) EvOpen((HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), mp4);
+            else MessageBoxW(hwnd, S(Str::RepImportErr), kAppName, MB_OK | MB_ICONWARNING);
+            return 0;
+        }
+        if (n >= 1 && path[0] && IsVideoExt(PathFindExtensionW(path))) {
             DragFinish(drop);
             SetForegroundWindow(hwnd);
             if (EdConfirmReplace()) EvOpen((HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE), path);
@@ -26327,6 +26377,7 @@ void EvMarksTouched()
 
 // ---- CAPS-83: мітки лога браузера на доріжці позначок ----
 bool DevJsonNum(const std::string& j, const char* key, double& out, size_t within);   // нижче, біля сервера
+size_t DevJsonVal(const std::string& j, const char* key, size_t within);
 bool DevJsonStr(const std::string& j, const char* key, std::string& out, size_t within);
 // Сам журнал читається у звіті (CAPS-84); у редакторі — лише де що сталося:
 // тонка стрічка вгорі доріжки (помилки червоні, попередження бурштинові,
@@ -26909,6 +26960,9 @@ struct EvSaveJob {
     std::vector<EvSeg> keep;
     int marksGen = 0;              // CAPS-80: які позначки збережено
     std::vector<BYTE> tail;        // CAPS-81: проєкт (mode 3) — хвіст після копії відео
+    int repFmt = 0;                // CAPS-84 (mode 6): 1 .lhreport, 2 один HTML, 3 тека
+    std::wstring repOut;           //          куди звіт; out — тимчасове відео
+    std::string repHtml, repData, repLog, repMeta, repClicks;
     LhMeta meta;                   // CAPS-88: метадані документа на мить збереження
 };
 
@@ -26983,6 +27037,7 @@ int EvXToEdge(int x) { return (int)(EvXToTime(x) * g_evFps + 0.5); }   // меж
 
 bool EvSaveMenuAt(HWND hwnd, const RECT& btn);
 bool EvGifDialog(HWND owner);                    // CAPS-89
+bool RepStartFromMenu(HWND hwnd);                // CAPS-84
 void EvFmtBytes(ULONGLONG b, wchar_t* out, int n);
 bool EvAskStopSave();
 
@@ -27163,6 +27218,697 @@ void EvPaintEdits(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 // Перекодування — у своєму потоці: 4K іде швидше за реальний час, але не миттєво.
 
 
+
+// ===================== CAPS-84: звіт «відео + лог DevTools» =====================
+// Три способи з однієї моделі (відео редакції + події + кліки + відомості):
+//  1) .lhreport — ZIP без стиснення (MP4 і так стиснутий, а без стиснення відео
+//     грається прямо з архіву Blob-зрізом): meta.json, log.jsonl, clicks.json,
+//     report.html, video.mp4. Відкривається в Little Helpers і в розширенні; без
+//     нас — перейменувати в .zip і відкрити report.html.
+//  2) один HTML — відео base64 усередині (до ~100 МБ: більше браузери тримають погано);
+//  3) тека — те саме, що в архіві, файлами.
+// Переглядач (report.css / report.js / report.html) — у ресурсах exe, той самий, що в розширенні.
+std::string DevB64(const BYTE* p, size_t n);          // нижче, біля сервера лога
+void EvFillGeom(EvExportJob& x);
+DWORD WINAPI EvSaveThread(LPVOID param);
+
+const wchar_t* kRegRepFmt = L"ReportFormat", * kRegRepMask = L"ReportMask";
+wchar_t g_repLastOut[MAX_PATH] = {};                  // для харнеса
+
+std::string RepRes(int id)
+{
+    HINSTANCE hi = GetModuleHandleW(nullptr);
+    HRSRC r = FindResourceW(hi, MAKEINTRESOURCEW(id), RT_RCDATA);
+    if (!r) return std::string();
+    HGLOBAL g = LoadResource(hi, r);
+    const char* d = g ? (const char*)LockResource(g) : nullptr;
+    return d ? std::string(d, SizeofResource(hi, r)) : std::string();
+}
+
+void RepReplace(std::string& s, const std::string& a, const std::string& b)
+{
+    const size_t at = s.find(a);
+    if (at != std::string::npos) s.replace(at, a.size(), b);
+}
+
+std::string RepJsonEsc(const std::string& in)
+{
+    std::string o;
+    for (unsigned char c : in) {
+        if (c == '"' || c == '\\') { o += '\\'; o += (char)c; }
+        else if (c < 0x20) { char b[8]; snprintf(b, 8, "\\u%04x", c); o += b; }
+        else o += (char)c;
+    }
+    return o;
+}
+
+// Секрети в адресах: значення параметрів, у назві яких є token/key/secret/…, → •••.
+// Працює по всьому рядку JSON (адреса буває і в url, і в тексті консолі).
+bool RepSecretName(std::string n)
+{
+    for (char& c : n) c = (char)tolower((unsigned char)c);
+    static const char* keys[] = { "token", "secret", "password", "passwd", "pwd", "auth", "key", "sig", "session",
+                                  "sid", "code", "jwt", "bearer", "cookie", "credential", "otp", "ticket", "nonce" };
+    for (const char* k : keys) if (n.find(k) != std::string::npos) return true;
+    return false;
+}
+
+void RepMask(std::string& s)
+{
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] != '?' && s[i] != '&') continue;
+        size_t j = i + 1;
+        while (j < s.size() && (isalnum((unsigned char)s[j]) || strchr("_-.[]%", s[j]))) ++j;
+        if (j >= s.size() || s[j] != '=' || j == i + 1) continue;
+        if (!RepSecretName(s.substr(i + 1, j - i - 1))) continue;
+        const size_t v = j + 1;
+        size_t e = v;
+        while (e < s.size() && !strchr("&#\"\\ '<>", s[e])) ++e;
+        if (e > v) s.replace(v, e - v, "\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2");
+    }
+}
+
+// Час джерела → час у зведеній редакції (вирізане — -1).
+double RepOutMs(double srcMs, const std::vector<EvSeg>& keep, double fps)
+{
+    const int f = (int)floor(srcMs * fps / 1000.0 + 1e-6);
+    double acc = 0;
+    for (const EvSeg& k : keep) {
+        if (f >= k.a && f < k.b) return acc * 1000.0 / fps + (srcMs - k.a * 1000.0 / fps);
+        acc += k.b - k.a;
+    }
+    return -1;
+}
+
+struct RepInfo {
+    std::string log, events, clicks, meta;
+    int nEv = 0, nErr = 0, nClicks = 0;
+    std::vector<std::pair<std::string, int>> domains;
+    double wall0 = 0;
+};
+
+RepInfo RepCollect(bool mask)
+{
+    RepInfo I;
+    const std::vector<EvSeg> keep = EvKeepSegs();
+    const double fps = g_evFps > 0 ? g_evFps : 30.0;
+    std::vector<std::pair<std::string, int>> dom;
+    const std::vector<BYTE>& b = g_evDevLog;
+    if (b.size() >= 16) {
+        DWORD ver = 0, n = 0;
+        memcpy(&ver, b.data(), 4);
+        memcpy(&I.wall0, b.data() + 4, 8);
+        memcpy(&n, b.data() + 12, 4);
+        size_t at = 16;
+        for (DWORD i = 0; ver == 1 && i < n && at + 8 <= b.size(); ++i) {
+            INT32 ms; DWORD len;
+            memcpy(&ms, b.data() + at, 4); memcpy(&len, b.data() + at + 4, 4);
+            at += 8;
+            if (at + len > b.size()) break;
+            std::string j((const char*)b.data() + at, len);
+            at += len;
+            const double om = RepOutMs(ms, keep, fps);
+            if (om < 0 || j.size() <= 2 || j[0] != '{') continue;
+            // «ms» у звіті — час відео; якщо подія має власне поле з такою назвою — перейменувати
+            for (size_t v = DevJsonVal(j, "ms", j.size()); v != std::string::npos; v = DevJsonVal(j, "ms", j.size())) {
+                const size_t k = j.rfind("\"ms\"", v);
+                if (k == std::string::npos) break;
+                j.replace(k, 4, "\"_ms\"");
+            }
+            std::string line = "{\"ms\":" + std::to_string((long long)(om + 0.5)) + "," + j.substr(1);
+            if (mask) RepMask(line);
+            I.log += line; I.log += '\n';
+            if (!I.events.empty()) I.events += ',';
+            I.events += line;
+            ++I.nEv;
+            double sev = 0;
+            if (DevJsonNum(j, "s", sev, 96) && sev >= 2) ++I.nErr;
+            std::string url;
+            if (DevJsonStr(j, "url", url, j.size())) {
+                const size_t sch = url.find("://");
+                if (sch != std::string::npos) {
+                    const size_t h0 = sch + 3;
+                    size_t h1 = url.find_first_of("/:?#", h0);
+                    const std::string host = url.substr(h0, h1 == std::string::npos ? std::string::npos : h1 - h0);
+                    bool found = false;
+                    for (auto& d : dom) if (d.first == host) { ++d.second; found = true; break; }
+                    if (!found && !host.empty()) dom.push_back({ host, 1 });
+                }
+            }
+        }
+    }
+    std::sort(dom.begin(), dom.end(), [](const std::pair<std::string, int>& x, const std::pair<std::string, int>& y) { return x.second > y.second; });
+    I.domains = dom;
+    // кліки CAPS-76: записи MOUS по 13 байт (мс, x, y, кнопка | натиснуто << 4) — лише натискання
+    I.clicks = "[";
+    for (size_t at = 0; at + 13 <= g_evMouseLog.size(); at += 13) {
+        const BYTE* r = g_evMouseLog.data() + at;
+        if (!((r[12] >> 4) & 1)) continue;
+        INT32 ms, x, y;
+        memcpy(&ms, r, 4); memcpy(&x, r + 4, 4); memcpy(&y, r + 8, 4);
+        const double om = RepOutMs(ms, keep, fps);
+        if (om < 0) continue;
+        char t[96];
+        snprintf(t, 96, "%s{\"ms\":%lld,\"b\":%d,\"x\":%d,\"y\":%d}", I.nClicks ? "," : "", (long long)(om + 0.5), r[12] & 15, x, y);
+        I.clicks += t;
+        ++I.nClicks;
+    }
+    I.clicks += "]";
+    // відомості
+    int kept = 0;
+    for (const EvSeg& k : keep) kept += k.b - k.a;
+    const bool geom = EvHasGeom();
+    const int ow = geom ? (EdViewW() & ~1) : g_evW, oh = geom ? (EdViewH() & ~1) : g_evH;
+    wchar_t ver[32] = {};
+    ExeVersionString(ver, 32);
+    char created[40] = "";
+    if (g_evCreated) {
+        FILETIME ft = { (DWORD)g_evCreated, (DWORD)(g_evCreated >> 32) };
+        SYSTEMTIME st;
+        if (FileTimeToSystemTime(&ft, &st))
+            snprintf(created, 40, "%04d-%02d-%02dT%02d:%02d:%02dZ", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    }
+    char m[1024];
+    snprintf(m, sizeof(m), "{\"app\":\"Little Helpers\",\"ver\":\"%s\",\"name\":\"%s\",\"created\":\"%s\",\"duration\":%.3f,"
+             "\"width\":%d,\"height\":%d,\"fps\":%.3f,\"lang\":\"%s\",\"masked\":%s,\"wall0\":%.3f,\"events\":%d,\"clicks\":%d}",
+             RepJsonEsc(LhUtf8(ver)).c_str(), RepJsonEsc(LhUtf8(g_evName)).c_str(), created, kept / fps, ow, oh, fps,
+             g_lang == Lang::En ? "en" : "uk", mask ? "true" : "false", I.wall0, I.nEv, I.nClicks);
+    I.meta = m;
+    return I;
+}
+
+// report.html з переглядачем усередині (стилі й код — у самій сторінці, без залежностей).
+std::string RepBuildHtml()
+{
+    std::string h = RepRes(113);
+    RepReplace(h, "<link rel=\"stylesheet\" href=\"report.css\">", "<style>\n" + RepRes(111) + "\n</style>");
+    RepReplace(h, "<script src=\"report.js\"></script>", "<script>\n" + RepRes(112) + "\n</script>");
+    if (g_lang == Lang::En) RepReplace(h, "<html lang=\"uk\">", "<html lang=\"en\">");
+    return h;
+}
+
+bool RepWriteStr(const std::wstring& path, const std::string& s)
+{
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    DWORD put = 0;
+    const BOOL ok = s.empty() || (WriteFile(f, s.data(), (DWORD)s.size(), &put, nullptr) && put == s.size());
+    CloseHandle(f);
+    return ok != FALSE;
+}
+
+// ---- ZIP без стиснення (метод 0), імена UTF-8, без ZIP64 (до 4 ГБ) ----
+struct RepZipEnt { std::string name; const std::string* mem = nullptr; std::wstring file; DWORD crc = 0; ULONGLONG size = 0; DWORD off = 0; };
+
+bool RepFileCrc(const std::wstring& path, DWORD& crc, ULONGLONG& size)
+{
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    std::vector<BYTE> buf(1 << 20);
+    DWORD got = 0, c = 0xFFFFFFFFu;
+    size = 0;
+    while (ReadFile(f, buf.data(), (DWORD)buf.size(), &got, nullptr) && got) { c = LhCrc32(buf.data(), got, c); size += got; }
+    CloseHandle(f);
+    crc = c ^ 0xFFFFFFFFu;
+    return true;
+}
+
+HRESULT RepZipWrite(const std::wstring& out, std::vector<RepZipEnt>& ents)
+{
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    const WORD dtime = (WORD)((st.wHour << 11) | (st.wMinute << 5) | (st.wSecond / 2));
+    const WORD ddate = (WORD)(((st.wYear - 1980) << 9) | (st.wMonth << 5) | st.wDay);
+    for (RepZipEnt& e : ents) {
+        if (e.mem) { e.size = e.mem->size(); e.crc = LhCrc32((const BYTE*)e.mem->data(), e.mem->size()) ^ 0xFFFFFFFFu; }
+        else if (!RepFileCrc(e.file, e.crc, e.size)) return E_FAIL;
+    }
+    HANDLE f = CreateFileW(out.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return HRESULT_FROM_WIN32(GetLastError());
+    ULONGLONG pos = 0;
+    bool ok = true;
+    auto put = [&](const void* d, size_t n) { DWORD w = 0; if (ok && n) ok = WriteFile(f, d, (DWORD)n, &w, nullptr) && w == n; pos += n; };
+    auto p16 = [&](WORD v) { put(&v, 2); };
+    auto p32 = [&](DWORD v) { put(&v, 4); };
+    for (RepZipEnt& e : ents) {
+        if (pos + e.size + 64 >= 0xFFFFFFFFull) { ok = false; break; }   // без ZIP64
+        e.off = (DWORD)pos;
+        p32(0x04034b50); p16(20); p16(0x0800); p16(0); p16(dtime); p16(ddate);
+        p32(e.crc); p32((DWORD)e.size); p32((DWORD)e.size); p16((WORD)e.name.size()); p16(0);
+        put(e.name.data(), e.name.size());
+        if (e.mem) put(e.mem->data(), e.mem->size());
+        else {
+            HANDLE in = CreateFileW(e.file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+            if (in == INVALID_HANDLE_VALUE) { ok = false; break; }
+            std::vector<BYTE> buf(1 << 20);
+            DWORD got = 0;
+            while (ok && ReadFile(in, buf.data(), (DWORD)buf.size(), &got, nullptr) && got) put(buf.data(), got);
+            CloseHandle(in);
+        }
+    }
+    const DWORD cdOff = (DWORD)pos;
+    for (const RepZipEnt& e : ents) {
+        p32(0x02014b50); p16(20); p16(20); p16(0x0800); p16(0); p16(dtime); p16(ddate);
+        p32(e.crc); p32((DWORD)e.size); p32((DWORD)e.size); p16((WORD)e.name.size()); p16(0); p16(0);
+        p16(0); p16(0); p32(0); p32(e.off);
+        put(e.name.data(), e.name.size());
+    }
+    const DWORD cdSize = (DWORD)(pos - cdOff);
+    p32(0x06054b50); p16(0); p16(0); p16((WORD)ents.size()); p16((WORD)ents.size()); p32(cdSize); p32(cdOff); p16(0);
+    CloseHandle(f);
+    if (!ok) { DeleteFileW(out.c_str()); return E_FAIL; }
+    return S_OK;
+}
+
+// Зі своєму потоці збереження: відео редакції вже в j->out (тимчасове) — пакуємо.
+HRESULT RepPackage(EvSaveJob* j)
+{
+    const std::wstring mp4 = j->out;
+    auto html = [j](const std::string& src) {
+        std::string h = j->repHtml;
+        RepReplace(h, "LH-VIDEO-SRC", src);
+        RepReplace(h, "LH-DATA", j->repData);
+        return h;
+    };
+    HRESULT hr = S_OK;
+    if (j->repFmt == 1) {
+        const std::string page = html("video.mp4");
+        std::vector<RepZipEnt> e(5);
+        e[0].name = "meta.json";   e[0].mem = &j->repMeta;
+        e[1].name = "log.jsonl";   e[1].mem = &j->repLog;
+        e[2].name = "clicks.json"; e[2].mem = &j->repClicks;
+        e[3].name = "report.html"; e[3].mem = &page;
+        e[4].name = "video.mp4";   e[4].file = mp4;          // останнім: великий — наприкінці архіву
+        const std::wstring part = j->repOut + L".part";
+        hr = RepZipWrite(part, e);
+        if (SUCCEEDED(hr) && !MoveFileExW(part.c_str(), j->repOut.c_str(), MOVEFILE_REPLACE_EXISTING)) hr = HRESULT_FROM_WIN32(GetLastError());
+        if (FAILED(hr)) DeleteFileW(part.c_str());
+    } else if (j->repFmt == 3) {
+        CreateDirectoryW(j->repOut.c_str(), nullptr);
+        const std::wstring d = j->repOut + L"\\";
+        if (!RepWriteStr(d + L"report.html", html("video.mp4")) || !RepWriteStr(d + L"log.jsonl", j->repLog) ||
+            !RepWriteStr(d + L"meta.json", j->repMeta) || !RepWriteStr(d + L"clicks.json", j->repClicks) ||
+            !MoveFileExW(mp4.c_str(), (d + L"video.mp4").c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED))
+            hr = E_FAIL;
+    } else {
+        std::vector<BYTE> v;
+        if (!LhReadAll(mp4.c_str(), v)) hr = E_FAIL;
+        else {
+            const std::string b64 = DevB64(v.data(), v.size());
+            std::vector<BYTE>().swap(v);
+            if (!RepWriteStr(j->repOut, html("data:video/mp4;base64," + b64))) hr = E_FAIL;
+        }
+    }
+    DeleteFileW(mp4.c_str());
+    return hr;
+}
+
+// ---- діалог ----
+struct RepOpt { int fmt = 1; bool mask = true; };
+HWND   g_repWnd = nullptr;
+bool   g_repOk = false;
+RepOpt g_repOpt;
+
+LRESULT CALLBACK RepProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_ERASEBKGND: case WM_CTLCOLORSTATIC: case WM_CTLCOLORBTN: case WM_CTLCOLOREDIT:
+        return EdSzProc(hwnd, msg, wp, lp);
+    case WM_COMMAND: {
+        const int id = LOWORD(wp);
+        if (id == 1) {
+            g_repOpt.fmt = SendMessageW(GetDlgItem(hwnd, 32), BM_GETCHECK, 0, 0) == BST_CHECKED ? 2
+                         : SendMessageW(GetDlgItem(hwnd, 33), BM_GETCHECK, 0, 0) == BST_CHECKED ? 3 : 1;
+            g_repOpt.mask = SendMessageW(GetDlgItem(hwnd, 35), BM_GETCHECK, 0, 0) == BST_CHECKED;
+            g_repOk = true;
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        if (id == 2) { DestroyWindow(hwnd); return 0; }
+        return 0;
+    }
+    case WM_CLOSE: DestroyWindow(hwnd); return 0;
+    case WM_DESTROY:
+        g_repWnd = nullptr;
+        PostThreadMessageW(GetCurrentThreadId(), WM_NULL, 0, 0);
+        return 0;
+    default: break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// Приблизний розмір відео у звіті: без правок — сам файл, інакше — частка того, що лишається.
+ULONGLONG RepEstimateBytes()
+{
+    const int total = EvEditFrames() > 0 ? EvEditFrames() : 1;
+    return (ULONGLONG)((double)g_evBytes * EvKeptFrames() / total);
+}
+
+bool RepDialog(HWND owner)
+{
+    if (!g_edVideo || g_repWnd || g_evJob) return false;
+    g_repOpt.fmt = RegLoadInt(kRegRepFmt, 1, 1, 3);
+    g_repOpt.mask = RegLoadInt(kRegRepMask, 1, 0, 1) != 0;
+    const bool big = RepEstimateBytes() > 100ull * 1024 * 1024;
+    if (big && g_repOpt.fmt == 2) g_repOpt.fmt = 1;
+    const RepInfo I = RepCollect(false);
+    g_repOk = false;
+    static bool reg = false;
+    HINSTANCE inst = (HINSTANCE)GetWindowLongPtrW(owner, GWLP_HINSTANCE);
+    if (!reg) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = RepProc;
+        wc.hInstance = inst;
+        wc.lpszClassName = L"lilhelpers_report";
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        RegisterClassW(&wc);
+        reg = true;
+    }
+    const int pad = EdPx(16), lh = EdPx(24), w = EdPx(520), h = EdPx(400);
+    RECT orc;
+    GetWindowRect(owner, &orc);
+    g_repWnd = CreateWindowExW(WS_EX_DLGMODALFRAME, L"lilhelpers_report", S(Str::RepTitle), WS_POPUPWINDOW | WS_CAPTION,
+                               orc.left + ((orc.right - orc.left) - w) / 2, orc.top + ((orc.bottom - orc.top) - h) / 3, w, h,
+                               owner, nullptr, inst, nullptr);
+    if (!g_repWnd) return false;
+    const BOOL darkBar = g_edDark ? TRUE : FALSE;
+    DwmSetWindowAttribute(g_repWnd, 20, &darkBar, sizeof(darkBar));
+    RECT cr0 = {};
+    GetClientRect(g_repWnd, &cr0);
+    const int cw = cr0.right;                    // рядки — по клієнтській області, не по вікну з рамкою
+    // зведення: що потрапить у звіт
+    wchar_t dur[32], sz[48], sum[512];
+    EvFmtTime(EvKeptFrames() / (g_evFps > 0 ? g_evFps : 30.0), dur, 32);
+    EvFmtBytes(RepEstimateBytes(), sz, 48);
+    std::wstring text;
+    if (I.nEv > 0) {
+        swprintf(sum, 512, S(Str::RepSumFmt), dur, sz, I.nEv, I.nErr, I.nClicks);
+        text = sum;
+        std::wstring doms;
+        for (size_t i = 0; i < I.domains.size() && i < 6; ++i) {
+            wchar_t w16[128];
+            MultiByteToWideChar(CP_UTF8, 0, I.domains[i].first.c_str(), -1, w16, 128);
+            if (!doms.empty()) doms += L", ";
+            doms += w16;
+        }
+        if (I.domains.size() > 6) doms += L"…";
+        if (!doms.empty()) { swprintf(sum, 512, S(Str::RepSumDomains), doms.c_str()); text += L"\n"; text += sum; }
+    } else {
+        swprintf(sum, 512, S(Str::RepSumFmt), dur, sz, 0, 0, I.nClicks);
+        text = sum; text += L"\n"; text += S(Str::RepSumNoLog);
+    }
+    int y = pad;
+    EdSzMake(g_repWnd, L"STATIC", text.c_str(), 0, pad, y, cw - pad * 2, lh * 3, 30);
+    y += lh * 3 + EdPx(6);
+    HWND r1 = EdSzMake(g_repWnd, L"BUTTON", S(Str::RepFmtLhr), BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP | BS_MULTILINE, pad, y, cw - pad * 2, lh + EdPx(8), 31);
+    y += lh + EdPx(12);
+    HWND r2 = EdSzMake(g_repWnd, L"BUTTON", S(Str::RepFmtHtml), BS_AUTORADIOBUTTON, pad, y, cw - pad * 2, lh, 32);
+    y += lh + EdPx(6);
+    HWND r3 = EdSzMake(g_repWnd, L"BUTTON", S(Str::RepFmtDir), BS_AUTORADIOBUTTON, pad, y, cw - pad * 2, lh, 33);
+    y += lh + EdPx(4);
+    HWND note = EdSzMake(g_repWnd, L"STATIC", S(Str::RepBigNote), 0, pad + EdPx(20), y, cw - pad * 2 - EdPx(20), lh * 2, 34);
+    ShowWindow(note, big ? SW_SHOW : SW_HIDE);
+    if (big) EnableWindow(r2, FALSE);
+    y += lh * 2;
+    HWND cm = EdSzMake(g_repWnd, L"BUTTON", S(Str::RepMask), BS_AUTOCHECKBOX | WS_TABSTOP, pad, y, cw - pad * 2, lh, 35);
+    SendMessageW(cm, BM_SETCHECK, g_repOpt.mask ? BST_CHECKED : BST_UNCHECKED, 0);
+    y += lh + EdPx(8);
+    EdSzMake(g_repWnd, L"STATIC", S(Str::RepPrivacy), 0, pad, y, cw - pad * 2, lh * 2, 36);
+    SendMessageW(g_repOpt.fmt == 2 ? r2 : g_repOpt.fmt == 3 ? r3 : r1, BM_SETCHECK, BST_CHECKED, 0);
+    RECT crc = {};
+    GetClientRect(g_repWnd, &crc);
+    const int bw = EdPx(120), bh = EdPx(30), by = crc.bottom - bh - EdPx(12);
+    EdSzMake(g_repWnd, L"BUTTON", S(Str::RepExportBtn), BS_DEFPUSHBUTTON | WS_TABSTOP, crc.right - pad - bw * 2 - EdPx(8), by, bw, bh, 1);
+    EdSzMake(g_repWnd, L"BUTTON", S(Str::EdSizeCancel), WS_TABSTOP, crc.right - pad - bw, by, bw, bh, 2);
+    EnableWindow(owner, FALSE);
+    ShowWindow(g_repWnd, SW_SHOW);
+    MSG m;
+    while (g_repWnd && GetMessageW(&m, nullptr, 0, 0)) {
+        if (g_repWnd && IsDialogMessageW(g_repWnd, &m)) continue;
+        TranslateMessage(&m);
+        DispatchMessageW(&m);
+    }
+    EnableWindow(owner, TRUE);
+    SetForegroundWindow(owner);
+    if (!g_repOk) return false;
+    RegSaveInt(kRegRepFmt, g_repOpt.fmt);
+    RegSaveInt(kRegRepMask, g_repOpt.mask ? 1 : 0);
+    return true;
+}
+
+// Куди зберегти: файл .lhreport / .html, або батьківська тека для теки звіту.
+bool RepPickPath(HWND hwnd, int fmt, std::wstring& out)
+{
+    std::wstring nm = g_evName;
+    for (wchar_t& ch : nm) if (wcschr(L"\\/:*?\"<>|", ch)) ch = L'_';
+    if (nm.empty()) nm = L"report";
+    if (fmt == 3) {
+        IFileOpenDialog* dlg = nullptr;
+        if (FAILED(CoCreateInstance(kCLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, kIID_IFileOpenDialog, (void**)&dlg)) || !dlg) return false;
+        DWORD o = 0;
+        dlg->GetOptions(&o);
+        dlg->SetOptions(o | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+        dlg->SetTitle(S(Str::RepPickFolder));
+        bool ok = false;
+        if (SUCCEEDED(dlg->Show(hwnd))) {
+            IShellItem* item = nullptr;
+            if (SUCCEEDED(dlg->GetResult(&item)) && item) {
+                PWSTR p = nullptr;
+                if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &p)) && p) {
+                    std::wstring base = std::wstring(p) + L"\\" + nm;
+                    out = base;
+                    for (int i = 2; i < 100 && GetFileAttributesW(out.c_str()) != INVALID_FILE_ATTRIBUTES; ++i)
+                        out = base + L" (" + std::to_wstring(i) + L")";
+                    CoTaskMemFree(p);
+                    ok = true;
+                }
+                item->Release();
+            }
+        }
+        dlg->Release();
+        return ok;
+    }
+    IFileSaveDialog* dlg = nullptr;
+    if (FAILED(CoCreateInstance(kCLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, kIID_IFileSaveDialog, (void**)&dlg)) || !dlg) return false;
+    COMDLG_FILTERSPEC fs[1];
+    fs[0].pszName = S(fmt == 2 ? Str::RepFilterHtml : Str::RepFilterLhr);
+    fs[0].pszSpec = fmt == 2 ? L"*.html" : L"*.lhreport";
+    dlg->SetFileTypes(1, fs);
+    dlg->SetDefaultExtension(fmt == 2 ? L"html" : L"lhreport");
+    dlg->SetTitle(S(Str::RepSaveTitle));
+    dlg->SetFileName(nm.c_str());
+    bool ok = false;
+    if (SUCCEEDED(dlg->Show(hwnd))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dlg->GetResult(&item)) && item) {
+            PWSTR p = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &p)) && p) { out = p; CoTaskMemFree(p); ok = true; }
+            item->Release();
+        }
+    }
+    dlg->Release();
+    return ok;
+}
+
+bool EvReportStart(int fmt, bool mask, const std::wstring& repOut)
+{
+    if (g_evJob || !g_edVideo || !g_evPath[0] || repOut.empty()) return false;
+    const std::vector<EvSeg> keep = EvKeepSegs();
+    if (keep.empty()) { MessageBoxW(g_edWnd, S(Str::VidNothingLeft), kAppName, MB_OK | MB_ICONINFORMATION); return false; }
+    const bool edited = EvEdited(), marked = EvHasMarks(), geom = EvHasGeom();
+    wchar_t tmp[MAX_PATH] = {}, out[MAX_PATH] = {}, part[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tmp);
+    std::wstring d = std::wstring(tmp) + L"LittleHelpers";
+    CreateDirectoryW(d.c_str(), nullptr);
+    swprintf(out, MAX_PATH, L"%s\\report-%llu.mp4", d.c_str(), (unsigned long long)GetTickCount64());
+    swprintf(part, MAX_PATH, L"%s.part", out);
+    RepInfo I = RepCollect(mask);
+    EvSaveJob* j = new EvSaveJob;
+    lstrcpynW(j->x.src, g_evPath, MAX_PATH);
+    lstrcpynW(j->x.dst, part, MAX_PATH);
+    lstrcpynW(j->out, out, MAX_PATH);
+    j->x.keep = keep;
+    j->x.fps = g_evFps;
+    j->x.frames = EvEditFrames();
+    j->x.notify = g_edWnd;
+    j->mode = 6;
+    j->copyOnly = !edited && !marked && !geom;
+    j->keep = keep;
+    j->marksGen = g_evMarksGen;
+    EvFillGeom(j->x);
+    if (marked) EvBuildMarkSpans(j->x.spans, j->x.outW > 0 ? j->x.outW : g_evW, j->x.outH > 0 ? j->x.outH : g_evH, -EdViewX(), -EdViewY());
+    j->name = g_evName;
+    j->meta = g_edMeta;
+    j->repFmt = fmt;
+    j->repOut = repOut;
+    j->repHtml = RepBuildHtml();
+    std::string data = "{\"meta\":" + I.meta + ",\"events\":[" + I.events + "],\"clicks\":" + I.clicks + "}";
+    for (size_t at = 0; (at = data.find("</", at)) != std::string::npos; at += 3) data.replace(at, 2, "<\\/");   // не закрити <script>
+    j->repData = data;
+    j->repLog = I.log;
+    j->repMeta = I.meta;
+    j->repClicks = I.clicks;
+    g_evJob = j;
+    g_evJobThread = CreateThread(nullptr, 0, EvSaveThread, j, 0, nullptr);
+    if (!g_evJobThread) { g_evJob = nullptr; delete j; return false; }
+    if (g_edWnd) { SetTimer(g_edWnd, kEvSaveTimer, 150, nullptr); InvalidateRect(g_edWnd, &g_edRcStatus, FALSE); }
+    return true;
+}
+
+bool RepStartFromMenu(HWND hwnd)
+{
+    if (!RepDialog(hwnd)) return false;
+    std::wstring out;
+    if (!RepPickPath(hwnd, g_repOpt.fmt, out)) return false;
+    return EvReportStart(g_repOpt.fmt, g_repOpt.mask, out);
+}
+
+// ---- відкрити .lhreport: відео — новим записом у бібліотеку, лог і кліки — у .lhmeta ----
+struct RepZipItem { std::string name; ULONGLONG at = 0, size = 0; WORD method = 0; };
+
+bool RepZipRead(HANDLE f, std::vector<RepZipItem>& items)
+{
+    LARGE_INTEGER sz = {};
+    if (!GetFileSizeEx(f, &sz) || sz.QuadPart < 22) return false;
+    const LONGLONG tailLen = sz.QuadPart < 65557 ? sz.QuadPart : 65557;
+    std::vector<BYTE> tail((size_t)tailLen);
+    LARGE_INTEGER pos; pos.QuadPart = sz.QuadPart - tailLen;
+    DWORD got = 0;
+    if (!SetFilePointerEx(f, pos, nullptr, FILE_BEGIN) || !ReadFile(f, tail.data(), (DWORD)tail.size(), &got, nullptr) || got != tail.size()) return false;
+    LONGLONG e = -1;
+    for (LONGLONG i = tailLen - 22; i >= 0; --i) { DWORD sig; memcpy(&sig, &tail[(size_t)i], 4); if (sig == 0x06054b50) { e = i; break; } }
+    if (e < 0) return false;
+    WORD count; DWORD cdSize, cdOff;
+    memcpy(&count, &tail[(size_t)e + 10], 2); memcpy(&cdSize, &tail[(size_t)e + 12], 4); memcpy(&cdOff, &tail[(size_t)e + 16], 4);
+    if ((LONGLONG)cdOff + cdSize > sz.QuadPart || cdSize > (16u << 20)) return false;
+    std::vector<BYTE> cd(cdSize);
+    pos.QuadPart = cdOff;
+    if (!SetFilePointerEx(f, pos, nullptr, FILE_BEGIN) || !ReadFile(f, cd.data(), cdSize, &got, nullptr) || got != cdSize) return false;
+    size_t p = 0;
+    for (WORD n = 0; n < count; ++n) {
+        if (p + 46 > cd.size()) return false;
+        DWORD sig; memcpy(&sig, &cd[p], 4);
+        if (sig != 0x02014b50) return false;
+        RepZipItem it;
+        WORD nl, xl, cl; DWORD usize, local;
+        memcpy(&it.method, &cd[p + 10], 2); memcpy(&usize, &cd[p + 24], 4);
+        memcpy(&nl, &cd[p + 28], 2); memcpy(&xl, &cd[p + 30], 2); memcpy(&cl, &cd[p + 32], 2); memcpy(&local, &cd[p + 42], 4);
+        if (p + 46 + nl > cd.size()) return false;
+        it.name.assign((const char*)&cd[p + 46], nl);
+        it.size = usize;
+        BYTE lh[30];
+        pos.QuadPart = local;
+        if (!SetFilePointerEx(f, pos, nullptr, FILE_BEGIN) || !ReadFile(f, lh, 30, &got, nullptr) || got != 30) return false;
+        DWORD lsig; WORD lnl, lxl;
+        memcpy(&lsig, lh, 4); memcpy(&lnl, lh + 26, 2); memcpy(&lxl, lh + 28, 2);
+        if (lsig != 0x04034b50) return false;
+        it.at = (ULONGLONG)local + 30 + lnl + lxl;
+        items.push_back(it);
+        p += 46 + nl + xl + cl;
+    }
+    return true;
+}
+
+bool RepReadItem(HANDLE f, const RepZipItem& it, std::string& out)
+{
+    if (it.method != 0 || it.size > (256u << 20)) return false;
+    out.resize((size_t)it.size);
+    LARGE_INTEGER pos; pos.QuadPart = (LONGLONG)it.at;
+    DWORD got = 0;
+    return SetFilePointerEx(f, pos, nullptr, FILE_BEGIN) && (it.size == 0 || (ReadFile(f, &out[0], (DWORD)it.size, &got, nullptr) && got == it.size));
+}
+
+bool RepImport(const wchar_t* path, wchar_t* outMp4)
+{
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    std::vector<RepZipItem> items;
+    bool ok = RepZipRead(f, items);
+    const RepZipItem* vid = nullptr, * log = nullptr, * meta = nullptr, * clk = nullptr;
+    for (const RepZipItem& it : items) {
+        if (it.name == "video.mp4") vid = &it;
+        else if (it.name == "log.jsonl") log = &it;
+        else if (it.name == "meta.json") meta = &it;
+        else if (it.name == "clicks.json") clk = &it;
+    }
+    std::string metaS, logS, clkS;
+    ok = ok && vid && vid->method == 0 && meta && RepReadItem(f, *meta, metaS);
+    if (ok && log) ok = RepReadItem(f, *log, logS);
+    if (ok && clk) ok = RepReadItem(f, *clk, clkS);
+    wchar_t part[MAX_PATH] = {};
+    ok = ok && VidLibPath(part, outMp4);
+    if (ok) {                                           // відео — байт у байт у бібліотеку
+        HANDLE o = CreateFileW(part, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+        ok = o != INVALID_HANDLE_VALUE;
+        if (ok) {
+            LARGE_INTEGER pos; pos.QuadPart = (LONGLONG)vid->at;
+            ok = SetFilePointerEx(f, pos, nullptr, FILE_BEGIN) != FALSE;
+            std::vector<BYTE> buf(1 << 20);
+            ULONGLONG left = vid->size;
+            while (ok && left) {
+                DWORD want = (DWORD)(left < buf.size() ? left : buf.size()), got = 0, put = 0;
+                ok = ReadFile(f, buf.data(), want, &got, nullptr) && got == want && WriteFile(o, buf.data(), got, &put, nullptr) && put == got;
+                left -= got;
+            }
+            CloseHandle(o);
+            ok = ok && MoveFileExW(part, outMp4, MOVEFILE_REPLACE_EXISTING);
+            if (!ok) DeleteFileW(part);
+        }
+    }
+    CloseHandle(f);
+    if (!ok) return false;
+    VidMeta m;
+    std::string nm;
+    if (DevJsonStr(metaS, "name", nm, metaS.size()) && !nm.empty()) {
+        wchar_t w[128];
+        MultiByteToWideChar(CP_UTF8, 0, nm.c_str(), -1, w, 128);
+        m.name = w;
+    }
+    FILETIME now; GetSystemTimeAsFileTime(&now);
+    m.created = ((ULONGLONG)now.dwHighDateTime << 32) | now.dwLowDateTime;
+    double wall0 = 0;
+    DevJsonNum(metaS, "wall0", wall0, metaS.size());
+    // лог назад у DEVT (рядки як є — поле ms уже в часі цього відео)
+    std::vector<BYTE> b;
+    auto put32 = [&b](DWORD v) { b.insert(b.end(), (BYTE*)&v, (BYTE*)&v + 4); };
+    put32(1);
+    b.insert(b.end(), (const BYTE*)&wall0, (const BYTE*)&wall0 + 8);
+    put32(0);
+    DWORD n = 0;
+    size_t a = 0;
+    while (a < logS.size()) {
+        size_t e = logS.find('\n', a);
+        if (e == std::string::npos) e = logS.size();
+        const std::string line = logS.substr(a, e - a);
+        a = e + 1;
+        double ms = -1;
+        if (line.size() < 3 || !DevJsonNum(line, "ms", ms, 16) || ms < 0) continue;
+        const INT32 im = (INT32)(ms + 0.5);
+        b.insert(b.end(), (const BYTE*)&im, (const BYTE*)&im + 4);
+        put32((DWORD)line.size());
+        b.insert(b.end(), line.begin(), line.end());
+        ++n;
+    }
+    if (n) { memcpy(b.data() + 12, &n, 4); m.devt = b; }
+    // кліки назад у MOUS (лише натискання)
+    for (size_t at = 0; (at = clkS.find("{\"ms\":", at)) != std::string::npos; ++at) {
+        const std::string one = clkS.substr(at, clkS.find('}', at) - at + 1);
+        double ms = 0, bt = 0, x = 0, y = 0;
+        if (!DevJsonNum(one, "ms", ms, 16)) continue;
+        DevJsonNum(one, "b", bt, 64); DevJsonNum(one, "x", x, 96); DevJsonNum(one, "y", y, 128);
+        BYTE rec[13];
+        const INT32 ims = (INT32)(ms + 0.5), ix = (INT32)x, iy = (INT32)y;
+        memcpy(rec, &ims, 4); memcpy(rec + 4, &ix, 4); memcpy(rec + 8, &iy, 4);
+        rec[12] = (BYTE)(((int)bt & 15) | 0x10);
+        m.mouse.insert(m.mouse.end(), rec, rec + 13);
+    }
+    VidMetaWrite(outMp4, m);
+    VidLibRetention(outMp4);
+    return true;
+}
+
+bool IsReportExt(const wchar_t* ext) { return ext && !lstrcmpiW(ext, L".lhreport"); }
+
 DWORD WINAPI EvSaveThread(LPVOID param)
 {
     EvSaveJob* j = (EvSaveJob*)param;
@@ -27173,6 +27919,8 @@ DWORD WINAPI EvSaveThread(LPVOID param)
     else hr = EvExportRun(&j->x);
     if (SUCCEEDED(hr) && InterlockedCompareExchange(&j->x.cancel, 0, 0)) hr = E_ABORT;
     if (SUCCEEDED(hr) && !MoveFileExW(j->x.dst, j->out, MOVEFILE_REPLACE_EXISTING)) hr = HRESULT_FROM_WIN32(GetLastError());
+    if (SUCCEEDED(hr) && j->mode == 6) hr = RepPackage(j);          // CAPS-84: відео редакції готове — пакуємо звіт
+    else if (FAILED(hr) && j->mode == 6) DeleteFileW(j->out);
     if (SUCCEEDED(hr) && (j->mode == 3 || j->mode == 5)) {   // CAPS-81: проєкт (CAPS-97: і копія) — хвіст
         // (перейменування вище вже відбулось — дописуємо в кінцевий файл)
         if (!LhvWriteTail(j->out, j->tail)) { hr = E_FAIL; DeleteFileW(j->out); }
@@ -27400,7 +28148,13 @@ void EvSaved(LPARAM lp)
         if (g_edWnd) KillTimer(g_edWnd, kEvSaveTimer);
     }
     if (mine && g_edWnd) {
-        if (SUCCEEDED(j->x.hr)) {
+        if (SUCCEEDED(j->x.hr) && j->mode == 6) {      // CAPS-84: звіт — не збереження документа
+            lstrcpynW(g_repLastOut, j->repOut.c_str(), MAX_PATH);
+            EdToastText(S(Str::RepSaved));
+            wchar_t args[MAX_PATH + 16];
+            swprintf(args, MAX_PATH + 16, L"/select,\"%s\"", j->repOut.c_str());
+            ShellExecuteW(nullptr, L"open", L"explorer.exe", args, nullptr, SW_SHOWNORMAL);
+        } else if (SUCCEEDED(j->x.hr)) {
             g_evSavedKeep = j->keep;
             g_evMarksSavedGen = j->marksGen;       // CAPS-80
             if (j->mode == 0 || j->mode == 3 || j->mode == 5) { g_evSavedCrop = g_edCrop; g_evSavedDocW = g_evDocW; g_evSavedDocH = g_evDocH; }   // CAPS-90
@@ -27435,7 +28189,7 @@ void EvSaved(LPARAM lp)
             else MessageBoxW(g_edWnd, S(Str::EdErrCopy), kAppName, MB_OK | MB_ICONWARNING);
             if (j->closeAfter) PostMessageW(g_edWnd, WM_CLOSE, 0, 0);
         } else if (j->x.hr != E_ABORT) {
-            MessageBoxW(g_edWnd, S(j->mode == 4 ? Str::GifErr : Str::VidErrExport), kAppName, MB_OK | MB_ICONWARNING);
+            MessageBoxW(g_edWnd, S(j->mode == 4 ? Str::GifErr : j->mode == 6 ? Str::RepErr : Str::VidErrExport), kAppName, MB_OK | MB_ICONWARNING);
         }
         InvalidateRect(g_edWnd, nullptr, FALSE);
     }
@@ -27502,6 +28256,7 @@ bool EvSaveMenuAt(HWND hwnd, const RECT& btn)
     AppendMenuW(m, fl, 2, S(Str::VidCopyFileItem));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, fl, 3, S(Str::VidGifItem));           // CAPS-89
+    AppendMenuW(m, fl, 5, S(Str::VidReportItem));        // CAPS-84
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, fl, 4, S(Str::EdSaveCopyItem));       // CAPS-97
     POINT p = { btn.left, btn.top };
@@ -27512,6 +28267,7 @@ bool EvSaveMenuAt(HWND hwnd, const RECT& btn)
     if (cmd == 1 || cmd == 2) return EvSaveStart(cmd, false);
     if (cmd == 3) return EvGifDialog(hwnd);
     if (cmd == 4) return EvSaveCopy();
+    if (cmd == 5) return RepStartFromMenu(hwnd);          // CAPS-84
     return false;
 }
 
@@ -31037,7 +31793,7 @@ struct DevExtFile { int id; const wchar_t* name; };
 const DevExtFile kDevExtFiles[] = {
     { 101, L"manifest.json" }, { 102, L"background.js" }, { 103, L"popup.html" }, { 104, L"popup.js" },
     { 105, L"icon16.png" }, { 106, L"icon32.png" }, { 107, L"icon48.png" }, { 108, L"icon128.png" },
-    { 109, L"viewer.html" }, { 110, L"viewer.js" }, { 111, L"report.css" },
+    { 109, L"viewer.html" }, { 110, L"viewer.js" }, { 111, L"report.css" }, { 112, L"report.js" }, { 113, L"report.html" },
 };
 
 bool DevExtractExtension(const wchar_t* dir)
@@ -32164,6 +32920,8 @@ void ShowTrayMenu(HWND hwnd)
     DestroyMenu(menu);
 }
 
+void LhOpenPath(const wchar_t* path);   // CAPS-84, нижче
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == g_taskbarCreatedMsg && g_taskbarCreatedMsg) {
@@ -32203,6 +32961,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WMAPP_OPENEDITOR:   // CAPS-59: --editor від другого екземпляра або зі старту
         EdOpenBlank(GetModuleHandleW(nullptr));
         return 0;
+
+    case WM_COPYDATA: {      // CAPS-84: шлях від передавача асоціації
+        const COPYDATASTRUCT* cd = (const COPYDATASTRUCT*)lp;
+        if (!cd || cd->dwData != kLhCopyOpen || !cd->lpData || cd->cbData < 4 || cd->cbData > MAX_PATH * sizeof(wchar_t)) return FALSE;
+        wchar_t* op = new wchar_t[MAX_PATH];
+        lstrcpynW(op, (const wchar_t*)cd->lpData, (int)(cd->cbData / sizeof(wchar_t)) < MAX_PATH ? (int)(cd->cbData / sizeof(wchar_t)) : MAX_PATH);
+        PostMessageW(hwnd, WMAPP_OPENPATH, 0, (LPARAM)op);   // відповісти одразу: передавач чекає
+        return TRUE;
+    }
+
+    case WMAPP_OPENPATH: {   // CAPS-84
+        wchar_t* op = (wchar_t*)lp;
+        if (op) { LhOpenPath(op); delete[] op; }
+        return 0;
+    }
 
     case WMAPP_DEVSTATE:     // CAPS-83: розширення під'єдналось чи відпало
         DevStatusRefresh();
@@ -32895,10 +33668,136 @@ HFONT CreateUIFont(int percent, int weight)
     return CreateFontIndirectW(&lf);
 }
 
+
+// ---- CAPS-84: відкрити файл (асоціація, передавач, перетягування) ----
+// .lhreport — записом у бібліотеку й у редактор; відео й проєкт — у редактор відео;
+// .lhshot і картинки — у редактор знімків.
+void LhOpenPath(const wchar_t* path)
+{
+    HINSTANCE hi = GetModuleHandleW(nullptr);
+    const wchar_t* ext = PathFindExtensionW(path);
+    if (g_edWnd && !EdConfirmReplace()) return;
+    if (IsReportExt(ext)) {
+        wchar_t mp4[MAX_PATH] = {};
+        if (!RepImport(path, mp4)) { MessageBoxW(g_edWnd, S(Str::RepImportErr), kAppName, MB_OK | MB_ICONWARNING); return; }
+        EvOpen(hi, mp4);
+    } else if (IsVideoExt(ext)) {
+        EvOpen(hi, path);
+    } else if (EdIsDocFile(path)) {
+        EdOpenBlank(hi);
+        const int rc = EdDocOpen(path);
+        if (rc == 2)      MessageBoxW(g_edWnd, S(Str::EdErrDocNew), kAppName, MB_OK | MB_ICONWARNING);
+        else if (rc != 0) MessageBoxW(g_edWnd, S(Str::EdErrDocBad), kAppName, MB_OK | MB_ICONWARNING);
+    } else if (Gdiplus::Bitmap* b = EdBitmapFromFile(path)) {
+        EdOpenBitmap(hi, b, PathFindFileNameW(path), false, false);
+    } else {
+        MessageBoxW(g_edWnd, S(Str::EdErrOpen), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (g_edWnd) {
+        if (IsIconic(g_edWnd)) ShowWindow(g_edWnd, SW_RESTORE);
+        SetForegroundWindow(g_edWnd);
+    }
+}
+
+// Асоціації для поточного користувача (HKCU\Software\Classes). Пишемо лише те, що
+// відрізняється, — щоб не смикати Провідник щозапуску.
+bool RepRegSet(const std::wstring& key, const wchar_t* name, const std::wstring& val)
+{
+    HKEY k;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, key.c_str(), 0, nullptr, 0, KEY_READ | KEY_WRITE, nullptr, &k, nullptr) != ERROR_SUCCESS) return false;
+    wchar_t cur[1024] = {};
+    DWORD cb = sizeof(cur), type = 0;
+    const bool same = RegQueryValueExW(k, name, nullptr, &type, (BYTE*)cur, &cb) == ERROR_SUCCESS && type == REG_SZ && val == cur;
+    if (!same) RegSetValueExW(k, name, 0, REG_SZ, (const BYTE*)val.c_str(), (DWORD)((val.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(k);
+    return !same;
+}
+
+std::wstring RepOpenCommand()
+{
+    wchar_t exe[MAX_PATH], sys[MAX_PATH];
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    GetSystemDirectoryW(sys, MAX_PATH);
+    // cmd /c "…": зовнішні лапки cmd знімає сам; start "" — порожній заголовок.
+    return std::wstring(L"\"") + sys + L"\\conhost.exe\" --headless \"" + sys + L"\\cmd.exe\" /c \"set __COMPAT_LAYER=RunAsInvoker&& start \"\" \"" +
+           exe + L"\" --open \"%1\"\"";
+}
+
+void RepRegisterAssoc()
+{
+    wchar_t exe[MAX_PATH];
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::wstring cmd = RepOpenCommand(), icon = std::wstring(L"\"") + exe + L"\",0";
+    struct A { const wchar_t* ext; const wchar_t* prog; const wchar_t* uk; const wchar_t* en; };
+    static const A list[] = {
+        { L".lhreport", L"LittleHelpers.Report", L"Звіт Little Helpers", L"Little Helpers report" },
+        { L".lhvideo",  L"LittleHelpers.Video",  L"Проєкт відео Little Helpers", L"Little Helpers video project" },
+        { L".lhshot",   L"LittleHelpers.Shot",   L"Знімок Little Helpers", L"Little Helpers shot" },
+    };
+    bool changed = false;
+    for (const A& a : list) {
+        const std::wstring cls = std::wstring(L"Software\\Classes\\") + a.prog;
+        changed |= RepRegSet(std::wstring(L"Software\\Classes\\") + a.ext, nullptr, a.prog);
+        changed |= RepRegSet(cls, nullptr, g_lang == Lang::En ? a.en : a.uk);
+        changed |= RepRegSet(cls + L"\\DefaultIcon", nullptr, icon);
+        changed |= RepRegSet(cls + L"\\shell\\open\\command", nullptr, cmd);
+    }
+    if (changed) SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+}
+
+bool LhIsElevated()
+{
+    HANDLE t = nullptr;
+    TOKEN_ELEVATION e = {};
+    DWORD n = 0;
+    bool yes = false;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &t)) {
+        if (GetTokenInformation(t, TokenElevation, &e, sizeof(e), &n)) yes = e.TokenIsElevated != 0;
+        CloseHandle(t);
+    }
+    return yes;
+}
+
+// Шлях після --open (у лапках чи без).
+bool LhArgOpen(wchar_t* out)
+{
+    const wchar_t* c = wcsstr(GetCommandLineW(), L"--open");
+    if (!c) return false;
+    c += 6;
+    if (!wcsncmp(c, L"-elevated", 9)) c += 9;
+    while (*c == L' ') ++c;
+    if (*c == L'"') { ++c; const wchar_t* e = wcschr(c, L'"'); lstrcpynW(out, c, (int)((e ? e - c : (ptrdiff_t)wcslen(c)) + 1 > MAX_PATH ? MAX_PATH : (e ? e - c : (ptrdiff_t)wcslen(c)) + 1)); }
+    else lstrcpynW(out, c, MAX_PATH);
+    return out[0] != 0;
+}
+
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 {
+    // CAPS-84: передавач асоціації — лише передати шлях запущеній програмі й вийти.
+    wchar_t openPath[MAX_PATH] = {};
+    const bool haveOpen = LhArgOpen(openPath);
+    if (haveOpen) {
+        if (HWND prev = FindWindowW(kWndClass, nullptr)) {
+            DWORD pid = 0;
+            GetWindowThreadProcessId(prev, &pid);
+            AllowSetForegroundWindow(pid);           // редактор має вийти наперед
+            COPYDATASTRUCT cd = { kLhCopyOpen, (DWORD)((wcslen(openPath) + 1) * sizeof(wchar_t)), openPath };
+            SendMessageTimeoutW(prev, WM_COPYDATA, 0, (LPARAM)&cd, SMTO_ABORTIFHUNG, 5000, nullptr);
+            return 0;
+        }
+        if (!LhIsElevated() && !wcsstr(GetCommandLineW(), L"--open-elevated")) {
+            // програма не запущена: звичайний запуск (один запит UAC) — вже з файлом
+            SetEnvironmentVariableW(L"__COMPAT_LAYER", nullptr);
+            wchar_t exe[MAX_PATH], args[MAX_PATH + 32];
+            GetModuleFileNameW(nullptr, exe, MAX_PATH);
+            swprintf(args, MAX_PATH + 32, L"--open-elevated \"%s\"", openPath);
+            ShellExecuteW(nullptr, L"open", exe, args, nullptr, SW_SHOWNORMAL);
+            return 0;
+        }
+    }
     WaitForPreviousInstance();   // CAPS-10: після оновлення — дочекатись виходу старого
     CreateMutexW(nullptr, TRUE, L"lilhelpers_single_instance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -33517,6 +34416,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // повідомлень: вікно й GDI+ на цей момент готові, а порядок — той самий,
     // що й для команди від другого екземпляра.
     if (wcsstr(GetCommandLineW(), L"--editor")) PostMessageW(hwnd, WMAPP_OPENEDITOR, 0, 0);
+    if (haveOpen) { wchar_t* op = new wchar_t[MAX_PATH]; lstrcpynW(op, openPath, MAX_PATH); PostMessageW(hwnd, WMAPP_OPENPATH, 0, (LPARAM)op); }
+    RepRegisterAssoc();   // CAPS-84: подвійний клік по звіту, проєкту, знімку
+    ChangeWindowMessageFilterEx(hwnd, WM_COPYDATA, MSGFLT_ALLOW, nullptr);   // шлях від передавача (він без підвищення)
     ApplyCursorFeature();  // CAPS-2: мишачий хук на тому ж потоці
     g_mode = LoadMode();
     // CAPS-9: перехоплення лише якщо перемикання ввімкнено; інакше програма живе
