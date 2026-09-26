@@ -1244,7 +1244,11 @@ normally (one UAC prompt) with that file already.
   Previously the controls were children of the main window clipped by window
   regions: while scrolling they overlapped the header and footer and left
   "ghosts". Scrolling now stops at the last control instead of running into
-  empty space. Since 4.11.0 (CAPS-103) the **Video** tab fits at
+  empty space. 4.13.2 (CAPS-108) fixes the radio buttons: moving the controls
+  onto the canvas reversed their order and shifted the group boundaries, so
+  picking a language cleared the theme, a click colour cleared the frame rate,
+  and so on. The controls now keep their order, which also restores the `Tab`
+  order. Since 4.11.0 (CAPS-103) the **Video** tab fits at
   100 % without scrolling (**Show folder** is in the "Where recordings go"
   header row), and the bar sits right against the page border: a gap of page
   colour between the dark track and the border read as a light line in the

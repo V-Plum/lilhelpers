@@ -3950,6 +3950,13 @@ void PageBuildHosts(HWND main)
         reg = true;
     }
     const RECT v = PageViewRect();
+    // CAPS-108: SetParent ставить вікно НАГОРУ z-порядку нового батька, тож перенесення по черзі
+    // перевертало порядок. А радіогрупи (WS_GROUP + наступні в z-порядку) і Tab ідуть саме за ним:
+    // межі груп з'їжджали, і «Мова» з «Темою» ставали однією групою. Тому переносимо в ПОЧАТКОВОМУ
+    // порядку дітей головного вікна і кожного ставимо В КІНЕЦЬ (HWND_BOTTOM).
+    std::vector<HWND> order;
+    for (HWND c = GetWindow(main, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) order.push_back(c);
+    auto zIndex = [&](HWND h) { for (size_t i = 0; i < order.size(); ++i) if (order[i] == h) return (int)i; return (int)order.size(); };
     for (int t = 0; t < kTabCount; ++t) {
         g_pageHost[t] = CreateWindowExW(WS_EX_CONTROLPARENT, L"lilhelpers_page", L"", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                                         v.left, v.top, v.right - v.left, v.bottom - v.top, main, nullptr, hi, nullptr);
@@ -3958,15 +3965,18 @@ void PageBuildHosts(HWND main)
         if (t < 16) g_lhPageCanvas[t] = g_pageCanvas[t];
         HWND* arrs[2]; int ns[2];
         const int g = PageGroupsAll(t, arrs, ns);
+        std::vector<HWND> kids;
         for (int k = 0; k < g; ++k)
-            for (int i = 0; i < ns[k]; ++i) {
-                HWND c = arrs[k][i];
-                RECT r;
-                GetWindowRect(c, &r);
-                MapWindowPoints(nullptr, main, (POINT*)&r, 2);
-                SetParent(c, g_pageCanvas[t]);
-                SetWindowPos(c, nullptr, r.left - v.left, r.top - v.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-            }
+            for (int i = 0; i < ns[k]; ++i)
+                if (arrs[k][i]) kids.push_back(arrs[k][i]);
+        std::stable_sort(kids.begin(), kids.end(), [&](HWND a, HWND b) { return zIndex(a) < zIndex(b); });
+        for (HWND c : kids) {
+            RECT r;
+            GetWindowRect(c, &r);
+            MapWindowPoints(nullptr, main, (POINT*)&r, 2);
+            SetParent(c, g_pageCanvas[t]);
+            SetWindowPos(c, HWND_BOTTOM, r.left - v.left, r.top - v.top, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+        }
     }
     if (g_pageSb) SetWindowPos(g_pageSb, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
