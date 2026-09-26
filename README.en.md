@@ -27,7 +27,8 @@ Small Windows 11 conveniences in one tray app. No dependencies, a single exe:
   trims and cuts, draws marks over the video, crops and scales it down, exports
   to MP4 or GIF and keeps everything as a `.lhvideo` project. Since 4.13.0 — also a
   DevTools log from Chrome/Edge in sync with the video, and a report for developers
-  (video + log) as one file. Since 4.0.0.
+  (video + log) as one file; since 4.14.0 recording a browser window starts and stops
+  with a click on the extension icon. Since 4.0.0.
 - **Dark theme for the app window itself**, auto-updates from GitHub Releases
   with signature verification.
 - **Ukrainian and English** UI — from the Windows language or chosen by hand.
@@ -1192,8 +1193,57 @@ How it works:
   errors red, warnings amber, navigations blue, network grey; **Details** shows the
   number of events.
 - While the extension is attached to a tab, the browser shows the "extension is
-  debugging this browser" bar — a platform limitation, and it ends up in the
-  recording.
+  debugging this browser" bar — a platform limitation. It ends up in the recording
+  only when the whole window or a screen region is recorded; a "page only"
+  recording from the extension (below) doesn't contain it.
+
+### Recording a browser window from the extension (since 4.14.0)
+
+Recording can be started right from the browser (CAPS-107): click the extension
+icon → **● Record this window**. It records exactly that window — like "Clicked
+window: follow it", even if the settings say "as an area". The **Page only**
+checkbox (on by default, remembered) cuts off the tabs, the address bar and the
+debugger bar: the video has only the page content. While recording, the icon shows
+the duration (red; yellow when paused), and **clicking the icon stops the
+recording**; pause, resume and stop are also in the right-click menu. A key for
+start and stop can be assigned in `chrome://extensions/shortcuts`. Stopping from
+anywhere else (the key, the pill by the frame, the tray, a closed window) returns
+the icon to normal. On the **Video** tab, the **Let the extension start and stop
+recording** checkbox (on by default) turns this off without turning off the log.
+
+How it works:
+
+- **Only the title knows which window.** The extension sees tabs and window
+  bounds in its own units but has no Windows window handle. So for a moment it
+  appends a "⏺ LH-…" marker to the page title (it reaches the window title in
+  ~200 ms); Little Helpers finds the window with it and says "found", the extension
+  removes the marker, and only once it's gone from the title does recording start
+  — it never gets into the frame. The marker is added by a script with the
+  `activeTab` permission, which the icon click itself grants, so the extension
+  doesn't need access to all sites. On pages closed to scripts (`chrome://…`, the
+  extension store) there's no marker — then the fallback: a window of a browser
+  process with the same tab title, and if there are several, by window bounds too.
+  Ambiguous means an error in the extension window, not recording the wrong
+  window. The window class `Chrome_WidgetWin_1` proves nothing on its own:
+  Electron apps (VS Code) have it too.
+- **Page only** is the child window `Chrome_RenderWidgetHostHWND`: in Chrome and
+  Edge it covers exactly the page area (checked on live Chrome: 1084×705 with
+  `innerWidth` × `innerHeight` = 1084 × 705). The frame is cropped by the shader
+  while recording, so the MP4 in the library already has no browser UI. The area is
+  re-read before every frame: open DevTools, resize the window or switch tabs — the
+  frame follows the page (the video size comes from the first frame; a new area is
+  fitted into it without distortion).
+- **The debugger bar comes before the first frame.** When the log is on, the
+  extension attaches the debugger before the start, so the "debugging this browser"
+  bar appears and shifts the page before recording, not in the middle of it.
+- **The same channel** as the log: a WebSocket on 127.0.0.1, only our extension's
+  Origin. New commands are `rec`, `stop`, `pause`, `resume`, `state`; anything else
+  is ignored. Little Helpers broadcasts the recording state on every change, so the
+  icon in every connected browser tells the truth.
+- Checks: an imitation of the extension and of a "browser window" (protocol, page
+  only, following the area) and an end-to-end test with real Chrome (icon, pause,
+  stop, the frame corners are the page in every frame, the log with the debugger
+  attached before the start, the no-marker fallback on `chrome://version`).
 
 ### Report for developers (since 4.13.0)
 
@@ -1413,7 +1463,7 @@ no external DLLs).
 |---|---|
 | `README.md`, `README.en.md` | this description in Ukrainian and English |
 | `lilhelpers.cpp` | all the code (layout, cursor, day/night, preview, shots and editor, video recording and editor, window theme, localisation, updates) |
-| `browser-extension/` | the Chrome/Edge extension (DevTools log, CAPS-83) and the report viewer (`report.*`, `viewer.*`, CAPS-84); built into the exe as resources |
+| `browser-extension/` | the Chrome/Edge extension (DevTools log, CAPS-83; recording the window from its icon, CAPS-107) and the report viewer (`report.*`, `viewer.*`, CAPS-84); built into the exe as resources |
 | `lilhelpers.manifest` | requireAdministrator + dpiAware + visual styles |
 | `lilhelpers.rc` | icon, manifest, PNG logo and VERSIONINFO into the exe's resources |
 | `build.ps1` | build: MSVC, falling back to mingw-w64 |

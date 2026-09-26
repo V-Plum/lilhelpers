@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <title>Little Helpers</title>
 <style>
-  :root { --bg: #ffffff; --fg: #1f1f23; --dim: #6b6b75; --ok: #2e7d32; --no: #b3261e; --line: #e4e4e8; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #2b2b2e; --fg: #f0f0f0; --dim: #a0a0a8; --ok: #81c784; --no: #ef9a9a; --line: #45454b; } }
+  :root { --bg: #ffffff; --fg: #1f1f23; --dim: #6b6b75; --ok: #2e7d32; --no: #b3261e; --line: #e4e4e8; --rec: #e53935; --recfg: #ffffff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #2b2b2e; --fg: #f0f0f0; --dim: #a0a0a8; --ok: #81c784; --no: #ef9a9a; --line: #45454b; --rec: #e53935; --recfg: #ffffff; } }
   body { margin: 0; padding: 12px 14px; width: 280px; background: var(--bg); color: var(--fg); font: 13px "Segoe UI", system-ui, sans-serif; }
   h1 { font-size: 14px; margin: 0 0 8px; display: flex; gap: 8px; align-items: center; }
   h1 img { width: 20px; height: 20px; }
@@ -15,12 +15,21 @@
   .ok { color: var(--ok); } .no { color: var(--no); }
   p { color: var(--dim); margin: 8px 0 0; line-height: 1.35; }
   button { margin-top: 10px; width: 100%; padding: 6px; font: inherit; }
+  #go { margin-top: 12px; padding: 9px; border: 0; border-radius: 6px; background: var(--rec); color: var(--recfg); font-weight: 600; cursor: pointer; }
+  #go:disabled { opacity: .45; cursor: default; }
+  label { display: flex; gap: 6px; align-items: flex-start; margin-top: 8px; line-height: 1.35; cursor: pointer; }
+  label input { margin: 2px 0 0; }
+  #err { color: var(--no); }
+  #err:empty { display: none; }
 </style>
 </head>
 <body>
 <h1><img src="icon32.png" alt=""><span data-i="title">Little Helpers</span></h1>
 <div class="row"><span class="k" data-i="lh">Little Helpers</span><span id="conn">…</span></div>
 <div class="row"><span class="k" data-i="rec">Запис</span><span id="rec">…</span></div>
+<button id="go" data-i="go" disabled>● Записати це вікно</button>
+<label><input type="checkbox" id="page" checked><span data-i="page">Лише сторінка — без вкладок і адресного рядка</span></label>
+<p id="err"></p>
 <p id="hint"></p>
 <button id="report" data-i="open">Відкрити звіт…</button>
 <script src="popup.js"></script>

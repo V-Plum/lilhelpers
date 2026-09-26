@@ -241,6 +241,7 @@ constexpr int  IDC_VID_FIXED     = 237;   //          чи фіксована д
 constexpr int  IDC_VID_DEVLOG    = 238;   // CAPS-83: писати лог браузера
 constexpr int  IDC_VID_DEVEXT    = 239;   //          «Розширення…»
 constexpr int  IDC_VID_DEVSTAT   = 240;   //          стан з'єднання
+constexpr int  IDC_VID_EXTREC    = 241;   // CAPS-107: розширенню можна починати й зупиняти запис
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -263,6 +264,7 @@ constexpr UINT TIMER_UPDREMIND  = 6;   // CAPS-63: щохвилини — чи �
 constexpr UINT TIMER_VIDTIP     = 7;   // CAPS-73: тривалість запису в підказці трею
 constexpr UINT TIMER_VIDMETER   = 8;   // CAPS-77: рівень мікрофона на вкладці «Відео»
 constexpr UINT TIMER_VIDFOLLOW  = 9;   // CAPS-75: рамка-індикатор їде за вікном
+constexpr UINT TIMER_DEVFIND    = 10;  // CAPS-107: шукаємо вікно браузера, з якого попросили запис
 
 const wchar_t* kAppName  = L"Little Helpers";   // заголовки вікна/повідомлень, трей
 const wchar_t* kWndClass = L"lilhelpers";
@@ -682,7 +684,9 @@ X(VidDevCountFmt,     L"%d · помилок %d",               L"%d · errors %
 X(VidSecDevLog,       L"Лог браузера",                  L"Browser log")                                \
 X(VidDevLog,          L"Писати лог DevTools із Chrome та Edge під час запису",                          \
                       L"Write the DevTools log from Chrome and Edge while recording")                  \
-X(VidDevExt,          L"Розширення…",                   L"Extension…")                                 \
+X(VidDevRec,          L"Дозволити розширенню починати й зупиняти запис",                               \
+                      L"Let the extension start and stop recording")                                   \
+X(VidDevExt,         L"Розширення…",                   L"Extension…")                                 \
 X(VidDevStOff,        L"Розширення не підключено",      L"Extension not connected")                    \
 X(VidDevStOn,         L"Підключено: %s",                L"Connected: %s")                              \
 X(VidDevStPort,       L"Порт %d зайнятий — лог недоступний", L"Port %d is busy — no log")              \
@@ -691,14 +695,16 @@ X(VidDevInstall,      L"Розширення скопійовано в теку,
                       L"1. Відкрийте chrome://extensions (в Edge — edge://extensions): адресу вже скопійовано в буфер.\n" \
                       L"2. Увімкніть «Режим розробника».\n"                                            \
                       L"3. «Завантажити розпаковане» → виберіть цю теку.\n\n"                          \
-                      L"Далі розширення саме знайде Little Helpers. Під час запису браузер показує смугу "  \
-                      L"«розширення налагоджує браузер» — вона потрапить у відео.",                    \
+                      L"Далі розширення саме знайде Little Helpers. Клік по його значку починає запис цього "  \
+                      L"вікна, ще один клік — зупиняє. Поки пишеться лог, браузер показує смугу «розширення "  \
+                      L"налагоджує браузер»: у відео вона потрапить, лише якщо писати вікно повністю, а не лише сторінку.", \
                       L"The extension has been copied to the folder that just opened.\n\n"             \
                       L"1. Open chrome://extensions (in Edge — edge://extensions): the address is already on the clipboard.\n" \
                       L"2. Turn on Developer mode.\n"                                                  \
                       L"3. Load unpacked → choose this folder.\n\n"                                   \
-                      L"The extension then finds Little Helpers by itself. While recording, the browser shows the " \
-                      L"\"extension is debugging this browser\" bar — it will be in the video.")         \
+                      L"The extension then finds Little Helpers by itself. Clicking its icon starts recording that " \
+                      L"window, another click stops it. While the log is written, the browser shows the \"extension is " \
+                      L"debugging this browser\" bar: it gets into the video only when recording the whole window, not just the page.") \
 X(VidDevInstallErr,   L"Не вдалося скопіювати розширення в теку програми.", L"Could not copy the extension to the app folder.") \
 X(VidAudioYes,        L"є",                             L"yes")                                        \
 X(VidAudioNo,         L"немає",                         L"none")                                       \
@@ -29825,6 +29831,8 @@ bool g_vidCursor = true, g_vidClicks = true;
 const wchar_t* kRegVidFollow = L"VideoFollowWindow";
 extern bool g_devOn;                             // CAPS-83, нижче (біля сервера)
 extern const wchar_t* kRegVidDevLog;
+extern bool g_devRecOn;                          // CAPS-107
+extern const wchar_t* kRegVidExtRec;
 bool g_vidFollow = true;
 int  g_vidClickClr = 0;
 const COLORREF kVidClickColors[3] = { RGB(255, 193, 7), RGB(229, 57, 53), RGB(30, 136, 229) };
@@ -29838,7 +29846,8 @@ void VidLoadSettings()
     g_vidClickClr = RegLoadInt(kRegVidClickClr, 0, 0, 2);
     g_vidFollow = RegLoadInt(kRegVidFollow, 1, 0, 1) != 0;   // CAPS-75
     g_devOn = RegLoadInt(kRegVidDevLog, 1, 0, 1) != 0;       // CAPS-83
-    VidAudLoadSettings();                            // CAPS-77
+    g_devRecOn = RegLoadInt(kRegVidExtRec, 1, 0, 1) != 0;    // CAPS-107
+    VidAudLoadSettings();                           // CAPS-77
 }
 
 // Бітів на піксель на кадр. Екранний вміст здебільшого нерухомий, тож навіть
@@ -29875,7 +29884,7 @@ const char kVidHlsl[] =
     "Texture2D<float4> cur : register(t1);\n"
     "SamplerState smp : register(s0);\n"
     "cbuffer P : register(b0) { int2 off; int mode; float white; int2 curPos; int2 curSize;\n"
-    "    float4 clk[8]; float4 clkCol[8]; int nClk; float scale; int2 pad; float4 fit; int4 fitInfo; };\n"
+    "    float4 clk[8]; float4 clkCol[8]; int nClk; float scale; int2 crop; float4 fit; int4 fitInfo; };\n"
     "float4 VS(uint id : SV_VertexID) : SV_Position {\n"
     "    float2 p = float2((id << 1) & 2, id & 2);\n"
     "    return float4(p * float2(2, -2) + float2(-1, 1), 0, 1);\n"
@@ -29904,8 +29913,9 @@ const char kVidHlsl[] =
     "    if (fitInfo.x == 0) return src.Load(int3(int2(p) + off, 0));\n"
     "    float2 q = p - fit.xy;\n"
     "    if (q.x < 0 || q.y < 0 || q.x >= fit.z || q.y >= fit.w) return float4(0, 0, 0, 1);\n"
-    "    if (fit.z == fitInfo.y && fit.w == fitInfo.z) return src.Load(int3(int2(q), 0));\n"
-    "    return src.SampleLevel(smp, q / fit.zw, 0);\n"
+    "    if (fit.z == fitInfo.y && fit.w == fitInfo.z) return src.Load(int3(int2(q) + crop, 0));\n"
+    "    float tw, th; src.GetDimensions(tw, th);\n"
+    "    return src.SampleLevel(smp, (q / fit.zw * float2(fitInfo.yz) + float2(crop)) / float2(tw, th), 0);\n"
     "}\n"
     "float4 PS(float4 pos : SV_Position) : SV_Target {\n"
     "    float3 o = Tone(Src(pos.xy));\n"
@@ -30067,7 +30077,22 @@ struct VidJob {
     HWND win;                      // CAPS-75: вікно, вибране кліком
     bool follow;                   //          писати саме його (WGC), а не ділянку
     volatile LONG pause;           // CAPS-101: 1 — пауза (ставить головний потік, читає потік запису)
+    // CAPS-107: «лише сторінка» — область сторінки браузера відносно DWM-меж вікна, у
+    // фізичних пікселях; порожня — усе вікно. Головний потік стежить за нею (DevTools,
+    // зміна розміру, інша вкладка) і оновлює під замком, потік запису читає щокадру.
+    SRWLOCK cropLock;
+    RECT crop;
+    HWND page;                     //          вікно області сторінки (Chrome_RenderWidgetHostHWND)
 };
+
+// CAPS-107: область сторінки для цього кадру; false — пишеться все вікно.
+bool VidJobCrop(VidJob* j, RECT& out)
+{
+    AcquireSRWLockShared(&j->cropLock);
+    out = j->crop;
+    ReleaseSRWLockShared(&j->cropLock);
+    return out.right > out.left && out.bottom > out.top;
+}
 
 struct VidResult {
     HRESULT hr;
@@ -30565,7 +30590,7 @@ struct VidCb {
     int curX, curY, curW, curH;
     float clk[8][4];                  // x, y, радіус, непрозорість
     float clkCol[8][4];               // колір + вид: 0 клік, 1 правий (подвійне коло), 2 утримання
-    int nClk; float scale; int pad[2];
+    int nClk; float scale; int cropX, cropY;  // CAPS-107: звідки в кадрі вікна починається сторінка
     float fit[4];                     // CAPS-75: де кадр вікна лежить у виході (x, y, w, h)
     int fitOn, fitW, fitH, fitPad;    //          і розмір самого кадру; fitOn = 0 — ділянка 1:1
 };
@@ -31398,22 +31423,36 @@ volatile LONG g_vidExiting = 0;   // програма виходить: резу
 // Де кадр вікна лежить у виході: вписаний по центру без спотворень; менше вікно
 // не розтягується (1:1 по центру). Той самий розмір, що на старті (±1 піксель
 // парності), — 1:1 без вибірки, щоб текст лишався різким.
-void VidWgcFit(const VidSrc& s, UINT ow, UINT oh, VidCb& cb)
+// CAPS-107: crop — область сторінки в кадрі вікна; тоді вписується лише вона, а
+// cropX/cropY кажуть шейдеру, звідки її брати. Область, що вилізла за кадр (вікно
+// зменшили), обрізається по ньому; зовсім дрібна — пишемо все вікно.
+void VidWgcFit(const VidSrc& s, UINT ow, UINT oh, VidCb& cb, const RECT* crop = nullptr)
 {
+    UINT sw = s.tw, sh = s.th;
+    cb.cropX = cb.cropY = 0;
+    if (crop) {
+        const LONG x0 = crop->left > 0 ? crop->left : 0, y0 = crop->top > 0 ? crop->top : 0;
+        const LONG x1 = crop->right < (LONG)s.tw ? crop->right : (LONG)s.tw;
+        const LONG y1 = crop->bottom < (LONG)s.th ? crop->bottom : (LONG)s.th;
+        if (x1 - x0 >= 16 && y1 - y0 >= 16) {
+            cb.cropX = x0; cb.cropY = y0;
+            sw = (UINT)(x1 - x0); sh = (UINT)(y1 - y0);
+        }
+    }
     float k = 1.0f;
-    if (!(s.tw <= ow + 1 && s.th <= oh + 1)) {
-        const float kx = (float)ow / (float)s.tw, ky = (float)oh / (float)s.th;
+    if (!(sw <= ow + 1 && sh <= oh + 1)) {
+        const float kx = (float)ow / (float)sw, ky = (float)oh / (float)sh;
         k = kx < ky ? kx : ky;
         if (k > 1.0f) k = 1.0f;
     }
-    const float w = floorf(s.tw * k + 0.5f), h = floorf(s.th * k + 0.5f);
+    const float w = floorf(sw * k + 0.5f), h = floorf(sh * k + 0.5f);
     cb.fit[0] = floorf(((float)ow - w) / 2.0f); if (cb.fit[0] < 0) cb.fit[0] = 0;
     cb.fit[1] = floorf(((float)oh - h) / 2.0f); if (cb.fit[1] < 0) cb.fit[1] = 0;
     cb.fit[2] = w;
     cb.fit[3] = h;
     cb.fitOn = 1;
-    cb.fitW = (int)s.tw;
-    cb.fitH = (int)s.th;
+    cb.fitW = (int)sw;
+    cb.fitH = (int)sh;
 }
 
 double LhWallMs()
@@ -31599,8 +31638,11 @@ bool DevFirstKey(const std::string& j, const char* key)
     return j.compare(i, pat.size(), pat) == 0;
 }
 
+void DevOnCmd(const std::string& msg);   // CAPS-107, нижче
+
 void DevOnMessage(DevClient* c, const std::string& msg)
 {
+    if (DevFirstKey(msg, "cmd")) { DevOnCmd(msg); return; }   // CAPS-107: керування записом
     if (DevFirstKey(msg, "hello")) {
         std::string b;
         DevJsonStr(msg, "browser", b);
@@ -31801,7 +31843,7 @@ void DevStatusRefresh()
     HWND st = g_mainWnd ? GetDlgItem(g_mainWnd, IDC_VID_DEVSTAT) : nullptr;
     if (!st) return;
     wchar_t t[160];
-    if (!g_devOn) lstrcpynW(t, S(Str::VidDevStDisabled), 160);
+    if (!g_devOn && !g_devRecOn) lstrcpynW(t, S(Str::VidDevStDisabled), 160);   // CAPS-107: сервер — і для керування
     else if (g_devBindErr) swprintf(t, 160, S(Str::VidDevStPort), (int)kDevPort);
     else {
         std::wstring names;
@@ -31819,6 +31861,257 @@ void DevStatusRefresh()
         else swprintf(t, 160, S(Str::VidDevStOn), names.c_str());
     }
     SetWindowTextW(st, t);
+}
+
+// ---- CAPS-107: керування записом із розширення --------------------------------
+// Розширення шле {"cmd":"rec"|"stop"|"pause"|"resume"|"state", ...} — лише після
+// рукостискання з Origin нашого розширення (див. DevHandshake); інші типи ігноруються.
+// У відповідь: {"rec":"found"|"ok"|"err","rid":N,...} на запит запису і розсилка стану
+// {"state":"idle"|"rec"|"paused","ms":N} на кожну зміну — хоч би звідки її зробили
+// (клавіша, плашка, трей), тож значок у кожному браузері каже правду.
+//
+// Вікно браузера розширення назвати не може (HWND воно не знає). Воно дописує в
+// заголовок сторінки мітку «LH-…» (≈200 мс до заголовка вікна Windows — проба 26.09),
+// ми знаходимо вікно з нею, кажемо «found», розширення мітку прибирає, і лише коли її
+// вже немає в заголовку, починаємо — у кадр вона не потрапляє. Без мітки (сторінки,
+// куди відладчик не пускають: chrome://…) — запас: вікно процесу браузера з тим самим
+// заголовком вкладки; кілька таких — межі вікна. Неоднозначно — помилка, а не запис
+// не того вікна. ⚠ Клас Chrome_WidgetWin_1 мають і Electron-програми (VS Code), тож
+// сам клас нічого не доводить — лише мітка або процес браузера.
+const wchar_t* kRegVidExtRec = L"VideoExtRecord";
+bool g_devRecOn = true;
+constexpr UINT WMAPP_DEVCMD = WM_APP + 24;
+
+struct DevCmd {
+    int op = 0;                        // 1 rec, 2 stop, 3 pause, 4 resume, 5 state
+    int rid = 0;
+    std::wstring marker, title;        // мітка в заголовку; заголовок вкладки (запас)
+    bool pageOnly = true;
+    int pw = 0, ph = 0;                // розмір сторінки у фізичних пікселях, 0 — невідомий
+    int wl = 0, wt = 0, ww = 0, wh = 0;   // межі вікна від chrome.windows (DIP)
+};
+
+bool VidRecording();
+ULONGLONG VidElapsedMs();
+extern bool g_vidPaused, g_vidPicking;
+void VidStop();
+void VidPauseToggle();
+const char* VidStartWindow(HWND w, bool pageOnly, int pw, int ph);
+
+void DevSendState()
+{
+    if (g_devListen == INVALID_SOCKET) return;
+    const bool rec = VidRecording();
+    char m[128];
+    // log — чи пишеться лог: розширення тоді під'єднує відладчик ще до старту, і смуга
+    // «налагоджує браузер» з'являється до першого кадру, а не посеред запису.
+    snprintf(m, sizeof(m), "{\"state\":\"%s\",\"ms\":%llu,\"log\":%d,\"ctl\":%d}", !rec ? "idle" : (g_vidPaused ? "paused" : "rec"),
+             rec ? (unsigned long long)VidElapsedMs() : 0ULL, g_devOn ? 1 : 0, g_devRecOn ? 1 : 0);
+    AcquireSRWLockExclusive(&g_devLock);
+    DevBroadcast(m);
+    ReleaseSRWLockExclusive(&g_devLock);
+}
+
+void DevReply(int rid, const char* what, const char* why = nullptr)
+{
+    char m[160];
+    if (why) snprintf(m, sizeof(m), "{\"rec\":\"%s\",\"rid\":%d,\"why\":\"%s\"}", what, rid, why);
+    else snprintf(m, sizeof(m), "{\"rec\":\"%s\",\"rid\":%d,\"log\":%d}", what, rid, g_devOn ? 1 : 0);
+    AcquireSRWLockExclusive(&g_devLock);
+    DevBroadcast(m);
+    ReleaseSRWLockExclusive(&g_devLock);
+}
+
+// Рядок JSON (між лапками, як його віддає DevJsonStr) → UTF-16.
+std::wstring DevJsonText(const std::string& raw)
+{
+    std::wstring o;
+    for (size_t i = 0; i < raw.size() && o.size() < 600; ) {
+        const unsigned char c = (unsigned char)raw[i];
+        if (c == '\\' && i + 1 < raw.size()) {
+            const char e = raw[i + 1];
+            if (e == 'u' && i + 5 < raw.size()) {
+                o.push_back((wchar_t)strtoul(raw.substr(i + 2, 4).c_str(), nullptr, 16));   // сурогати — парами, як є
+                i += 6;
+                continue;
+            }
+            o.push_back(e == 'n' ? L'\n' : e == 't' ? L'\t' : e == 'r' ? L'\r' : e == 'b' ? L'\b' : e == 'f' ? L'\f' : (wchar_t)e);
+            i += 2;
+            continue;
+        }
+        size_t j = i;                                  // шматок UTF-8 до наступного «\»
+        while (j < raw.size() && raw[j] != '\\') ++j;
+        const int n = MultiByteToWideChar(CP_UTF8, 0, raw.data() + i, (int)(j - i), nullptr, 0);
+        if (n > 0) {
+            const size_t at = o.size();
+            o.resize(at + (size_t)n);
+            MultiByteToWideChar(CP_UTF8, 0, raw.data() + i, (int)(j - i), &o[at], n);
+        }
+        i = j;
+    }
+    return o;
+}
+
+// Потік клієнта: команда → головному потоку (запис живе там).
+void DevOnCmd(const std::string& msg)
+{
+    std::string cmd;
+    if (!DevJsonStr(msg, "cmd", cmd)) return;
+    const int op = cmd == "rec" ? 1 : cmd == "stop" ? 2 : cmd == "pause" ? 3 : cmd == "resume" ? 4 : cmd == "state" ? 5 : 0;
+    if (!op) return;
+    double v = 0;
+    const int rid = DevJsonNum(msg, "rid", v) ? (int)v : 0;
+    if (!g_devRecOn && op != 5) {
+        if (op == 1) DevReply(rid, "err", "disabled");
+        return;
+    }
+    DevCmd* d = new DevCmd;
+    d->op = op;
+    d->rid = rid;
+    if (op == 1) {
+        std::string s;
+        if (DevJsonStr(msg, "marker", s) && s.size() >= 8 && s.size() <= 40 && s.compare(0, 3, "LH-") == 0) d->marker = DevJsonText(s);
+        if (DevJsonStr(msg, "title", s)) d->title = DevJsonText(s);
+        d->pageOnly = !(DevJsonNum(msg, "page", v) && v == 0);
+        if (DevJsonNum(msg, "pw", v) && v > 0 && v < 20000) d->pw = (int)(v + 0.5);
+        if (DevJsonNum(msg, "ph", v) && v > 0 && v < 20000) d->ph = (int)(v + 0.5);
+        if (DevJsonNum(msg, "wl", v)) d->wl = (int)v;
+        if (DevJsonNum(msg, "wt", v)) d->wt = (int)v;
+        if (DevJsonNum(msg, "ww", v)) d->ww = (int)v;
+        if (DevJsonNum(msg, "wh", v)) d->wh = (int)v;
+    }
+    if (!g_mainWnd || !PostMessageW(g_mainWnd, WMAPP_DEVCMD, 0, (LPARAM)d)) delete d;
+}
+
+bool DevIsBrowser(HWND h)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    HANDLE p = pid ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : nullptr;
+    if (!p) return false;
+    wchar_t path[MAX_PATH];
+    DWORD n = MAX_PATH;
+    const bool ok = QueryFullProcessImageNameW(p, 0, path, &n) != FALSE;
+    CloseHandle(p);
+    if (!ok) return false;
+    const wchar_t* b = wcsrchr(path, L'\\');
+    b = b ? b + 1 : path;
+    static const wchar_t* const kNames[] = { L"chrome.exe", L"msedge.exe", L"brave.exe", L"vivaldi.exe", L"opera.exe", L"chromium.exe" };
+    for (const wchar_t* k : kNames) if (lstrcmpiW(b, k) == 0) return true;
+    return false;
+}
+
+bool DevTitleHas(HWND h, const std::wstring& s)
+{
+    wchar_t t[512];
+    return !s.empty() && GetWindowTextW(h, t, 512) && wcsstr(t, s.c_str()) != nullptr;
+}
+
+struct DevWinScan { const DevCmd* c; std::vector<HWND> hit; };
+
+BOOL CALLBACK DevFindEnum(HWND h, LPARAM lp)
+{
+    DevWinScan* s = (DevWinScan*)lp;
+    if (!IsWindowVisible(h) || GetWindow(h, GW_OWNER)) return TRUE;
+    if (!s->c->marker.empty()) {
+        if (DevTitleHas(h, s->c->marker)) s->hit.push_back(h);
+        return TRUE;
+    }
+    wchar_t t[512], cls[64];
+    if (s->c->title.empty() || !GetWindowTextW(h, t, 512) || wcsncmp(t, s->c->title.c_str(), s->c->title.size()) != 0) return TRUE;
+    if (!GetClassNameW(h, cls, 64) || lstrcmpW(cls, L"Chrome_WidgetWin_1") != 0 || !DevIsBrowser(h)) return TRUE;
+    s->hit.push_back(h);
+    return TRUE;
+}
+
+// n — скільки вікон підійшло (для «неоднозначно»).
+HWND DevFindWindow(const DevCmd& c, int* n)
+{
+    DevWinScan s{ &c, {} };
+    EnumWindows(DevFindEnum, (LPARAM)&s);
+    if (s.hit.size() > 1 && c.marker.empty() && c.ww > 0 && c.wh > 0) {
+        // Кілька вікон із тим самим заголовком: межі від chrome.windows — у DIP.
+        CapDpiScope dpi;
+        std::vector<HWND> fit;                         // ⚠ не «near»: у MSVC це макрос
+        for (HWND h : s.hit) {
+            RECT r;
+            GetWindowRect(h, &r);
+            const double k = CapMonitorScale(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST));
+            const double tol = 16 * k;
+            if (fabs(r.left - c.wl * k) <= tol && fabs(r.top - c.wt * k) <= tol &&
+                fabs((r.right - r.left) - c.ww * k) <= tol && fabs((r.bottom - r.top) - c.wh * k) <= tol) fit.push_back(h);
+        }
+        s.hit.swap(fit);
+    }
+    *n = (int)s.hit.size();
+    return s.hit.size() == 1 ? s.hit[0] : nullptr;
+}
+
+struct DevFindState { DevCmd* c = nullptr; ULONGLONG t0 = 0, foundAt = 0; HWND w = nullptr; };
+DevFindState g_devFind;
+
+void DevFindEnd()
+{
+    KillTimer(g_mainWnd, TIMER_DEVFIND);
+    delete g_devFind.c;
+    g_devFind = DevFindState{};
+}
+
+// Таймер 50 мс: шукаємо вікно (до 2,5 с), далі чекаємо, поки мітка зійде із заголовка
+// (до 1,5 с), і починаємо.
+void DevFindTick()
+{
+    DevCmd* d = g_devFind.c;
+    if (!d) { KillTimer(g_mainWnd, TIMER_DEVFIND); return; }
+    const ULONGLONG now = GetTickCount64();
+    if (!g_devFind.w) {
+        int n = 0;
+        const HWND w = DevFindWindow(*d, &n);
+        if (!w) {
+            if (now - g_devFind.t0 < 2500) return;
+            DevReply(d->rid, "err", n > 1 ? "ambiguous" : "not-found");
+            DevFindEnd();
+            return;
+        }
+        g_devFind.w = w;
+        g_devFind.foundAt = now;
+        DevReply(d->rid, "found");                     // розширення прибирає мітку
+        if (!d->marker.empty()) return;
+    } else if (now - g_devFind.foundAt < 1500 && DevTitleHas(g_devFind.w, d->marker)) {
+        return;
+    }
+    const char* why = VidStartWindow(g_devFind.w, d->pageOnly, d->pw, d->ph);
+    DevReply(d->rid, why ? "err" : "ok", why);
+    DevFindEnd();
+}
+
+void DevCmdRun(DevCmd* d)
+{
+    switch (d->op) {
+    case 2:                                            // стоп: і запис, і пошук, що ще йде
+        if (g_devFind.c) { DevReply(g_devFind.c->rid, "err", "cancelled"); DevFindEnd(); }
+        if (VidRecording()) VidStop();
+        delete d;
+        return;
+    case 3: if (VidRecording() && !g_vidPaused) VidPauseToggle(); delete d; return;
+    case 4: if (VidRecording() && g_vidPaused) VidPauseToggle(); delete d; return;
+    case 5: DevSendState(); delete d; return;
+    default: break;
+    }
+    const char* why = !g_vidOn ? "video-off"
+                    : (VidRecording() || g_vidPicking || g_devFind.c) ? "busy"
+                    : !VidWgcSupported() ? "wgc" : nullptr;
+    if (why) { DevReply(d->rid, "err", why); delete d; return; }
+    g_devFind.c = d;
+    g_devFind.t0 = GetTickCount64();
+    SetTimer(g_mainWnd, TIMER_DEVFIND, 50, nullptr);
+    DevFindTick();
+}
+
+// Сервер потрібен і логу, і керуванню записом.
+void DevSrvSync()
+{
+    if (g_devOn || g_devRecOn) DevSrvStart(); else DevSrvStop();
 }
 
 // Розширення лежить у ресурсах exe (RCDATA 101…): «Розширення…» розкладає його в
@@ -31884,6 +32177,8 @@ void DevInstallExtension(HWND owner)
     MessageBoxW(owner, S(Str::VidDevInstall), kAppName, MB_OK | MB_ICONINFORMATION);
 }
 
+void VidPageTrack(VidJob* j);   // CAPS-107, нижче (біля VidStartWindow)
+
 HRESULT VidRecord(VidJob* j, VidResult* r)
 {
     VidSrc s;
@@ -31894,6 +32189,14 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
     if (!VidShaders()) { r->err = Str::VidErrEncoder; VidSrcClose(s); return E_NOINTERFACE; }
     UINT w = (UINT)(j->sel.right - j->sel.left), h = (UINT)(j->sel.bottom - j->sel.top);
     if (s.wgc) { w = s.tw & ~1u; h = s.th & ~1u; }   // CAPS-75: розмір відео — вікно на старті
+    if (s.wgc) {                                     // CAPS-107: лише сторінка — розмір її області на старті
+        RECT cr;
+        if (VidJobCrop(j, cr)) {
+            VidCb probe = {};
+            VidWgcFit(s, 1u << 20, 1u << 20, probe, &cr);
+            if (probe.fitW >= 64 && probe.fitH >= 64) { w = (UINT)probe.fitW & ~1u; h = (UINT)probe.fitH & ~1u; }
+        }
+    }
     // CAPS-77: звук — джерела відкриваємо ДО енкодера: доріжку додаємо, лише якщо є що писати.
     VidAudJob* aj = nullptr;
     if (j->audSys || j->audMic || j->audSynth) {
@@ -32050,8 +32353,16 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
         else if (s.gdi) VidGdiGrab(s, j->sel);
         VidCb cb = {};
         if (s.wgc) {                         // CAPS-75: вписати кадр вікна й перерахувати мишу під нього
-            VidWgcFit(s, e.w, e.h, cb);
-            ov.MapWindow(VidWinBounds(s.win), cb);
+            RECT cr;
+            VidPageTrack(j);                      // CAPS-107: область сторінки — щокадру, не таймером
+            const bool crop = VidJobCrop(j, cr);   //           (таймер 100 мс лишав до 3 кадрів старої області)
+            VidWgcFit(s, e.w, e.h, cb, crop ? &cr : nullptr);
+            RECT wb = VidWinBounds(s.win);
+            if (crop && (cb.cropX || cb.cropY || cb.fitW != (int)s.tw || cb.fitH != (int)s.th)) {
+                wb.left += cb.cropX; wb.top += cb.cropY;
+                wb.right = wb.left + cb.fitW; wb.bottom = wb.top + cb.fitH;
+            }
+            ov.MapWindow(wb, cb);
         }
         ov.Frame(t0 + k * f / fps, t0, f, k, cb);
         hr = VidEmit(e, s, k, n, &cb);
@@ -32337,6 +32648,7 @@ void VidPauseToggle()
     else             g_vidPausedMs += GetTickCount64() - g_vidPauseAt;
     if (g_vidFrame) InvalidateRect(g_vidFrame, nullptr, TRUE);
     if (g_vidPill)  InvalidateRect(g_vidPill, nullptr, FALSE);
+    DevSendState();                                // CAPS-107: значок розширення — жовтий
 }
 
 LRESULT CALLBACK VidPillProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -32630,6 +32942,9 @@ void VidToastShow(const wchar_t* path)
     SetTimer(g_vidToast, 1, 5000, nullptr);
 }
 
+VidJob* VidNewJob(const RECT& sel, const RECT& mon);
+bool VidRun(VidJob* j, bool fullMon, bool quiet = false);
+
 void VidStart()
 {
     if (g_vidThread || g_vidPicking) return;
@@ -32653,6 +32968,15 @@ void VidStart()
     // рамку показало б навколо всього екрана, частково за його межами.
     const bool fullMon = EqualRect(&sel, &mon) != FALSE;
     VidFitRect(sel, mon);
+    VidJob* j = VidNewJob(sel, mon);
+    j->win = g_rgnPickedWnd;                       // CAPS-75
+    j->follow = g_vidFollow && j->win && IsWindow(j->win) && VidWgcSupported();
+    VidRun(j, fullMon);
+}
+
+// Спільне для обох входів (вибирач і розширення браузера): параметри з налаштувань.
+VidJob* VidNewJob(const RECT& sel, const RECT& mon)
+{
     VidJob* j = new VidJob{};
     j->mon = MonitorFromRect(&mon, MONITOR_DEFAULTTONEAREST);
     j->monRc = mon;
@@ -32669,21 +32993,28 @@ void VidStart()
     j->audSynth = VidAudSynthMode();
     lstrcpynW(j->audSysDev, g_vidAudSysDev, 256);
     lstrcpynW(j->audMicDev, g_vidAudMicDev, 256);
-    j->win = g_rgnPickedWnd;                       // CAPS-75
-    j->follow = g_vidFollow && j->win && IsWindow(j->win) && VidWgcSupported();
+    InitializeSRWLock(&j->cropLock);               // CAPS-107
+    return j;
+}
+
+// Запустити потік запису й показати індикатори. quiet — помилку не показувати
+// вікном, а повернути (розширенню браузера): false — не почали, j звільнено.
+bool VidRun(VidJob* j, bool fullMon, bool quiet)
+{
     if (!VidLibPath(j->part, j->path)) {
         delete j;
-        MessageBoxW(nullptr, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
-        return;
+        if (!quiet) MessageBoxW(nullptr, S(Str::EdErrStore), kAppName, MB_OK | MB_ICONWARNING);
+        return false;
     }
     j->stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_vidThread = j->stop ? CreateThread(nullptr, 0, VidThread, j, 0, nullptr) : nullptr;
     if (!g_vidThread) {
         if (j->stop) CloseHandle(j->stop);
         delete j;
-        MessageBoxW(nullptr, S(Str::VidErrScreen), kAppName, MB_OK | MB_ICONWARNING);
-        return;
+        if (!quiet) MessageBoxW(nullptr, S(Str::VidErrScreen), kAppName, MB_OK | MB_ICONWARNING);
+        return false;
     }
+    const RECT sel = j->sel, mon = j->monRc;
     g_vidJob = j;
     DevRecStart();                                 // CAPS-83: розширенню — «почати лог»
     g_vidStartMs = GetTickCount64();
@@ -32697,6 +33028,109 @@ void VidStart()
     g_vidPausedMs = g_vidPauseAt = 0;
     VidPillShow();
     VidTraySet(true);
+    DevSendState();                                // CAPS-107: значок розширення — «іде запис»
+    return true;
+}
+
+// ---- CAPS-107: запис вікна браузера з розширення -------------------------------
+// Область сторінки — видиме дочірнє Chrome_RenderWidgetHostHWND: проба 26.09.2026 на
+// живому Chrome — рівно innerWidth × innerHeight. Їх буває кілька (невидимі — спливні
+// віджети; видимих два, коли DevTools прикріплені до вікна): береться те, що збігається
+// з розміром сторінки від розширення, інакше найбільше. Прямокутник — відносно DWM-меж
+// вікна, як і кадр WGC.
+BOOL CALLBACK VidPageEnum(HWND h, LPARAM lp)
+{
+    wchar_t cls[64];
+    if (IsWindowVisible(h) && GetClassNameW(h, cls, 64) && lstrcmpW(cls, L"Chrome_RenderWidgetHostHWND") == 0)
+        ((std::vector<HWND>*)lp)->push_back(h);
+    return TRUE;
+}
+
+bool VidPageRect(HWND top, int pw, int ph, HWND* page, RECT* crop)
+{
+    std::vector<HWND> kids;
+    EnumChildWindows(top, VidPageEnum, (LPARAM)&kids);
+    HWND best = nullptr;
+    LONGLONG bestArea = 0;
+    for (HWND h : kids) {
+        RECT r;
+        if (!GetWindowRect(h, &r)) continue;
+        const LONG w = r.right - r.left, hh = r.bottom - r.top;
+        if (pw > 0 && ph > 0 && abs(w - pw) <= 3 && abs(hh - ph) <= 3) { best = h; break; }
+        if ((LONGLONG)w * hh > bestArea) { bestArea = (LONGLONG)w * hh; best = h; }
+    }
+    const RECT wb = VidWinBounds(top);
+    RECT r = {};
+    if (best && GetWindowRect(best, &r)) {
+        IntersectRect(&r, &r, &wb);
+    } else if (pw > 0 && ph > 0 && pw <= wb.right - wb.left && ph <= wb.bottom - wb.top) {
+        // Запас без дочірнього вікна: сторінка — унизу посередині, з однаковими полями
+        // з боків і знизу (так Chrome кладе вміст під панеллю вкладок і адреси).
+        const LONG side = ((wb.right - wb.left) - pw) / 2;
+        r.left = wb.left + side; r.right = r.left + pw;
+        r.bottom = wb.bottom - side; r.top = r.bottom - ph;
+        if (r.top < wb.top) return false;
+    }
+    if (r.right - r.left < 64 || r.bottom - r.top < 64) return false;
+    OffsetRect(&r, -wb.left, -wb.top);
+    if (page) *page = best;
+    if (crop) *crop = r;
+    return true;
+}
+
+// Стежимо за областю сторінки, поки йде запис: відкрили DevTools, змінили розмір вікна,
+// перемкнули вкладку (інше вікно вмісту) — кадр іде за нею. Кличе потік запису перед
+// кожним кадром; GetWindowRect з чужого потоку — законно й дешево.
+void VidPageTrack(VidJob* j)
+{
+    RECT cur;
+    if (!VidJobCrop(j, cur)) return;               // пишеться все вікно
+    CapDpiScope dpi;
+    AcquireSRWLockShared(&j->cropLock);
+    HWND page = j->page;
+    ReleaseSRWLockShared(&j->cropLock);
+    RECT r = {};
+    bool ok = false;
+    if (page && IsWindow(page) && IsWindowVisible(page) && GetWindowRect(page, &r)) {
+        const RECT wb = VidWinBounds(j->win);
+        IntersectRect(&r, &r, &wb);
+        OffsetRect(&r, -wb.left, -wb.top);
+        ok = r.right - r.left >= 64 && r.bottom - r.top >= 64;
+    }
+    if (!ok) ok = VidPageRect(j->win, 0, 0, &page, &r);
+    if (!ok || EqualRect(&r, &cur)) return;
+    AcquireSRWLockExclusive(&j->cropLock);
+    j->crop = r;
+    j->page = page;
+    ReleaseSRWLockExclusive(&j->cropLock);
+}
+
+// Почати запис вікна w одразу, без вибирача: «слідувати за вікном» незалежно від
+// налаштування «Клік по вікну» — вікно знайдено явно. pageOnly — лише сторінка
+// (pw × ph — її розмір у фізичних пікселях від розширення, 0 — невідомий).
+// Повертає код помилки для розширення або nullptr, якщо запис пішов.
+const char* VidStartWindow(HWND w, bool pageOnly, int pw, int ph)
+{
+    if (!g_vidOn) return "video-off";
+    if (g_vidThread || g_vidPicking) return "busy";
+    if (!w || !IsWindow(w)) return "not-found";
+    if (IsIconic(w)) return "minimized";
+    if (!VidWgcSupported()) return "wgc";
+    CapDpiScope dpi;
+    RECT sel = VidWinBounds(w);
+    HMONITOR hm = MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(mi) };
+    if (!GetMonitorInfoW(hm, &mi)) return "failed";
+    VidFitRect(sel, mi.rcMonitor);
+    VidJob* j = VidNewJob(sel, mi.rcMonitor);
+    j->win = w;
+    j->follow = true;
+    if (pageOnly) {
+        RECT cr;
+        HWND page = nullptr;
+        if (VidPageRect(w, pw, ph, &page, &cr)) { j->crop = cr; j->page = page; }
+    }
+    return VidRun(j, false, true) ? nullptr : "failed";
 }
 
 // CAPS-73/87: сторінки налаштувань будуються РАНІШЕ, ніж читається реєстр, тож
@@ -32825,6 +33259,7 @@ void VidSettingsRefresh(HWND hwnd)
     if (HWND b = GetDlgItem(hwnd, IDC_VID_CLR0)) for (int i = 0; i < 3; ++i) EnableWindow(GetDlgItem(hwnd, IDC_VID_CLR0 + i), g_vidClicks);
     VidAudRefresh(hwnd);                           // CAPS-77
     set(IDC_VID_DEVLOG, g_devOn);                  // CAPS-83
+    set(IDC_VID_EXTREC, g_devRecOn);               // CAPS-107
     DevStatusRefresh();
 }
 
@@ -32852,6 +33287,7 @@ void VidReleaseJob()
     VidPillHide();                                 // CAPS-101
     g_vidPaused = false;
     VidTraySet(false);
+    DevSendState();                                // CAPS-107: значок розширення — знову «записати»
 }
 
 // Редактор можна зайняти без питань: ні незбережених правок, ні збереження, що йде.
@@ -33014,6 +33450,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WMAPP_DEVSTATE:     // CAPS-83: розширення під'єдналось чи відпало
         DevStatusRefresh();
+        DevSendState();      // CAPS-107: новому клієнту — чи йде запис
+        return 0;
+
+    case WMAPP_DEVCMD:       // CAPS-107: команда від розширення браузера
+        if (lp) DevCmdRun((DevCmd*)lp);
         return 0;
 
     case WMAPP_VIDDONE:      // CAPS-73: потік запису дописав файл
@@ -33060,6 +33501,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         else if (wp == TIMER_VIDFOLLOW) {   // CAPS-75
             VidFollowTick();
+        }
+        else if (wp == TIMER_DEVFIND) {     // CAPS-107
+            DevFindTick();
         }
         return 0;
 
@@ -33525,8 +33969,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (HIWORD(wp) == BN_CLICKED) {
                 g_devOn = SendMessageW(GetDlgItem(hwnd, IDC_VID_DEVLOG), BM_GETCHECK, 0, 0) == BST_CHECKED;
                 RegSaveInt(kRegVidDevLog, g_devOn ? 1 : 0);
-                if (g_devOn) DevSrvStart(); else DevSrvStop();
+                DevSrvSync();                  // CAPS-107: сервер лишається, якщо дозволено керування
                 DevStatusRefresh();
+                DevSendState();
+            }
+            break;
+        case IDC_VID_EXTREC:         // CAPS-107
+            if (HIWORD(wp) == BN_CLICKED) {
+                g_devRecOn = SendMessageW(GetDlgItem(hwnd, IDC_VID_EXTREC), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                RegSaveInt(kRegVidExtRec, g_devRecOn ? 1 : 0);
+                DevSrvSync();
+                DevStatusRefresh();
+                DevSendState();                // значок і вікно розширення знають, чи можна
+
             }
             break;
         case IDC_VID_DEVEXT:
@@ -34339,6 +34794,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     hint(addV, Str::VidLibLimitHint, 1);
     sec(addV, Str::VidSecDevLog);                 // CAPS-83
     check(addV, Str::VidDevLog, IDC_VID_DEVLOG, true);
+    check(addV, Str::VidDevRec, IDC_VID_EXTREC, true);   // CAPS-107
     addV(mkS(L"STATIC", Str::Empty, 0, PX, y + 5, 250, 20, IDC_VID_DEVSTAT));
     addV(mkS(L"BUTTON", Str::VidDevExt, BS_PUSHBUTTON | WS_TABSTOP, PX + 266, y, 150, 30, IDC_VID_DEVEXT));
     y += 38;
@@ -34442,7 +34898,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     g_edKeepTool    = RegLoadInt(kRegEdKeepTool, 1, 0, 1) != 0;
     CapLoadHotkeys();
     VidLoadSettings(); // CAPS-73
-    if (g_devOn) DevSrvStart();   // CAPS-83: розширення браузера знайде нас саме
+    DevSrvSync();   // CAPS-83/107: розширення браузера знайде нас саме
     VidLibCleanup();   // CAPS-74: недописані .part і осиротілі .lhmeta
     CapLoadActs();     // CAPS-57: жест × дія, бібліотека для швидких знімків, Esc оверлея
     CapActRefresh();
