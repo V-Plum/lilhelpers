@@ -25,7 +25,8 @@ $LIBS = @(
     "dwrite.lib",                     # CAPS-24: текст редактора через DirectWrite
     "mf.lib", "mfplat.lib", "mfreadwrite.lib", "mfuuid.lib",  # CAPS-16: кадр відео
     "runtimeobject.lib", "shcore.lib",  # CAPS-16: PDF через Windows.Data.Pdf
-    "d3d11.lib", "dxgi.lib"             # CAPS-21: захоплення екрана (Desktop Duplication)
+    "d3d11.lib", "dxgi.lib",            # CAPS-21: захоплення екрана (Desktop Duplication)
+    "ws2_32.lib"                        # CAPS-83: WebSocket для розширення браузера (loopback)
 )
 
 function Find-VcVars {
@@ -94,7 +95,7 @@ function Build-Mingw {
     & $gxx lilhelpers.cpp lilhelpers_res.o -o lilhelpers.exe `
         -municode -mwindows -O2 -s -static -fno-exceptions -fno-rtti `
         -lshell32 -lgdi32 -lgdiplus -lshlwapi -lole32 -loleaut32 -lcomctl32 -ltaskschd -luuid -ladvapi32 `
-        -lwininet -lversion -luxtheme -ldwmapi -lbcrypt -ld2d1 -lwindowscodecs -luuid -lmf -lmfplat -lmfreadwrite -lmfuuid -lruntimeobject -lshcore -ld3d11 -ldxgi -ldwrite
+        -lwininet -lversion -luxtheme -ldwmapi -lbcrypt -ld2d1 -lwindowscodecs -luuid -lmf -lmfplat -lmfreadwrite -lmfuuid -lruntimeobject -lshcore -ld3d11 -ldxgi -ldwrite -lws2_32
     if ($LASTEXITCODE -ne 0) { throw "compile failed" }
 
     Remove-Item lilhelpers_res.o -ErrorAction SilentlyContinue

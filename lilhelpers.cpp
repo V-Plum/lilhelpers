@@ -33,6 +33,7 @@
 #endif
 #define _WIN32_WINNT 0x0A00
 #include <windows.h>
+#include <winsock2.h>      // CAPS-83: WebSocket для розширення браузера (лише loopback)
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <commctrl.h>
@@ -215,6 +216,9 @@ constexpr int  IDC_VID_AUDMICDEV = 234;
 constexpr int  IDC_VID_MICMETER  = 235;   //          рівень мікрофона
 constexpr int  IDC_VID_FOLLOW    = 236;   // CAPS-75: вікно — слідувати за ним
 constexpr int  IDC_VID_FIXED     = 237;   //          чи фіксована ділянка
+constexpr int  IDC_VID_DEVLOG    = 238;   // CAPS-83: писати лог браузера
+constexpr int  IDC_VID_DEVEXT    = 239;   //          «Розширення…»
+constexpr int  IDC_VID_DEVSTAT   = 240;   //          стан з'єднання
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
@@ -651,6 +655,29 @@ X(VidSecFrame,        L"ПОТОЧНИЙ КАДР",                 L"CURRENT FR
 X(VidFactFps,         L"Кадрів/с",                      L"Frames/s")                                   \
 X(VidFactFrames,      L"Кадрів",                        L"Frames")                                     \
 X(VidFactAudio,       L"Звук",                          L"Sound")                                      \
+X(VidFactDevLog,      L"Лог браузера",                  L"Browser log")                                \
+X(VidDevCountFmt,     L"%d · помилок %d",               L"%d · errors %d")                             \
+X(VidSecDevLog,       L"Лог браузера",                  L"Browser log")                                \
+X(VidDevLog,          L"Писати лог DevTools із Chrome та Edge під час запису",                          \
+                      L"Write the DevTools log from Chrome and Edge while recording")                  \
+X(VidDevExt,          L"Розширення…",                   L"Extension…")                                 \
+X(VidDevStOff,        L"Розширення не підключено",      L"Extension not connected")                    \
+X(VidDevStOn,         L"Підключено: %s",                L"Connected: %s")                              \
+X(VidDevStPort,       L"Порт %d зайнятий — лог недоступний", L"Port %d is busy — no log")              \
+X(VidDevStDisabled,   L"Вимкнено",                      L"Off")                                        \
+X(VidDevInstall,      L"Розширення скопійовано в теку, що відкрилась.\n\n"                            \
+                      L"1. Відкрийте chrome://extensions (в Edge — edge://extensions): адресу вже скопійовано в буфер.\n" \
+                      L"2. Увімкніть «Режим розробника».\n"                                            \
+                      L"3. «Завантажити розпаковане» → виберіть цю теку.\n\n"                          \
+                      L"Далі розширення саме знайде Little Helpers. Під час запису браузер показує смугу "  \
+                      L"«розширення налагоджує браузер» — вона потрапить у відео.",                    \
+                      L"The extension has been copied to the folder that just opened.\n\n"             \
+                      L"1. Open chrome://extensions (in Edge — edge://extensions): the address is already on the clipboard.\n" \
+                      L"2. Turn on Developer mode.\n"                                                  \
+                      L"3. Load unpacked → choose this folder.\n\n"                                   \
+                      L"The extension then finds Little Helpers by itself. While recording, the browser shows the " \
+                      L"\"extension is debugging this browser\" bar — it will be in the video.")         \
+X(VidDevInstallErr,   L"Не вдалося скопіювати розширення в теку програми.", L"Could not copy the extension to the app folder.") \
 X(VidAudioYes,        L"є",                             L"yes")                                        \
 X(VidAudioNo,         L"немає",                         L"none")                                       \
 X(VidFrameShot,       L"Відкрити кадр як знімок",       L"Open frame as a shot")                       \
@@ -1141,7 +1168,7 @@ HWND  g_layoutCheckbox = nullptr;
 HWND  g_pageSettings[32] = {};  int g_pageSettingsN = 0;
 HWND  g_pagePeek[24]     = {};  int g_pagePeekN = 0;   // CAPS-16
 HWND  g_pageShots[64]    = {};  int g_pageShotsN = 0;  // CAPS-21; CAPS-57: матриця жестів — ще двадцять
-HWND  g_pageVideo[56]    = {};  int g_pageVideoN = 0;  // CAPS-73; 56 — звук, курсор, режим вікна (CAPS-75..77)
+HWND  g_pageVideo[64]    = {};  int g_pageVideoN = 0;  // CAPS-73; 64 — звук, курсор, режим вікна, лог браузера (CAPS-75..77, 83)
 
 // ---------- CAPS-8: тема самого вікна ----------
 //
@@ -21835,6 +21862,7 @@ struct VidMeta {
     LONGLONG dur = 0;                     // 100 нс
     std::vector<BYTE> thumbPng;
     std::vector<BYTE> mouse;              // CAPS-76: журнал миші (MOUS), як є
+    std::vector<BYTE> devt;               // CAPS-83: лог браузера (DEVT), як є
     LhMeta meta;                          // CAPS-88: опис, автор, право, теги
 };
 
@@ -21862,6 +21890,11 @@ bool VidMetaWrite(const std::wstring& mp4, const VidMeta& m)
         w.raw(m.mouse.data(), m.mouse.size());
         w.close(at);
     }
+    if (!m.devt.empty()) {                // CAPS-83
+        at = w.open("DEVT");
+        w.raw(m.devt.data(), m.devt.size());
+        w.close(at);
+    }
     LhMetaPut(w, m.meta);                 // CAPS-88
     // Через .tmp і підміну: обірваний запис не лишить напівфайл. Прихований —
     // у «Показати теку» людина бачить свої відео, а не службові файли.
@@ -21885,7 +21918,7 @@ bool VidMetaRead(const std::wstring& mp4, VidMeta& m)
     if (f == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER sz = {};
     std::vector<BYTE> raw;
-    if (GetFileSizeEx(f, &sz) && sz.QuadPart >= 12 && sz.QuadPart < (8LL << 20)) {
+    if (GetFileSizeEx(f, &sz) && sz.QuadPart >= 12 && sz.QuadPart < (72LL << 20)) {   // CAPS-83: лог браузера буває великим
         raw.resize((size_t)sz.QuadPart);
         DWORD got = 0;
         if (!ReadFile(f, raw.data(), (DWORD)raw.size(), &got, nullptr) || got != raw.size()) raw.clear();
@@ -21904,6 +21937,7 @@ bool VidMetaRead(const std::wstring& mp4, VidMeta& m)
         else if (!memcmp(t, "INFO", 4)) { m.w = b.i32v(); m.h = b.i32v(); m.dur = (LONGLONG)b.u64v(); }
         else if (!memcmp(t, "THMB", 4)) { m.thumbPng.assign(raw.data() + r.at, raw.data() + r.at + len); }
         else if (!memcmp(t, "MOUS", 4)) { m.mouse.assign(raw.data() + r.at, raw.data() + r.at + len); }
+        else if (!memcmp(t, "DEVT", 4)) { m.devt.assign(raw.data() + r.at, raw.data() + r.at + len); }   // CAPS-83
         else if (!memcmp(t, "DESC", 4)) { LhMetaGet(raw.data() + r.at, len, m.meta); }   // CAPS-88
         r.at += len;
     }
@@ -24413,6 +24447,9 @@ bool EvStart(const wchar_t* path)
 void EvHoverHide();
 extern wchar_t g_evPendingDelete[MAX_PATH];   // CAPS-81, нижче
 extern std::vector<BYTE> g_evMouseLog;
+extern std::vector<BYTE> g_evDevLog;             // CAPS-83
+extern int g_evDevCount, g_evDevErrors;
+void EvDevParse();
 bool LhvApply(const wchar_t* path);
 extern HWND g_evOver;                      // CAPS-80, нижче
 extern std::vector<int> g_evOverSig;
@@ -24427,6 +24464,8 @@ void EvClose()
     // CAPS-81: MP4, що став проєктом, — у кошик тепер, коли програвач його відпустив
     if (g_evPendingDelete[0]) { VidLibRemove(g_evPendingDelete, false); g_evPendingDelete[0] = 0; }
     g_evMouseLog.clear();
+    g_evDevLog.clear();                    // CAPS-83
+    EvDevParse();
     g_evOverSig.clear();
     g_evFrozen = -1;
     g_evUndoOrder.clear();
@@ -24500,6 +24539,8 @@ bool EvOpen(HINSTANCE hInst, const wchar_t* path)
     g_evSavedDocW = g_evW; g_evSavedDocH = g_evH;
     EvEditReset();                        // CAPS-79: правки — з чистого аркуша
     g_evMouseLog = m.mouse;               // CAPS-81: журнал миші запису (з .lhmeta)
+    g_evDevLog = m.devt;                  // CAPS-83: лог браузера запису
+    EvDevParse();
     if (LhvIs(path)) LhvApply(path);      // CAPS-81: проєкт — правки й позначки назад
     g_edTool = EdTool::Select;            // CAPS-78: у відео поки лише «Вибір» (позначки — CAPS-80)
     g_edVideo = true;
@@ -25752,6 +25793,7 @@ void EvPaintPanel(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
     EvFmtTime(g_evDur, v, 64); row(Str::EdLibFactDur, v);
     swprintf(v, 64, L"%d", EvFrames()); row(Str::VidFactFrames, v);
     row(Str::VidFactAudio, S(g_evAudio ? Str::VidAudioYes : Str::VidAudioNo));
+    if (g_evDevCount > 0) { swprintf(v, 64, S(Str::VidDevCountFmt), g_evDevCount, g_evDevErrors); row(Str::VidFactDevLog, v); }   // CAPS-83
     if (g_evBytes >= 1024 * 1024) { const int t10 = (int)(g_evBytes * 10 / (1024 * 1024)); swprintf(v, 64, L"%d,%d МБ", t10 / 10, t10 % 10); }
     else swprintf(v, 64, L"%d КБ", (int)((g_evBytes + 1023) / 1024));
     row(Str::EdLibFactFile, v);
@@ -26283,12 +26325,78 @@ void EvMarksTouched()
     if (g_edVideo && g_edWnd && !g_edLibOpen) InvalidateRect(g_edWnd, &g_edRcTimeline, FALSE);
 }
 
+// ---- CAPS-83: мітки лога браузера на доріжці позначок ----
+bool DevJsonNum(const std::string& j, const char* key, double& out, size_t within);   // нижче, біля сервера
+bool DevJsonStr(const std::string& j, const char* key, std::string& out, size_t within);
+// Сам журнал читається у звіті (CAPS-84); у редакторі — лише де що сталося:
+// тонка стрічка вгорі доріжки (помилки червоні, попередження бурштинові,
+// навігації сині, мережа сіра) і ледь помітна лінія на всю висоту для помилок.
+struct EvDevMark { int ms; BYTE sev; BYTE kind; };   // kind: 0 консоль/лог, 1 мережа, 2 навігація/вкладка
+std::vector<EvDevMark> g_evDevMarks;
+int g_evDevCount = 0, g_evDevErrors = 0;
+
+void EvDevParse()
+{
+    g_evDevMarks.clear();
+    g_evDevCount = g_evDevErrors = 0;
+    const std::vector<BYTE>& b = g_evDevLog;
+    if (b.size() < 16) return;
+    DWORD ver = 0, n = 0;
+    memcpy(&ver, b.data(), 4);
+    memcpy(&n, b.data() + 12, 4);
+    if (ver != 1) return;
+    size_t at = 16;
+    for (DWORD i = 0; i < n && at + 8 <= b.size(); ++i) {
+        INT32 ms; DWORD len;
+        memcpy(&ms, b.data() + at, 4);
+        memcpy(&len, b.data() + at + 4, 4);
+        at += 8;
+        if (at + len > b.size()) break;
+        const std::string j((const char*)b.data() + at, len);
+        at += len;
+        std::string k;
+        double sev = 0;
+        DevJsonStr(j, "k", k, 64);
+        DevJsonNum(j, "s", sev, 96);
+        EvDevMark mk{ ms, (BYTE)(sev >= 2 ? 2 : sev >= 1 ? 1 : 0), (BYTE)(k == "net" ? 1 : (k == "nav" || k == "tab") ? 2 : 0) };
+        g_evDevMarks.push_back(mk);
+        ++g_evDevCount;
+        if (mk.sev == 2) ++g_evDevErrors;
+    }
+}
+
+void EvPaintDevTicks(Gdiplus::Graphics& g, const RECT& m)
+{
+    if (g_evDevMarks.empty()) return;
+    const int strip = EdPx(4);
+    const Gdiplus::Color cErr(255, 229, 57, 53), cWarn(255, 255, 179, 0), cNav(255, 66, 133, 244);
+    const Gdiplus::Color cNet = g_edDark ? Gdiplus::Color(255, 150, 150, 158) : Gdiplus::Color(255, 140, 140, 150);
+    const Gdiplus::Color cLog = g_edDark ? Gdiplus::Color(255, 110, 110, 118) : Gdiplus::Color(255, 180, 180, 188);
+    Gdiplus::SolidBrush faint(Gdiplus::Color(g_edDark ? 70 : 55, 229, 57, 53));
+    // спершу слабші, помилки — зверху; сусідні в одному пікселі не малюємо двічі
+    for (int pass = 0; pass < 3; ++pass) {
+        int lastX = INT_MIN;
+        for (const EvDevMark& d : g_evDevMarks) {
+            const int want = d.sev == 2 ? 2 : d.sev == 1 ? 1 : 0;
+            if (want != pass) continue;
+            const int x = EvTimeToX(d.ms / 1000.0);
+            if (x < g_evRcFilm.left || x > g_evRcFilm.right || x == lastX) continue;
+            lastX = x;
+            const Gdiplus::Color c = d.sev == 2 ? cErr : d.sev == 1 ? cWarn : d.kind == 2 ? cNav : d.kind == 1 ? cNet : cLog;
+            Gdiplus::SolidBrush br(c);
+            if (d.sev == 2) g.FillRectangle(&faint, (INT)x, (INT)m.top, (INT)EdPx(1) + 1, (INT)(m.bottom - m.top));
+            g.FillRectangle(&br, (INT)x, (INT)m.top, (INT)(d.sev ? EdPx(2) : EdPx(1)), (INT)strip);
+        }
+    }
+}
+
 void EvPaintMarks(HDC dc, Gdiplus::Graphics& g, const EdTheme& t)
 {
     const RECT& m = g_evRcMarks;
     if (m.right <= m.left) return;
     Gdiplus::SolidBrush base(g_edDark ? Gdiplus::Color(255, 30, 30, 34) : Gdiplus::Color(255, 236, 236, 240));
     g.FillRectangle(&base, (INT)m.left, (INT)m.top, (INT)(m.right - m.left), (INT)(m.bottom - m.top));
+    EvPaintDevTicks(g, m);                       // CAPS-83
     if (!EvHasMarks()) {
         EdDrawText(dc, m, S(Str::VidMarksEmpty), g_edFontSmall, t.text2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         return;
@@ -26596,6 +26704,7 @@ void EvBuildMarkSpans(std::vector<EvMarkSpan>& out, int vw, int vh, int offX, in
 
 // ---- CAPS-81: проєкт із редактора й назад ----
 std::vector<BYTE> g_evMouseLog;                  // журнал миші відкритого відео (з .lhmeta чи проєкту)
+std::vector<BYTE> g_evDevLog;                    // CAPS-83: лог браузера (блок DEVT) — у часі джерела
 wchar_t g_evPendingDelete[MAX_PATH] = {};        // старий MP4, що став проєктом: у кошик, щойно відео закриють
 
 std::vector<BYTE> LhvBuild()
@@ -26669,6 +26778,7 @@ std::vector<BYTE> LhvBuild()
         w.close(at);
     }
     if (!g_evMouseLog.empty()) { const size_t at = w.open("MOUS"); w.raw(g_evMouseLog.data(), g_evMouseLog.size()); w.close(at); }
+    if (!g_evDevLog.empty()) { const size_t at = w.open("DEVT"); w.raw(g_evDevLog.data(), g_evDevLog.size()); w.close(at); }   // CAPS-83
     return w.b;
 }
 
@@ -26690,6 +26800,7 @@ bool LhvApply(const wchar_t* path)
     int seq = 0, startNum = 1, cgroup = 0, nextGrp = 1, scale1000 = 1000;
     std::map<int, std::wstring> grpNames;   // CAPS-100
     std::vector<BYTE> mouse;
+    std::vector<BYTE> devt;                      // CAPS-83
     LhMeta meta;                                 // CAPS-88
     bool haveMeta = false;
     int docW = 0, docH = 0;                      // CAPS-90
@@ -26733,6 +26844,7 @@ bool LhvApply(const wchar_t* path)
                 objs.push_back(o);
             }
         } else if (!memcmp(t, "MOUS", 4)) mouse.assign(p.data() + r.at, p.data() + next);
+        else if (!memcmp(t, "DEVT", 4)) devt.assign(p.data() + r.at, p.data() + next);   // CAPS-83
         else if (!memcmp(t, "DESC", 4)) { LhMetaGet(p.data() + r.at, len, meta); haveMeta = true; }
         else if (!memcmp(t, "GEOM", 4)) {        // CAPS-90
             docW = r.i32v(); docH = r.i32v();
@@ -26762,6 +26874,7 @@ bool LhvApply(const wchar_t* path)
     g_edSeq = seq; g_edStartNum = startNum; g_edCounterGroup = cgroup; g_edNextGrp = nextGrp > 0 ? nextGrp : 1;
     g_edShotScale = scale1000 / 1000.0;
     g_evMouseLog = mouse;
+    if (!devt.empty()) { g_evDevLog = devt; EvDevParse(); }   // CAPS-83
     if (haveMeta) g_edMeta = meta;               // CAPS-88
     g_edMeta.taken = g_evCreated;
     // CAPS-90: зменшення й кадр — лише в межах джерела; інакше як є
@@ -28919,6 +29032,8 @@ const wchar_t* kRegVidClickClr = L"VideoClickColor";
 bool g_vidCursor = true, g_vidClicks = true;
 // CAPS-75: вікно, вибране кліком, — «слідувати за ним» (типово, рішення власника 24.09) чи ділянкою.
 const wchar_t* kRegVidFollow = L"VideoFollowWindow";
+extern bool g_devOn;                             // CAPS-83, нижче (біля сервера)
+extern const wchar_t* kRegVidDevLog;
 bool g_vidFollow = true;
 int  g_vidClickClr = 0;
 const COLORREF kVidClickColors[3] = { RGB(255, 193, 7), RGB(229, 57, 53), RGB(30, 136, 229) };
@@ -28931,6 +29046,7 @@ void VidLoadSettings()
     g_vidClicks = RegLoadInt(kRegVidClicks, 1, 0, 1) != 0;
     g_vidClickClr = RegLoadInt(kRegVidClickClr, 0, 0, 2);
     g_vidFollow = RegLoadInt(kRegVidFollow, 1, 0, 1) != 0;   // CAPS-75
+    g_devOn = RegLoadInt(kRegVidDevLog, 1, 0, 1) != 0;       // CAPS-83
     VidAudLoadSettings();                            // CAPS-77
 }
 
@@ -29169,6 +29285,10 @@ struct VidResult {
     LONGLONG frames;
     bool gdi, cpu;
     wchar_t path[MAX_PATH];
+    // CAPS-83: системний час першого кадру (мс епохи, як Date.now()), паузи в ньому ж і
+    // тривалість відео — щоб прив'язати події браузера до часу у файлі.
+    double wall0 = 0, durMs = 0;
+    std::vector<std::pair<double, double>> pauses;
 };
 
 struct VidSrc {
@@ -30505,6 +30625,474 @@ void VidWgcFit(const VidSrc& s, UINT ow, UINT oh, VidCb& cb)
     cb.fitH = (int)s.th;
 }
 
+double LhWallMs()
+{
+    // Системний час у мс від 1970 — той самий годинник, що Date.now() у браузері.
+    FILETIME ft;
+    GetSystemTimePreciseAsFileTime(&ft);
+    const ULONGLONG v = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    return (double)(v - 116444736000000000ULL) / 10000.0;
+}
+
+// ---- CAPS-83: лог браузера через розширення ----------------------------------
+// Розширення Chrome/Edge тримає WebSocket до 127.0.0.1:kDevPort. Native Messaging
+// не підходить: Chrome запускає хост звичайним процесом, а в цього exe —
+// requireAdministrator (ERROR_ELEVATION_REQUIRED). Слухаємо лише loopback і
+// приймаємо лише Origin нашого розширення (ID фіксує ключ у його manifest):
+// веб-сторінка Origin не підробить, інше розширення має інший ID.
+// Синхрон — за системним годинником: розширення дає час події в мс епохи (як
+// Date.now()), потік запису фіксує той самий годинник на першому кадрі.
+constexpr u_short kDevPort = 47650;
+const char kDevOrigin[] = "chrome-extension://eokjmpmonkehodiphimfoobgffmhpphe";
+const wchar_t* kRegVidDevLog = L"VideoDevToolsLog";
+constexpr UINT WMAPP_DEVSTATE = WM_APP + 18;     // клієнт під'єднався чи відпав — оновити стан у налаштуваннях
+bool g_devOn = true;
+
+struct DevEv { double t; std::string json; };
+struct DevClient { SOCKET s = INVALID_SOCKET; char browser[16] = {}; };
+SRWLOCK g_devLock = SRWLOCK_INIT;                // клієнти, події й надсилання
+std::vector<DevClient*> g_devClients;
+std::vector<DevEv> g_devEvents;
+size_t g_devBytes = 0;
+volatile LONG g_devCapturing = 0;
+SOCKET g_devListen = INVALID_SOCKET;
+bool g_devWsa = false;
+int  g_devBindErr = 0;
+
+bool DevSendRaw(SOCKET s, const char* p, int n)
+{
+    while (n > 0) {
+        const int k = send(s, p, n, 0);
+        if (k <= 0) return false;
+        p += k; n -= k;
+    }
+    return true;
+}
+
+bool DevRecvN(SOCKET s, char* p, int n)
+{
+    while (n > 0) {
+        const int k = recv(s, p, n, 0);
+        if (k <= 0) return false;
+        p += k; n -= k;
+    }
+    return true;
+}
+
+// Кадр від сервера — без маски (RFC 6455).
+bool DevSendFrame(SOCKET s, int op, const char* data, size_t n)
+{
+    std::string f;
+    f.push_back((char)(0x80 | op));
+    if (n < 126) f.push_back((char)n);
+    else if (n < 65536) { f.push_back((char)126); f.push_back((char)(n >> 8)); f.push_back((char)(n & 255)); }
+    else { f.push_back((char)127); for (int i = 7; i >= 0; --i) f.push_back((char)(((unsigned long long)n >> (8 * i)) & 255)); }
+    f.append(data, n);
+    return DevSendRaw(s, f.data(), (int)f.size());
+}
+
+std::string DevB64(const BYTE* p, size_t n)
+{
+    static const char a[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string o;
+    for (size_t i = 0; i < n; i += 3) {
+        const unsigned v = (unsigned)p[i] << 16 | (i + 1 < n ? (unsigned)p[i + 1] << 8 : 0) | (i + 2 < n ? p[i + 2] : 0);
+        o.push_back(a[v >> 18 & 63]); o.push_back(a[v >> 12 & 63]);
+        o.push_back(i + 1 < n ? a[v >> 6 & 63] : '=');
+        o.push_back(i + 2 < n ? a[v & 63] : '=');
+    }
+    return o;
+}
+
+bool DevSha1(const std::string& in, BYTE out[20])
+{
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hh = nullptr;
+    bool ok = false;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA1_ALGORITHM, nullptr, 0) != 0) return false;
+    if (BCryptCreateHash(alg, &hh, nullptr, 0, nullptr, 0, 0) == 0) {
+        ok = BCryptHashData(hh, (PUCHAR)in.data(), (ULONG)in.size(), 0) == 0 && BCryptFinishHash(hh, out, 20, 0) == 0;
+        BCryptDestroyHash(hh);
+    }
+    BCryptCloseAlgorithmProvider(alg, 0);
+    return ok;
+}
+
+// Рукостискання: GET із Upgrade, Origin — рівно наше розширення.
+bool DevHandshake(SOCKET s)
+{
+    std::string req;
+    char buf[1024];
+    while (req.find("\r\n\r\n") == std::string::npos) {
+        if (req.size() > 16384) return false;
+        const int k = recv(s, buf, sizeof(buf), 0);
+        if (k <= 0) return false;
+        req.append(buf, (size_t)k);
+    }
+    auto header = [&req](const char* name) -> std::string {
+        const size_t nl = strlen(name);
+        size_t pos = 0;
+        while ((pos = req.find("\r\n", pos)) != std::string::npos) {
+            pos += 2;
+            if (pos + nl < req.size() && _strnicmp(req.c_str() + pos, name, nl) == 0 && req[pos + nl] == ':') {
+                size_t a = pos + nl + 1;
+                while (a < req.size() && req[a] == ' ') ++a;
+                const size_t b = req.find("\r\n", a);
+                return req.substr(a, b == std::string::npos ? std::string::npos : b - a);
+            }
+        }
+        return std::string();
+    };
+    const std::string key = header("Sec-WebSocket-Key"), origin = header("Origin");
+    if (req.compare(0, 4, "GET ") != 0 || key.empty() || origin != kDevOrigin) {
+        static const char no[] = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        DevSendRaw(s, no, (int)sizeof(no) - 1);
+        return false;
+    }
+    BYTE sha[20];
+    if (!DevSha1(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11", sha)) return false;
+    const std::string resp = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " +
+                             DevB64(sha, 20) + "\r\n\r\n";
+    return DevSendRaw(s, resp.data(), (int)resp.size());
+}
+
+// Значення за ключем у пласкому JSON розширення (перші поля: t, k, s). Пробіли
+// навколо «:» допускаються — розширення їх не пише, але інші клієнти можуть.
+size_t DevJsonVal(const std::string& j, const char* key, size_t within)
+{
+    const std::string pat = std::string("\"") + key + "\"";
+    size_t at = 0;
+    while ((at = j.find(pat, at)) != std::string::npos && at <= within) {
+        size_t v = at + pat.size();
+        while (v < j.size() && (j[v] == ' ' || j[v] == '\t')) ++v;
+        if (v < j.size() && j[v] == ':') {
+            ++v;
+            while (v < j.size() && (j[v] == ' ' || j[v] == '\t')) ++v;
+            return v;
+        }
+        at += pat.size();
+    }
+    return std::string::npos;
+}
+
+bool DevJsonNum(const std::string& j, const char* key, double& out, size_t within = 4096)
+{
+    const size_t v = DevJsonVal(j, key, within);
+    if (v == std::string::npos) return false;
+    const char* b = j.c_str() + v;
+    char* e = nullptr;
+    out = strtod(b, &e);
+    return e != b;
+}
+
+bool DevJsonStr(const std::string& j, const char* key, std::string& out, size_t within = 4096)
+{
+    size_t b = DevJsonVal(j, key, within);
+    if (b == std::string::npos || b >= j.size() || j[b] != '"') return false;
+    ++b;
+    size_t e = b;
+    while (e < j.size() && j[e] != '"') { if (j[e] == '\\') ++e; ++e; }
+    out = j.substr(b, e - b);
+    return true;
+}
+
+// Перший ключ об'єкта — щоб відрізнити hello від події, не розбираючи весь JSON.
+bool DevFirstKey(const std::string& j, const char* key)
+{
+    size_t i = 0;
+    while (i < j.size() && (j[i] == ' ' || j[i] == '\t' || j[i] == '\r' || j[i] == '\n')) ++i;
+    if (i >= j.size() || j[i] != '{') return false;
+    ++i;
+    while (i < j.size() && (j[i] == ' ' || j[i] == '\t' || j[i] == '\r' || j[i] == '\n')) ++i;
+    const std::string pat = std::string("\"") + key + "\"";
+    return j.compare(i, pat.size(), pat) == 0;
+}
+
+void DevOnMessage(DevClient* c, const std::string& msg)
+{
+    if (DevFirstKey(msg, "hello")) {
+        std::string b;
+        DevJsonStr(msg, "browser", b);
+        AcquireSRWLockExclusive(&g_devLock);
+        lstrcpynA(c->browser, b.empty() ? "?" : b.c_str(), (int)sizeof(c->browser));
+        ReleaseSRWLockExclusive(&g_devLock);
+        if (g_mainWnd) PostMessageW(g_mainWnd, WMAPP_DEVSTATE, 0, 0);
+        return;
+    }
+    if (!InterlockedCompareExchange(&g_devCapturing, 0, 0) || !DevFirstKey(msg, "t")) return;
+    double t = 0;
+    if (!DevJsonNum(msg, "t", t, 16) || !(t > 0)) return;
+    AcquireSRWLockExclusive(&g_devLock);
+    if (g_devEvents.size() < 200000 && g_devBytes < (48u << 20)) {   // стеля: сторінка, що засипає консоль
+        g_devEvents.push_back(DevEv{ t, msg });
+        g_devBytes += msg.size();
+    }
+    ReleaseSRWLockExclusive(&g_devLock);
+}
+
+DWORD WINAPI DevClientThread(LPVOID param)
+{
+    DevClient* c = (DevClient*)param;
+    if (DevHandshake(c->s)) {
+        AcquireSRWLockExclusive(&g_devLock);
+        g_devClients.push_back(c);
+        if (InterlockedCompareExchange(&g_devCapturing, 0, 0)) DevSendFrame(c->s, 1, "{\"cmd\":\"start\"}", 15);   // запис уже йде
+        ReleaseSRWLockExclusive(&g_devLock);
+        std::string msg;
+        for (;;) {
+            unsigned char h[2];
+            if (!DevRecvN(c->s, (char*)h, 2)) break;
+            const bool fin = (h[0] & 0x80) != 0;
+            const int op = h[0] & 15;
+            unsigned long long n = h[1] & 127;
+            if (!(h[1] & 0x80)) break;                   // клієнт зобов'язаний маскувати
+            if (n == 126) { unsigned char e[2]; if (!DevRecvN(c->s, (char*)e, 2)) break; n = (unsigned)e[0] << 8 | e[1]; }
+            else if (n == 127) { unsigned char e[8]; if (!DevRecvN(c->s, (char*)e, 8)) break; n = 0; for (int i = 0; i < 8; ++i) n = n << 8 | e[i]; }
+            if (n > (4u << 20)) break;
+            unsigned char mk[4];
+            if (!DevRecvN(c->s, (char*)mk, 4)) break;
+            std::string pl((size_t)n, '\0');
+            if (n && !DevRecvN(c->s, &pl[0], (int)n)) break;
+            for (size_t i = 0; i < pl.size(); ++i) pl[i] = (char)(pl[i] ^ mk[i & 3]);
+            if (op == 8) {                               // закриття
+                AcquireSRWLockExclusive(&g_devLock);
+                DevSendFrame(c->s, 8, "", 0);
+                ReleaseSRWLockExclusive(&g_devLock);
+                break;
+            }
+            if (op == 9) {                               // ping → pong
+                AcquireSRWLockExclusive(&g_devLock);
+                DevSendFrame(c->s, 10, pl.data(), pl.size());
+                ReleaseSRWLockExclusive(&g_devLock);
+                continue;
+            }
+            if (op != 0 && op != 1) continue;
+            msg += pl;
+            if (msg.size() > (8u << 20)) break;
+            if (!fin) continue;
+            DevOnMessage(c, msg);
+            msg.clear();
+        }
+        AcquireSRWLockExclusive(&g_devLock);
+        g_devClients.erase(std::remove(g_devClients.begin(), g_devClients.end(), c), g_devClients.end());
+        ReleaseSRWLockExclusive(&g_devLock);
+        if (g_mainWnd) PostMessageW(g_mainWnd, WMAPP_DEVSTATE, 0, 0);
+    }
+    closesocket(c->s);
+    delete c;
+    return 0;
+}
+
+DWORD WINAPI DevListenThread(LPVOID param)
+{
+    const SOCKET ls = (SOCKET)(ULONG_PTR)param;
+    for (;;) {
+        const SOCKET s = accept(ls, nullptr, nullptr);
+        if (s == INVALID_SOCKET) break;                  // сокет закрили — сервер зупиняють
+        DevClient* c = new DevClient;
+        c->s = s;
+        HANDLE th = CreateThread(nullptr, 0, DevClientThread, c, 0, nullptr);
+        if (th) CloseHandle(th);
+        else { closesocket(s); delete c; }
+    }
+    return 0;
+}
+
+bool DevSrvStart()
+{
+    if (g_devListen != INVALID_SOCKET) return true;
+    if (!g_devWsa) {
+        WSADATA d;
+        if (WSAStartup(MAKEWORD(2, 2), &d) != 0) return false;
+        g_devWsa = true;
+    }
+    const SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) return false;
+    BOOL ex = TRUE;
+    setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&ex, sizeof(ex));
+    sockaddr_in a = {};
+    a.sin_family = AF_INET;
+    a.sin_port = htons(kDevPort);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);          // лише ця машина
+    if (bind(s, (sockaddr*)&a, sizeof(a)) != 0 || listen(s, 4) != 0) {
+        g_devBindErr = WSAGetLastError();
+        closesocket(s);
+        return false;
+    }
+    g_devBindErr = 0;
+    g_devListen = s;
+    HANDLE th = CreateThread(nullptr, 0, DevListenThread, (LPVOID)(ULONG_PTR)s, 0, nullptr);
+    if (th) CloseHandle(th);
+    return true;
+}
+
+void DevSrvStop()
+{
+    if (g_devListen != INVALID_SOCKET) { closesocket(g_devListen); g_devListen = INVALID_SOCKET; }
+    AcquireSRWLockExclusive(&g_devLock);
+    for (DevClient* c : g_devClients) shutdown(c->s, SD_BOTH);   // потоки клієнтів вийдуть самі
+    ReleaseSRWLockExclusive(&g_devLock);
+    g_devBindErr = 0;
+}
+
+void DevBroadcast(const char* msg)
+{
+    for (DevClient* c : g_devClients) DevSendFrame(c->s, 1, msg, strlen(msg));
+}
+
+void DevRecStart()
+{
+    if (!g_devOn || g_devListen == INVALID_SOCKET) return;
+    AcquireSRWLockExclusive(&g_devLock);
+    g_devEvents.clear();
+    g_devBytes = 0;
+    InterlockedExchange(&g_devCapturing, 1);
+    DevBroadcast("{\"cmd\":\"start\"}");
+    ReleaseSRWLockExclusive(&g_devLock);
+}
+
+// Кінець запису: події — у out (якщо треба), розширенню — «стоп».
+void DevRecStop(std::vector<DevEv>* out)
+{
+    if (!InterlockedExchange(&g_devCapturing, 0)) return;
+    AcquireSRWLockExclusive(&g_devLock);
+    if (out) out->swap(g_devEvents);
+    g_devEvents.clear();
+    g_devBytes = 0;
+    DevBroadcast("{\"cmd\":\"stop\"}");
+    ReleaseSRWLockExclusive(&g_devLock);
+}
+
+// Блок DEVT: u32 версія, f64 системний час першого кадру, u32 кількість, далі
+// для кожної події i32 мс відео і JSON як є (u32 довжина + UTF-8). Події в паузі
+// відкидаються (кадрів тоді немає), після паузи час зсунуто на її тривалість —
+// так само, як кадри й звук (CAPS-101).
+std::vector<BYTE> DevBuildBlob(std::vector<DevEv>& ev, const VidResult* r)
+{
+    std::vector<BYTE> b;
+    if (ev.empty() || !(r->wall0 > 0)) return b;
+    std::stable_sort(ev.begin(), ev.end(), [](const DevEv& x, const DevEv& y) { return x.t < y.t; });
+    auto put32 = [&b](DWORD v) { b.insert(b.end(), (BYTE*)&v, (BYTE*)&v + 4); };
+    put32(1);
+    b.insert(b.end(), (const BYTE*)&r->wall0, (const BYTE*)&r->wall0 + 8);
+    const size_t cntAt = b.size();
+    put32(0);
+    DWORD n = 0;
+    for (const DevEv& e : ev) {
+        // До першого кадру: контекст (яка вкладка, навігація) — на нуль, решта — геть.
+        const bool ctx = DevFirstKey(e.json, "t") && (e.json.find("\"k\":\"tab\"") != std::string::npos ||
+                         e.json.find("\"k\":\"nav\"") != std::string::npos || e.json.find("\"k\":\"info\"") != std::string::npos);
+        if (e.t < r->wall0 - 1 && !(ctx && r->wall0 - e.t < 5000)) continue;
+        double shift = 0;
+        bool inPause = false;
+        for (const auto& pz : r->pauses) {
+            if (e.t >= pz.first && e.t < pz.second) { inPause = true; break; }
+            if (e.t >= pz.second) shift += pz.second - pz.first;
+        }
+        if (inPause) continue;
+        double vt = e.t - r->wall0 - shift;
+        if (vt < 0) vt = 0;
+        if (vt > r->durMs + 250) continue;                // після останнього кадру
+        const INT32 ms = (INT32)(vt + 0.5);
+        b.insert(b.end(), (const BYTE*)&ms, (const BYTE*)&ms + 4);
+        put32((DWORD)e.json.size());
+        b.insert(b.end(), e.json.begin(), e.json.end());
+        ++n;
+    }
+    if (!n) { b.clear(); return b; }
+    memcpy(b.data() + cntAt, &n, 4);
+    return b;
+}
+
+// Стан для вкладки «Відео».
+void DevStatusRefresh()
+{
+    HWND st = g_mainWnd ? GetDlgItem(g_mainWnd, IDC_VID_DEVSTAT) : nullptr;
+    if (!st) return;
+    wchar_t t[160];
+    if (!g_devOn) lstrcpynW(t, S(Str::VidDevStDisabled), 160);
+    else if (g_devBindErr) swprintf(t, 160, S(Str::VidDevStPort), (int)kDevPort);
+    else {
+        std::wstring names;
+        AcquireSRWLockShared(&g_devLock);
+        for (DevClient* c : g_devClients) {
+            if (!c->browser[0]) continue;
+            wchar_t w[16];
+            MultiByteToWideChar(CP_UTF8, 0, c->browser, -1, w, 16);
+            if (names.find(w) != std::wstring::npos) continue;
+            if (!names.empty()) names += L", ";
+            names += w;
+        }
+        ReleaseSRWLockShared(&g_devLock);
+        if (names.empty()) lstrcpynW(t, S(Str::VidDevStOff), 160);
+        else swprintf(t, 160, S(Str::VidDevStOn), names.c_str());
+    }
+    SetWindowTextW(st, t);
+}
+
+// Розширення лежить у ресурсах exe (RCDATA 101…): «Розширення…» розкладає його в
+// %LOCALAPPDATA%\Little Helpers\BrowserExtension — сталий шлях, тож розпаковане
+// розширення в браузері переживає оновлення програми (файли перезаписуються).
+struct DevExtFile { int id; const wchar_t* name; };
+const DevExtFile kDevExtFiles[] = {
+    { 101, L"manifest.json" }, { 102, L"background.js" }, { 103, L"popup.html" }, { 104, L"popup.js" },
+    { 105, L"icon16.png" }, { 106, L"icon32.png" }, { 107, L"icon48.png" }, { 108, L"icon128.png" },
+    { 109, L"viewer.html" }, { 110, L"viewer.js" }, { 111, L"report.css" },
+};
+
+bool DevExtractExtension(const wchar_t* dir)
+{
+    SHCreateDirectoryExW(nullptr, dir, nullptr);
+    HINSTANCE hi = GetModuleHandleW(nullptr);
+    bool ok = true;
+    for (const DevExtFile& f : kDevExtFiles) {
+        HRSRC res = FindResourceW(hi, MAKEINTRESOURCEW(f.id), RT_RCDATA);
+        if (!res) continue;                               // файлу ще немає в цій версії
+        HGLOBAL g = LoadResource(hi, res);
+        const void* data = g ? LockResource(g) : nullptr;
+        const DWORD size = SizeofResource(hi, res);
+        if (!data) { ok = false; continue; }
+        wchar_t path[MAX_PATH];
+        swprintf(path, MAX_PATH, L"%s\\%s", dir, f.name);
+        std::vector<BYTE> b((const BYTE*)data, (const BYTE*)data + size);
+        if (!LhWriteAll(path, b)) ok = false;
+    }
+    return ok;
+}
+
+bool DevExtDir(wchar_t* dir)
+{
+    wchar_t base[MAX_PATH];
+    if (!GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH)) return false;
+    swprintf(dir, MAX_PATH, L"%s\\Little Helpers\\BrowserExtension", base);
+    return true;
+}
+
+void VidOpenFile(const wchar_t* path);
+
+void DevInstallExtension(HWND owner)
+{
+    wchar_t dir[MAX_PATH];
+    if (!DevExtDir(dir) || !DevExtractExtension(dir)) {
+        MessageBoxW(owner, S(Str::VidDevInstallErr), kAppName, MB_OK | MB_ICONWARNING);
+        return;
+    }
+    // адреса сторінки розширень — у буфер: chrome:// посиланням не відкрити
+    const wchar_t* url = L"chrome://extensions";
+    if (OpenClipboard(owner)) {
+        EmptyClipboard();
+        const size_t bytes = (wcslen(url) + 1) * sizeof(wchar_t);
+        if (HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes)) {
+            memcpy(GlobalLock(h), url, bytes);
+            GlobalUnlock(h);
+            if (!SetClipboardData(CF_UNICODETEXT, h)) GlobalFree(h);
+        }
+        CloseClipboard();
+    }
+    VidOpenFile(dir);                                    // Провідник (не підвищений) відкриває теку
+    MessageBoxW(owner, S(Str::VidDevInstall), kAppName, MB_OK | MB_ICONINFORMATION);
+}
+
 HRESULT VidRecord(VidJob* j, VidResult* r)
 {
     VidSrc s;
@@ -30595,6 +31183,7 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
     const LONGLONG f = qf.QuadPart, fps = j->fps;
     LONGLONG t0 = 0, k = 0;
     bool paused = false;                             // CAPS-101
+    double pauseWall = 0;                            // CAPS-83: паузи й у системному часі
     LONGLONG pauseQpc = 0, aPauseIdx = 0, aShift = 0;   //   коли стали; звук: індекс паузи, викинуто всього
     VidOverlay ov;                                   // CAPS-76: курсор, кліки, журнал миші
     ov.Begin(j, s.dev);
@@ -30608,6 +31197,7 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
             if (s.have) {
                 QueryPerformanceCounter(&q);
                 t0 = q.QuadPart;
+                r->wall0 = LhWallMs();       // CAPS-83: той самий момент за системним годинником
                 if (aj) {                    // CAPS-77: нуль звуку = перший кадр; усе раніше — геть
                     aIdx0 = (VidQpcTo100(t0, f) - aj->anchor100) * kVidAudRate / 10000000LL;
                     InterlockedExchange(&aj->t0Idx, (LONG)aIdx0);
@@ -30627,9 +31217,11 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
                 QueryPerformanceCounter(&q);
                 if (wantPause) {
                     pauseQpc = q.QuadPart;
+                    pauseWall = LhWallMs();       // CAPS-83
                     if (aj) aPauseIdx = (VidQpcTo100(pauseQpc, f) - aj->anchor100) * kVidAudRate / 10000000LL;
                 } else {
                     t0 += q.QuadPart - pauseQpc;
+                    r->pauses.push_back({ pauseWall, LhWallMs() });   // CAPS-83
                     if (aj) {
                         if (aPauseIdx > aw) { aj->mix.Take(aPauseIdx, pcm); VidEmitAudio(e, pcm, aw - aIdx0 - aShift); aw = aPauseIdx; }
                         const LONGLONG rIdx = (VidQpcTo100(q.QuadPart, f) - aj->anchor100) * kVidAudRate / 10000000LL;
@@ -30684,6 +31276,8 @@ HRESULT VidRecord(VidJob* j, VidResult* r)
             }
         }
     }
+    if (paused) r->pauses.push_back({ pauseWall, LhWallMs() });   // CAPS-83: стоп на паузі
+    r->durMs = (double)k * 1000.0 / (double)fps;
     if (aj) {                                // хвіст звуку — рівно до кінця відео
         const LONGLONG end = aIdx0 + aShift + k * kVidAudRate / fps;   // CAPS-101: шкала з викинутими паузами
         SetEvent(aj->stop);
@@ -31300,6 +31894,7 @@ void VidStart()
         return;
     }
     g_vidJob = j;
+    DevRecStart();                                 // CAPS-83: розширенню — «почати лог»
     g_vidStartMs = GetTickCount64();
     VidMouseHookOn(j->clicks);                     // CAPS-76: кліки — з хука головного потоку
     if (j->follow) {                               // CAPS-75: рамка — навколо вікна, і їде за ним
@@ -31438,6 +32033,8 @@ void VidSettingsRefresh(HWND hwnd)
     for (int i = 0; i < 3; ++i) set(IDC_VID_CLR0 + i, g_vidClickClr == i);
     if (HWND b = GetDlgItem(hwnd, IDC_VID_CLR0)) for (int i = 0; i < 3; ++i) EnableWindow(GetDlgItem(hwnd, IDC_VID_CLR0 + i), g_vidClicks);
     VidAudRefresh(hwnd);                           // CAPS-77
+    set(IDC_VID_DEVLOG, g_devOn);                  // CAPS-83
+    DevStatusRefresh();
 }
 
 void VidStop()
@@ -31458,6 +32055,7 @@ void VidReleaseJob()
     if (g_vidJob) { if (g_vidJob->stop) CloseHandle(g_vidJob->stop); delete g_vidJob; }
     g_vidJob = nullptr;
     VidMouseHookOn(false);                         // CAPS-76
+    DevRecStop(nullptr);                           // CAPS-83: вихід посеред запису — розширенню «стоп»
     KillTimer(g_mainWnd, TIMER_VIDFOLLOW);         // CAPS-75
     VidFrameHide();
     VidPillHide();                                 // CAPS-101
@@ -31489,8 +32087,16 @@ void VidOpenRecorded(const wchar_t* path)
 
 void VidDone(VidResult* r)
 {
+    std::vector<DevEv> dev;                        // CAPS-83: події браузера за час запису
+    DevRecStop(&dev);
     VidReleaseJob();
     if (!r) return;
+    if (SUCCEEDED(r->hr) && r->frames > 0 && !dev.empty()) {
+        VidMeta m;
+        VidMetaRead(r->path, m);
+        m.devt = DevBuildBlob(dev, r);
+        if (!m.devt.empty()) VidMetaWrite(r->path, m);   // до відкриття в редакторі — там його й прочитають
+    }
     if (SUCCEEDED(r->hr) && r->frames > 0) {
         VidLibRetention(r->path);                      // CAPS-74: щойно записане не чіпає
         if (g_edWnd && g_edLibOpen) {                  // бібліотека відкрита — показати новий запис
@@ -31596,6 +32202,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WMAPP_OPENEDITOR:   // CAPS-59: --editor від другого екземпляра або зі старту
         EdOpenBlank(GetModuleHandleW(nullptr));
+        return 0;
+
+    case WMAPP_DEVSTATE:     // CAPS-83: розширення під'єдналось чи відпало
+        DevStatusRefresh();
         return 0;
 
     case WMAPP_VIDDONE:      // CAPS-73: потік запису дописав файл
@@ -32103,6 +32713,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_VIDPAUSE:           // CAPS-101
             VidPauseToggle();
             break;
+        case IDC_VID_DEVLOG:         // CAPS-83
+            if (HIWORD(wp) == BN_CLICKED) {
+                g_devOn = SendMessageW(GetDlgItem(hwnd, IDC_VID_DEVLOG), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                RegSaveInt(kRegVidDevLog, g_devOn ? 1 : 0);
+                if (g_devOn) DevSrvStart(); else DevSrvStop();
+                DevStatusRefresh();
+            }
+            break;
+        case IDC_VID_DEVEXT:
+            DevInstallExtension(hwnd);
+            break;
         case IDC_VID_FOLLOW:         // CAPS-75: з наступного запису
         case IDC_VID_FIXED:
             g_vidFollow = LOWORD(wp) == IDC_VID_FOLLOW;
@@ -32204,7 +32825,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CTLCOLORSTATIC: {
         const int id = GetDlgCtrlID((HWND)lp);
         const bool gray = (id == IDC_COPYRIGHT || id == IDC_PASSTHROUGH_HINT || id == IDC_HINT_GRAY ||
-                           id == IDC_MODE_HINT);
+                           id == IDC_MODE_HINT || id == IDC_VID_DEVSTAT);
         if (g_dark) {
             wchar_t cls[16] = {};
             GetClassNameW((HWND)lp, cls, 16);
@@ -32781,6 +33402,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         y += 30;
     }
     hint(addV, Str::VidLibLimitHint, 1);
+    sec(addV, Str::VidSecDevLog);                 // CAPS-83
+    check(addV, Str::VidDevLog, IDC_VID_DEVLOG, true);
+    addV(mkS(L"STATIC", Str::Empty, 0, PX, y + 5, 250, 20, IDC_VID_DEVSTAT));
+    addV(mkS(L"BUTTON", Str::VidDevExt, BS_PUSHBUTTON | WS_TABSTOP, PX + 266, y, 150, 30, IDC_VID_DEVEXT));
+    y += 38;
 
     // ---- вкладка «Налаштування» (CAPS-9) ----
     y = PY;
@@ -32880,6 +33506,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     g_edKeepTool    = RegLoadInt(kRegEdKeepTool, 1, 0, 1) != 0;
     CapLoadHotkeys();
     VidLoadSettings(); // CAPS-73
+    if (g_devOn) DevSrvStart();   // CAPS-83: розширення браузера знайде нас саме
     VidLibCleanup();   // CAPS-74: недописані .part і осиротілі .lhmeta
     CapLoadActs();     // CAPS-57: жест × дія, бібліотека для швидких знімків, Esc оверлея
     CapActRefresh();
@@ -32921,6 +33548,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     DeleteCriticalSection(&g_magLock);
     StopInterception();
     StopHookThread();
+    DevSrvStop();       // CAPS-83
     if (g_winEvent) UnhookWinEvent(g_winEvent);
     delete g_logo;
     if (g_mfStarted) MFShutdown();   // CAPS-16

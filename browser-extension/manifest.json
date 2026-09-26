@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Little Helpers — DevTools log",
+  "short_name": "Little Helpers",
+  "version": "1.0.0",
+  "description": "Writes the page's console, errors, network and navigations while Little Helpers records the screen, in sync with the video.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApdPSFbZoBQtm18D++OK/zu/kwbo0eC6t1cTzK9yfKmyXqC9BSosBdwc3nqVKri785tVkX2be03we9Uz3iCZrkOrQ02iNqGweZtEl4O7w0F8XDljZyUg6HLgNVtZBU6Qq60XsKMbiKliDiVFpkpBzTJrKp6mR2FpydGNoT8RBdkmx86Bno08sdTAYs3RJvCsl/jHO/xyZNiYAqU3ymFvJ0d252SxmbKc3syRZz3B5Zo3fhYdPPXSvbqyubPd3KvyEYI7mEdaEa6BvsnKs5xyQq4jahu++3nPdt1Yl7qlGdKrW/gRS8zQrEVoeN3LdTByT4mQsMmBe7AwMPzW0HLgpOQIDAQAB",
+  "minimum_chrome_version": "116",
+  "permissions": ["debugger", "tabs", "alarms"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Little Helpers", "default_popup": "popup.html" },
+  "icons": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" }
+}
