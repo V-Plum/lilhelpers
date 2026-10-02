@@ -242,7 +242,10 @@ constexpr int  IDC_VID_DEVLOG    = 238;   // CAPS-83: писати лог бра
 constexpr int  IDC_VID_DEVEXT    = 239;   //          «Розширення…»
 constexpr int  IDC_VID_DEVSTAT   = 240;   //          стан з'єднання
 constexpr int  IDC_VID_EXTREC    = 241;   // CAPS-107: розширенню можна починати й зупиняти запис
+constexpr int  IDC_ZK_LINKS      = 242;   // CAPS-109: посилання на вкладці «Znimok»
+constexpr int  IDC_ZK_LOGO       = 243;   //          логотип Znimok
 constexpr int  IDR_LOGO_PNG    = 100;  // RCDATA з lilhelpers.png
+constexpr int  IDI_ZNIMOK      = 2;    // CAPS-109: іконка Znimok (znimok.ico)
 constexpr int  HOTKEY_ID       = 1;
 constexpr UINT IDM_SETTINGS    = 1;
 constexpr UINT IDM_EXIT        = 2;
@@ -554,6 +557,14 @@ X(CapHkBusy,          L"Частину гарячих клавіш тримає 
                       L"Another program holds some hotkeys; those shortcuts will not work.")           \
 X(TabShots,           L"Знімки",                        L"Shots")                                      \
 X(TabVideo,           L"Відео",                         L"Video")                                      \
+X(TabZnimok,          L"Znimok",                        L"Znimok")                                     \
+X(ZkTitle,            L"Знімки й відео переїхали в Znimok", L"Shots and video moved to Znimok")        \
+X(ZkBody,             L"Знімки екрана, запис відео, редактор, бібліотека й лог DevTools тепер у Znimok — новій програмі на Rust для Windows і macOS. Little Helpers лишає собі розкладку, курсор, день/ніч і перегляд.", \
+                      L"Screenshots, recording, the editor, the library and the DevTools log now live in Znimok, a new Rust app for Windows and macOS. Little Helpers keeps the layout, the cursor, day/night and the preview.") \
+X(ZkLinks,            L"<a href=\"https://github.com/V-Plum/znimok\">GitHub</a>  ·  <a href=\"https://github.com/V-Plum/znimok/releases/latest\">Завантажити для Windows і macOS</a>  ·  <a href=\"https://chromewebstore.google.com/detail/jhnaichejniloonjcimjpfeggkmcmpek\">Розширення для Chrome</a>", \
+                      L"<a href=\"https://github.com/V-Plum/znimok\">GitHub</a>  ·  <a href=\"https://github.com/V-Plum/znimok/releases/latest\">Download for Windows and macOS</a>  ·  <a href=\"https://chromewebstore.google.com/detail/jhnaichejniloonjcimjpfeggkmcmpek\">Chrome extension</a>") \
+X(ZkHint,             L"Little Helpers до 4.14 ще мали знімки й відео; файли .lhshot, .lhvideo і .lhreport ця версія вже не відкриває.", \
+                      L"Up to 4.14 Little Helpers had shots and video; .lhshot, .lhvideo and .lhreport files no longer open here.") \
 X(CapEnable,          L"Захоплювати знімки гарячими клавішами",                                        \
                       L"Capture shots with hotkeys")                                                   \
 X(VidEnable,          L"Записувати відео з екрана гарячою клавішею",                                   \
@@ -1191,9 +1202,10 @@ void RememberLoc(HWND h, Str id)
         g_locOverflow = true;
 }
 
-constexpr int kTabCount = 7;
+// CAPS-109: знімки й відео переїхали в Znimok — замість двох вкладок одна, що веде туди.
+constexpr int kTabCount = 6;
 const Str kTabTitles[kTabCount] = { Str::TabLayout, Str::TabCursor, Str::TabTheme,
-                                    Str::TabPeek, Str::TabShots, Str::TabVideo, Str::TabSettings };
+                                    Str::TabPeek, Str::TabZnimok, Str::TabSettings };
 
 // Два способи перехопити клавішу. Основний тримає Caps Lock вимкненим, але це
 // клавіатурний хук, який деякі захисні програми не люблять; запасний працює
@@ -1224,7 +1236,8 @@ HWND  g_layoutCheckbox = nullptr;
 HWND  g_pageSettings[32] = {};  int g_pageSettingsN = 0;
 HWND  g_pagePeek[24]     = {};  int g_pagePeekN = 0;   // CAPS-16
 HWND  g_pageShots[64]    = {};  int g_pageShotsN = 0;  // CAPS-21; CAPS-57: матриця жестів — ще двадцять
-HWND  g_pageVideo[64]    = {};  int g_pageVideoN = 0;  // CAPS-73; 64 — звук, курсор, режим вікна, лог браузера (CAPS-75..77, 83)
+HWND  g_pageVideo[64]    = {};  int g_pageVideoN = 0;
+HWND  g_pageZnimok[16]   = {};  int g_pageZnimokN = 0;  // CAPS-109  // CAPS-73; 64 — звук, курсор, режим вікна, лог браузера (CAPS-75..77, 83)
 
 // ---------- CAPS-8: тема самого вікна ----------
 //
@@ -3831,6 +3844,7 @@ bool IsPageControl(HWND c)
     for (int i = 0; i < g_pagePeekN; ++i)     if (g_pagePeek[i]     == c) return true;
     for (int i = 0; i < g_pageShotsN; ++i)    if (g_pageShots[i]    == c) return true;
     for (int i = 0; i < g_pageVideoN; ++i)    if (g_pageVideo[i]    == c) return true;
+    for (int i = 0; i < g_pageZnimokN; ++i)   if (g_pageZnimok[i]   == c) return true;   // CAPS-109
     return false;
 }
 
@@ -3851,9 +3865,8 @@ void SelectTab(int index)
     ShowGroup(g_pageTheme, g_pageThemeN, index == 2);
     ShowGroup(g_thAdv, g_thAdvN, index == 2 && g_thAdvVisible);
     ShowGroup(g_pagePeek, g_pagePeekN, index == 3);          // CAPS-16
-    ShowGroup(g_pageShots, g_pageShotsN, index == 4);        // CAPS-21
-    ShowGroup(g_pageVideo, g_pageVideoN, index == 5);        // CAPS-73
-    ShowGroup(g_pageSettings, g_pageSettingsN, index == 6);
+    ShowGroup(g_pageZnimok, g_pageZnimokN, index == 4);      // CAPS-109
+    ShowGroup(g_pageSettings, g_pageSettingsN, index == 5);
     PageScrollRefresh();                                     // CAPS-99
 }
 
@@ -3899,8 +3912,7 @@ int PageGroupsAll(int tab, HWND** arrs, int* ns)
     case 1: arrs[n] = g_pageCursor;   ns[n++] = g_pageCursorN; arrs[n] = g_advCtrls; ns[n++] = g_advN; break;
     case 2: arrs[n] = g_pageTheme;    ns[n++] = g_pageThemeN;  arrs[n] = g_thAdv;    ns[n++] = g_thAdvN; break;
     case 3: arrs[n] = g_pagePeek;     ns[n++] = g_pagePeekN; break;
-    case 4: arrs[n] = g_pageShots;    ns[n++] = g_pageShotsN; break;
-    case 5: arrs[n] = g_pageVideo;    ns[n++] = g_pageVideoN; break;
+    case 4: arrs[n] = g_pageZnimok;   ns[n++] = g_pageZnimokN; break;   // CAPS-109
     default: arrs[n] = g_pageSettings; ns[n++] = g_pageSettingsN; break;
     }
     return n;
@@ -29335,7 +29347,8 @@ bool g_hkOk[kHkCount] = { false, false, false, false, false };
 const wchar_t* kRegCapOn = L"CaptureEnabled";
 const wchar_t* kRegVidOn = L"VideoEnabled";
 bool g_capOn = true, g_vidOn = true;
-bool CapSlotOn(int i) { return i < kHkShots ? g_capOn : g_vidOn; }
+// CAPS-109: знімки й відео переїхали в Znimok — жодна з їхніх клавіш більше не тримається.
+bool CapSlotOn(int i) { (void)i; return false; }
 
 void CapLoadHotkeys()
 {
@@ -29847,6 +29860,7 @@ void VidLoadSettings()
     g_vidFollow = RegLoadInt(kRegVidFollow, 1, 0, 1) != 0;   // CAPS-75
     g_devOn = RegLoadInt(kRegVidDevLog, 1, 0, 1) != 0;       // CAPS-83
     g_devRecOn = RegLoadInt(kRegVidExtRec, 1, 0, 1) != 0;    // CAPS-107
+    g_devOn = g_devRecOn = false;                            // CAPS-109: лог браузера пише Znimok
     VidAudLoadSettings();                           // CAPS-77
 }
 
@@ -32111,7 +32125,7 @@ void DevCmdRun(DevCmd* d)
 // Сервер потрібен і логу, і керуванню записом.
 void DevSrvSync()
 {
-    if (g_devOn || g_devRecOn) DevSrvStart(); else DevSrvStop();
+    DevSrvStop();   // CAPS-109: сервер розширення більше не піднімається
 }
 
 // Розширення лежить у ресурсах exe (RCDATA 101…): «Розширення…» розкладає його в
@@ -33372,6 +33386,7 @@ void ShowTrayMenu(HWND hwnd)
     AppendMenuW(menu, MF_STRING, IDM_SETTINGS, S(Str::MenuSettings));
     // Знімки — окремим підменю: у головному списку вони перекривали решту
     // програми, хоч це лише одна з її функцій.
+#if 0   // CAPS-109: знімки й відео переїхали в Znimok — підменю більше немає
     HMENU shots = CreatePopupMenu();
     // CAPS-87: вимкнена функція лишається в меню, але сірою — видно, що вона є і де її ввімкнути.
     const UINT capF = MF_STRING | (g_capOn ? 0 : MF_GRAYED);
@@ -33384,6 +33399,7 @@ void ShowTrayMenu(HWND hwnd)
                 S(VidRecording() ? Str::VidMenuStop : Str::VidMenuStart));   // CAPS-73
     AppendMenuW(shots, MF_STRING, IDM_EDITOR, S(Str::EdMenu));
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)shots, S(Str::TabShots));
+#endif
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, IDM_EXIT, S(Str::MenuExit));
     SetForegroundWindow(hwnd); // інакше меню не закриється кліком повз
@@ -33430,8 +33446,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         break;
 
     case WMAPP_OPENEDITOR:   // CAPS-59: --editor від другого екземпляра або зі старту
-        EdOpenBlank(GetModuleHandleW(nullptr));
-        return 0;
+        return 0;            // CAPS-109: редактор переїхав у Znimok
 
     case WM_COPYDATA: {      // CAPS-84: шлях від передавача асоціації
         const COPYDATASTRUCT* cd = (const COPYDATASTRUCT*)lp;
@@ -33695,7 +33710,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             UpdShowLog(hwnd);
             return 0;
         }
-        if (nm->idFrom == IDC_COPYRIGHT && (nm->code == NM_CLICK || nm->code == NM_RETURN)) {
+        if ((nm->idFrom == IDC_COPYRIGHT || nm->idFrom == IDC_ZK_LINKS) && (nm->code == NM_CLICK || nm->code == NM_RETURN)) {   // CAPS-109: і посилання вкладки «Znimok»
             const NMLINK* l = (const NMLINK*)lp;
             ShellExecuteW(nullptr, L"open", L"explorer.exe", l->item.szUrl, nullptr, SW_SHOWNORMAL);
         }
@@ -33874,8 +33889,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_SETTINGS:
             ShowSettings(hwnd);
             return 0;
-        case IDM_EDITOR:
-            EdOpenBlank(GetModuleHandleW(nullptr));
+        case IDM_EDITOR:   // CAPS-109: редактор переїхав у Znimok
             break;
         case IDC_CAP_KEEPTOOL:
             g_edKeepTool = SendMessageW(GetDlgItem(hwnd, IDC_CAP_KEEPTOOL), BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -34236,6 +34250,20 @@ void RepRegisterAssoc()
     if (changed) SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
 }
 
+// CAPS-109: знімки й відео переїхали в Znimok — асоціації (.lhreport, .lhvideo, .lhshot) цієї
+// програми прибираємо при старті, щоб подвійний клік не вів у порожнечу.
+void RepUnregisterAssoc()
+{
+    static const wchar_t* keys[] = {
+        L"Software\\Classes\\.lhreport", L"Software\\Classes\\.lhvideo", L"Software\\Classes\\.lhshot",
+        L"Software\\Classes\\LittleHelpers.Report", L"Software\\Classes\\LittleHelpers.Video",
+        L"Software\\Classes\\LittleHelpers.Shot",
+    };
+    bool changed = false;
+    for (const wchar_t* k : keys) changed |= RegDeleteTreeW(HKEY_CURRENT_USER, k) == ERROR_SUCCESS;
+    if (changed) SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+}
+
 bool LhIsElevated()
 {
     HANDLE t = nullptr;
@@ -34252,6 +34280,8 @@ bool LhIsElevated()
 // Шлях після --open (у лапках чи без).
 bool LhArgOpen(wchar_t* out)
 {
+    // CAPS-109: файли знімків, відео й звітів відкриває Znimok; тут їх більше не відкриваємо.
+    if (out) return false;
     const wchar_t* c = wcsstr(GetCommandLineW(), L"--open");
     if (!c) return false;
     c += 6;
@@ -34460,8 +34490,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     auto addTA = [&](HWND c) { return AddTo(g_thAdv,        g_thAdvN,        c); };
     auto addS  = [&](HWND c) { return AddTo(g_pageSettings, g_pageSettingsN, c); };
     auto addP  = [&](HWND c) { return AddTo(g_pagePeek,     g_pagePeekN,     c); };   // CAPS-16
-    auto addK  = [&](HWND c) { return AddTo(g_pageShots,    g_pageShotsN,    c); };   // CAPS-21
-    auto addV  = [&](HWND c) { return AddTo(g_pageVideo,    g_pageVideoN,    c); };   // CAPS-73
+    auto addZ  = [&](HWND c) { return AddTo(g_pageZnimok,   g_pageZnimokN,   c); };   // CAPS-109
 
     // Сітка сторінки: y біжить згори вниз, кожен помічник сам відступає під себе.
     int y = PY;
@@ -34634,6 +34663,23 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     sec(addP, Str::PeekSecKeeps);
     text(addP, Str::PeekKeeps, 3, 0, 8);
 
+    // ---- вкладка «Znimok» (CAPS-109): знімки й відео переїхали ----
+    y = PY;
+    {
+        // Логотип з іконки Znimok (znimok.ico у ресурсах) і заголовок поруч.
+        HWND logo = addZ(mk(L"STATIC", L"", SS_ICON | SS_REALSIZEIMAGE | SS_CENTERIMAGE, PX, y, 64, 64, IDC_ZK_LOGO));
+        if (HICON zk = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_ZNIMOK), IMAGE_ICON, sc(64), sc(64), LR_DEFAULTCOLOR))
+            SendMessageW(logo, STM_SETICON, (WPARAM)zk, 0);
+        HWND t = addZ(mkS(L"STATIC", Str::ZkTitle, 0, PX + 80, y + 20, PW - 80, 24, 0));
+        SendMessageW(t, WM_SETFONT, (WPARAM)fontSemi, TRUE);
+        y += 76;
+    }
+    text(addZ, Str::ZkBody, 4, 0, 10);
+    addZ(mkS(L"SysLink", Str::ZkLinks, 0, PX, y, PW, 24, IDC_ZK_LINKS));   // WC_LINK, клік → ShellExecute
+    y += 34;
+    hint(addZ, Str::ZkHint, 2);
+
+#if 0   // CAPS-109: сторінки «Знімки» (CAPS-21) і «Відео» (CAPS-73) — лишаються в коді, не будуються
     // ---- вкладка «Знімки» (CAPS-21) ----
     y = PY;
     // CAPS-87: прапорець активності замість заголовка «Гарячі клавіші» — сторінка
@@ -34799,6 +34845,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     addV(mkS(L"BUTTON", Str::VidDevExt, BS_PUSHBUTTON | WS_TABSTOP, PX + 266, y, 150, 30, IDC_VID_DEVEXT));
     y += 38;
 
+#endif
+
     // ---- вкладка «Налаштування» (CAPS-9) ----
     y = PY;
     g_checkbox = check(addS, Str::SetAutostart, IDC_AUTOSTART, false);
@@ -34910,7 +34958,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     // що й для команди від другого екземпляра.
     if (wcsstr(GetCommandLineW(), L"--editor")) PostMessageW(hwnd, WMAPP_OPENEDITOR, 0, 0);
     if (haveOpen) { wchar_t* op = new wchar_t[MAX_PATH]; lstrcpynW(op, openPath, MAX_PATH); PostMessageW(hwnd, WMAPP_OPENPATH, 0, (LPARAM)op); }
-    RepRegisterAssoc();   // CAPS-84: подвійний клік по звіту, проєкту, знімку
+    RepUnregisterAssoc();   // CAPS-109: асоціації прибираємо — ці файли відкриває Znimok
     ChangeWindowMessageFilterEx(hwnd, WM_COPYDATA, MSGFLT_ALLOW, nullptr);   // шлях від передавача (він без підвищення)
     ApplyCursorFeature();  // CAPS-2: мишачий хук на тому ж потоці
     g_mode = LoadMode();
