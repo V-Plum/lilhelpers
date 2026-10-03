@@ -48,9 +48,16 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           $want = ($env:GITHUB_REF_NAME -replace '^v','') + '.0'
-          $got = (Get-Item lilhelpers.exe).VersionInfo.FileVersion
+          $vi = (Get-Item lilhelpers.exe).VersionInfo
+          $got = $vi.FileVersion
           if ($got -ne $want) { throw "lilhelpers.rc says $got, tag says $want" }
-          "version ok: $got"
+          # CAPS-110: the app reads its version from the numeric FILEVERSION, not the string -
+          # 4.15.0 shipped as 4,14,0,0 and offered itself as an update forever.
+          $num = "$($vi.FileMajorPart).$($vi.FileMinorPart).$($vi.FileBuildPart).$($vi.FilePrivatePart)"
+          if ($num -ne $want) { throw "lilhelpers.rc FILEVERSION says $num, tag says $want" }
+          $prod = "$($vi.ProductMajorPart).$($vi.ProductMinorPart).$($vi.ProductBuildPart).$($vi.ProductPrivatePart)"
+          if ($prod -ne $want) { throw "lilhelpers.rc PRODUCTVERSION says $prod, tag says $want" }
+          "version ok: $got ($num)"
 
       # CAPS-10: the in-app updater verifies an ECDSA P-256 signature over SHA-256
       # of lilhelpers.exe with a public key embedded in the source. The private key
